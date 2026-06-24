@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { groupDevices } from '../lib/deviceGrouping';
 import { useProject } from './ProjectLayout';
 import type { Device, CommissioningRecord, HandoverDocument, Datasheet, SystemType } from '../types';
 import { SYSTEM_TYPES } from '../types';
@@ -1834,40 +1835,57 @@ function ScopeSection({ content, onChange, onSave, onRegenerate, saving, regener
   );
 }
 
+function scheduleGroupKey(row: { manufacturer: string | null; model_number: string | null; description: string | null }) {
+  return [row.manufacturer ?? '', row.model_number ?? '', row.description ?? ''].join('|');
+}
+
+function groupedScheduleLocation(devices: DeviceWithDatasheet[]): string {
+  const locs = [...new Set(devices.map(d => d.location?.trim()).filter(Boolean))] as string[];
+  if (locs.length === 0) return '—';
+  if (locs.length === 1) return locs[0];
+  return locs.slice(0, 3).join(', ') + (locs.length > 3 ? ` +${locs.length - 3}` : '');
+}
+
+function groupedScheduleWarranty(devices: DeviceWithDatasheet[]): string {
+  const years = devices.find(d => d.warrantyYears != null)?.warrantyYears;
+  return years != null ? `${years}yr` : '—';
+}
+
 function ScheduleSection({ systemGroups }: { systemGroups: { system: SystemType; devices: DeviceWithDatasheet[] }[] }) {
   return (
     <div className="space-y-4">
       {systemGroups.length === 0 ? (
         <EmptyState icon={ClipboardCheck} message="No devices in this project yet." />
       ) : (
-        systemGroups.map(g => (
-          <div key={g.system} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-            <SystemHeader system={g.system} count={g.devices.length} />
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead><tr className="bg-slate-50 border-b border-slate-100">
-                  {['Label', 'Type', 'Manufacturer', 'Model', 'Serial No.', 'IP Address', 'Location', 'Warranty'].map(h => (
-                    <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wider">{h}</th>
-                  ))}
-                </tr></thead>
-                <tbody className="divide-y divide-slate-100">
-                  {g.devices.map(d => (
-                    <tr key={d.id} className="hover:bg-slate-50">
-                      <td className="px-4 py-2.5 font-mono text-xs font-bold text-slate-800">{d.device_name || '—'}</td>
-                      <td className="px-4 py-2.5 text-slate-600">{d.device_type || '—'}</td>
-                      <td className="px-4 py-2.5 text-slate-700">{d.manufacturer || '—'}</td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-slate-700">{d.model_number || '—'}</td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-slate-500">{d.serial_number || '—'}</td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-slate-500">{d.ip_address || '—'}</td>
-                      <td className="px-4 py-2.5 text-slate-600 max-w-[160px] truncate">{d.location || '—'}</td>
-                      <td className="px-4 py-2.5 text-slate-600">{d.warrantyYears ? `${d.warrantyYears}yr` : '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        systemGroups.map(g => {
+          const equipmentGroups = groupDevices(g.devices);
+          return (
+            <div key={g.system} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+              <SystemHeader system={g.system} count={g.devices.length} />
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead><tr className="bg-slate-50 border-b border-slate-100">
+                    {['Description', 'Manufacturer', 'Model', 'Qty', 'Location', 'Warranty'].map(h => (
+                      <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wider">{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {equipmentGroups.map(row => (
+                      <tr key={scheduleGroupKey(row)} className="hover:bg-slate-50">
+                        <td className="px-4 py-2.5 text-slate-600">{row.description || '—'}</td>
+                        <td className="px-4 py-2.5 text-slate-700">{row.manufacturer || '—'}</td>
+                        <td className="px-4 py-2.5 font-mono text-xs text-slate-700">{row.model_number || '—'}</td>
+                        <td className="px-4 py-2.5 font-semibold text-slate-800">{row.quantity}</td>
+                        <td className="px-4 py-2.5 text-slate-600 max-w-[200px] truncate">{groupedScheduleLocation(row.devices as DeviceWithDatasheet[])}</td>
+                        <td className="px-4 py-2.5 text-slate-600">{groupedScheduleWarranty(row.devices as DeviceWithDatasheet[])}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-        ))
+          );
+        })
       )}
     </div>
   );
@@ -3026,6 +3044,7 @@ function PrintSection({ title, subtitle, anchorId, forcePageBreak, children }: {
 }
 
 function PrintDeviceTable({ system, devices }: { system: SystemType; devices: DeviceWithDatasheet[] }) {
+  const equipmentGroups = groupDevices(devices);
   return (
     <div style={{ marginBottom: '2rem' }}>
       <div style={{ background: '#0f172a', padding: '0.5rem 0.75rem', borderRadius: '0.375rem 0.375rem 0 0', marginBottom: 0 }}>
@@ -3036,22 +3055,20 @@ function PrintDeviceTable({ system, devices }: { system: SystemType; devices: De
       <table style={{ width: '100%', fontSize: '0.7rem', borderCollapse: 'collapse', border: '1px solid #e2e8f0' }}>
         <thead>
           <tr style={{ background: '#f8fafc' }}>
-            {['Label', 'Type', 'Manufacturer', 'Model', 'Serial No.', 'IP Address', 'Location', 'Warranty'].map(h => (
+            {['Description', 'Manufacturer', 'Model', 'Qty', 'Location', 'Warranty'].map(h => (
               <th key={h} style={{ textAlign: 'left', padding: '0.5rem 0.6rem', fontSize: '0.6rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', borderBottom: '2px solid #e2e8f0', borderRight: '1px solid #f1f5f9' }}>{h}</th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {devices.map((d, i) => (
-            <tr key={d.id} style={{ background: i % 2 === 0 ? 'white' : '#f8fafc', pageBreakInside: 'avoid' }}>
-              <td style={{ padding: '0.45rem 0.6rem', fontFamily: 'monospace', fontWeight: 700, color: '#0f172a', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9' }}>{d.device_name || '—'}</td>
-              <td style={{ padding: '0.45rem 0.6rem', color: '#334155', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9' }}>{d.device_type || '—'}</td>
-              <td style={{ padding: '0.45rem 0.6rem', color: '#334155', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9' }}>{d.manufacturer || '—'}</td>
-              <td style={{ padding: '0.45rem 0.6rem', fontFamily: 'monospace', color: '#334155', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9' }}>{d.model_number || '—'}</td>
-              <td style={{ padding: '0.45rem 0.6rem', fontFamily: 'monospace', color: '#64748b', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9' }}>{d.serial_number || '—'}</td>
-              <td style={{ padding: '0.45rem 0.6rem', fontFamily: 'monospace', color: '#0891b2', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9' }}>{d.ip_address || '—'}</td>
-              <td style={{ padding: '0.45rem 0.6rem', color: '#334155', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9' }}>{d.location || '—'}</td>
-              <td style={{ padding: '0.45rem 0.6rem', color: '#334155', borderBottom: '1px solid #f1f5f9' }}>{d.warrantyYears ? `${d.warrantyYears}yr` : '—'}</td>
+          {equipmentGroups.map((row, i) => (
+            <tr key={scheduleGroupKey(row)} style={{ background: i % 2 === 0 ? 'white' : '#f8fafc', pageBreakInside: 'avoid' }}>
+              <td style={{ padding: '0.45rem 0.6rem', color: '#334155', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9' }}>{row.description || '—'}</td>
+              <td style={{ padding: '0.45rem 0.6rem', color: '#334155', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9' }}>{row.manufacturer || '—'}</td>
+              <td style={{ padding: '0.45rem 0.6rem', fontFamily: 'monospace', color: '#334155', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9' }}>{row.model_number || '—'}</td>
+              <td style={{ padding: '0.45rem 0.6rem', fontWeight: 700, color: '#0f172a', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9' }}>{row.quantity}</td>
+              <td style={{ padding: '0.45rem 0.6rem', color: '#334155', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9' }}>{groupedScheduleLocation(row.devices as DeviceWithDatasheet[])}</td>
+              <td style={{ padding: '0.45rem 0.6rem', color: '#334155', borderBottom: '1px solid #f1f5f9' }}>{groupedScheduleWarranty(row.devices as DeviceWithDatasheet[])}</td>
             </tr>
           ))}
         </tbody>
