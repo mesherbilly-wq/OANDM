@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { groupDevices } from '../lib/deviceGrouping';
 import {
   Camera, Lock, ShieldAlert, PhoneCall, ScanLine, Radar, Network,
   Plus, Trash2, Pencil, Check, X, CheckCheck, Sparkles, FileSearch,
@@ -32,6 +33,20 @@ const COLOR_MAP: Record<string, string> = {
   amber:   'text-amber-600 border-b-2 border-amber-600 bg-amber-50',
 };
 
+function groupedLocations(devices: Device[]): string {
+  const locs = [...new Set(devices.map(d => d.location?.trim()).filter(Boolean))] as string[];
+  if (locs.length === 0) return '—';
+  if (locs.length === 1) return locs[0];
+  return locs.slice(0, 3).join(', ') + (locs.length > 3 ? ` +${locs.length - 3}` : '');
+}
+
+function groupedNotes(devices: Device[]): string {
+  const notes = [...new Set(devices.map(d => d.notes?.trim()).filter(Boolean))] as string[];
+  if (notes.length === 0) return '—';
+  if (notes.length === 1) return notes[0];
+  return notes.slice(0, 2).join('; ') + (notes.length > 2 ? ` +${notes.length - 2}` : '');
+}
+
 export default function ProjectSystemsPage() {
   const { id, system: systemSlug } = useParams<{ id: string; system?: string }>();
   const { productModels, datasheets } = useProject();
@@ -52,6 +67,7 @@ export default function ProjectSystemsPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [showAIImport, setShowAIImport] = useState(false);
   const [editDevice, setEditDevice] = useState<Device | null>(null);
+  const [viewMode, setViewMode] = useState<'grouped' | 'individual'>('grouped');
 
   // Sync tab when route changes (sidebar navigation)
   useEffect(() => {
@@ -75,6 +91,8 @@ export default function ProjectSystemsPage() {
   }, [id, activeSystem]);
 
   useEffect(() => { fetchDevices(); }, [fetchDevices]);
+
+  const equipmentGroups = useMemo(() => groupDevices(devices), [devices]);
 
   const handleApprove = async (deviceId: number) => {
     await supabase.from('devices').update({ status: 'active' }).eq('id', deviceId);
@@ -206,6 +224,22 @@ export default function ProjectSystemsPage() {
             <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full font-medium">{devices.length}</span>
           </div>
           <div className="flex items-center gap-2">
+            <div className="flex rounded-lg border border-slate-300 overflow-hidden text-sm mr-1">
+              <button
+                type="button"
+                onClick={() => setViewMode('grouped')}
+                className={`px-3 py-1.5 transition-colors ${viewMode === 'grouped' ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+              >
+                Grouped View
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('individual')}
+                className={`px-3 py-1.5 border-l border-slate-300 transition-colors ${viewMode === 'individual' ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+              >
+                Individual View
+              </button>
+            </div>
             <button
               onClick={() => setShowAIImport(true)}
               className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-violet-600 text-white text-sm font-medium rounded-lg hover:bg-violet-700 transition-colors shadow-sm shadow-violet-200"
@@ -226,6 +260,31 @@ export default function ProjectSystemsPage() {
             <cfg.icon className="w-10 h-10 mx-auto mb-3 opacity-30" />
             <p className="text-sm font-medium">No {activeSystem} devices yet</p>
             <p className="text-xs mt-1">Add a device or use the AI Project Builder to import.</p>
+          </div>
+        ) : viewMode === 'grouped' ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 bg-slate-50">
+                  {['System Type', 'Description', 'Manufacturer', 'Model', 'Quantity', 'Locations', 'Notes'].map(h => (
+                    <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {equipmentGroups.map(row => (
+                  <tr key={`${row.system_type}|${row.manufacturer}|${row.model_number}|${row.description}`} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-4 py-3 text-slate-700">{row.system_type ?? activeSystem}</td>
+                    <td className="px-4 py-3 text-slate-600">{row.description ?? '—'}</td>
+                    <td className="px-4 py-3 text-slate-600">{row.manufacturer ?? '—'}</td>
+                    <td className="px-4 py-3 text-slate-600">{row.model_number ?? '—'}</td>
+                    <td className="px-4 py-3 font-semibold text-slate-900">{row.quantity}</td>
+                    <td className="px-4 py-3 text-slate-500 max-w-[200px]">{groupedLocations(row.devices)}</td>
+                    <td className="px-4 py-3 text-slate-500 max-w-[200px]">{groupedNotes(row.devices)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         ) : (
           <div className="overflow-x-auto">
