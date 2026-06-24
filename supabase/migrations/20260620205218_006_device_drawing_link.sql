@@ -1,0 +1,2 @@
+
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS drawing_id bigint REFERENCES drawings(id) ON DELETE SET NULL;
