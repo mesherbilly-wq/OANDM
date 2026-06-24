@@ -1847,8 +1847,8 @@ function groupedScheduleLocation(devices: DeviceWithDatasheet[]): string {
 }
 
 function groupedScheduleWarranty(devices: DeviceWithDatasheet[]): string {
-  const years = devices.find(d => d.warrantyYears != null)?.warrantyYears;
-  return years != null ? `${years}yr` : '—';
+  const years = devices.find(d => d.warrantyYears != null)?.warrantyYears ?? 1;
+  return `${years}yr`;
 }
 
 function ScheduleSection({ systemGroups }: { systemGroups: { system: SystemType; devices: DeviceWithDatasheet[] }[] }) {
