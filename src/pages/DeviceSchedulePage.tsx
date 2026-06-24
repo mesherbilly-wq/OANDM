@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useProject } from './ProjectLayout';
 import { supabase } from '../lib/supabase';
+import { groupDevices } from '../lib/deviceGrouping';
 import { Device, SystemType, SYSTEM_TYPES } from '../types';
 import {
   ChevronDown,
@@ -23,6 +24,20 @@ const SYSTEM_TYPE_COLORS: Record<SystemType, string> = {
   'Networking': 'bg-amber-100 text-amber-800 border-amber-300',
 };
 
+function groupedLocations(devices: Device[]): string {
+  const locs = [...new Set(devices.map(d => d.location?.trim()).filter(Boolean))] as string[];
+  if (locs.length === 0) return '—';
+  if (locs.length === 1) return locs[0];
+  return locs.slice(0, 3).join(', ') + (locs.length > 3 ? ` +${locs.length - 3}` : '');
+}
+
+function groupedNotes(devices: Device[]): string {
+  const notes = [...new Set(devices.map(d => d.notes?.trim()).filter(Boolean))] as string[];
+  if (notes.length === 0) return '—';
+  if (notes.length === 1) return notes[0];
+  return notes.slice(0, 2).join('; ') + (notes.length > 2 ? ` +${notes.length - 2}` : '');
+}
+
 interface DeviceRow {
   device: Device;
   children: DeviceRow[];
@@ -30,10 +45,11 @@ interface DeviceRow {
 }
 
 export default function DeviceSchedulePage() {
-  const { projectId } = useParams<{ projectId: string }>();
+  const { id: projectId } = useParams<{ id: string }>();
   const { project } = useProject();
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<'grouped' | 'individual'>('grouped');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedSystemType, setSelectedSystemType] = useState<SystemType | 'All'>('All');
   const [selectedStatus, setSelectedStatus] = useState<'All' | 'Active' | 'Pending Review'>('All');
@@ -165,6 +181,8 @@ export default function DeviceSchedulePage() {
   const hierarchyTree = useMemo(() => {
     return buildHierarchy(filteredDevices);
   }, [filteredDevices]);
+
+  const equipmentGroups = useMemo(() => groupDevices(filteredDevices), [filteredDevices]);
 
   const handleApproveDevice = async (deviceId: string) => {
     try {
@@ -377,10 +395,26 @@ export default function DeviceSchedulePage() {
           />
           <span className="text-sm">Show Components</span>
         </label>
+        <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm">
+          <button
+            type="button"
+            onClick={() => setViewMode('grouped')}
+            className={`px-3 py-2 transition-colors ${viewMode === 'grouped' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+          >
+            Grouped View
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode('individual')}
+            className={`px-3 py-2 border-l border-gray-300 transition-colors ${viewMode === 'individual' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+          >
+            Individual View
+          </button>
+        </div>
       </div>
 
       {/* Bulk Actions */}
-      {pendingCount > 0 && (
+      {viewMode === 'individual' && pendingCount > 0 && (
         <div className="flex justify-end">
           <button
             onClick={handleBulkApproveAll}
@@ -392,7 +426,44 @@ export default function DeviceSchedulePage() {
       )}
 
       {/* Device Table */}
-      {hierarchyTree.length === 0 ? (
+      {viewMode === 'grouped' ? (
+        equipmentGroups.length === 0 ? (
+          <div className="p-8 text-center text-gray-500 bg-white rounded-lg border border-gray-200">
+            No devices found matching the selected filters.
+          </div>
+        ) : (
+          <div className="overflow-x-auto bg-white rounded-lg border border-gray-200">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-gray-100 border-b border-gray-200">
+                  {['System Type', 'Description', 'Manufacturer', 'Model', 'Quantity', 'Locations', 'Notes'].map(h => (
+                    <th key={h} className="px-4 py-3 text-left font-semibold text-gray-900">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {equipmentGroups.map(row => (
+                  <tr key={`${row.system_type}|${row.manufacturer}|${row.model_number}|${row.description}`} className="border-b border-gray-200 hover:bg-gray-50">
+                    <td className="px-4 py-3">
+                      {row.system_type ? (
+                        <span className={`text-xs px-2 py-1 rounded border ${SYSTEM_TYPE_COLORS[row.system_type]}`}>
+                          {row.system_type}
+                        </span>
+                      ) : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-gray-700">{row.description || '—'}</td>
+                    <td className="px-4 py-3 text-gray-700">{row.manufacturer || '—'}</td>
+                    <td className="px-4 py-3 text-gray-700">{row.model_number || '—'}</td>
+                    <td className="px-4 py-3 font-semibold text-gray-900">{row.quantity}</td>
+                    <td className="px-4 py-3 text-gray-700 max-w-[220px]">{groupedLocations(row.devices)}</td>
+                    <td className="px-4 py-3 text-gray-700 max-w-[220px]">{groupedNotes(row.devices)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      ) : hierarchyTree.length === 0 ? (
         <div className="p-8 text-center text-gray-500 bg-white rounded-lg border border-gray-200">
           No devices found matching the selected filters.
         </div>
