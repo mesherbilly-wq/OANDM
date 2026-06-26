@@ -64,10 +64,34 @@ async function loadSimproConfig(db: ReturnType<typeof createClient>): Promise<Si
   };
 }
 
+function resolveConfigFromBody(body: Record<string, unknown>, stored: SimproConfig): SimproConfig {
+  return {
+    baseUrl: String(body.base_url ?? body.baseUrl ?? stored.baseUrl ?? "").trim(),
+    companyId: String(body.company_id ?? body.companyId ?? stored.companyId ?? "0").trim(),
+    apiToken: String(body.api_token ?? body.apiToken ?? stored.apiToken ?? "").trim(),
+  };
+}
+
 function assertSimproConfig(config: SimproConfig): string | null {
   if (!config.baseUrl) return "Simpro base URL not configured";
   if (!config.apiToken) return "Simpro API token not configured";
   return null;
+}
+
+function pickCompanyName(raw: unknown): string | null {
+  if (!raw || typeof raw !== "object") return null;
+  const record = raw as Record<string, unknown>;
+  const name = record.Name ?? record.CompanyName ?? record.name ?? record.Company;
+  return name ? String(name) : null;
+}
+
+function pickApiVersion(response: Response): string | null {
+  return (
+    response.headers.get("X-API-Version") ??
+    response.headers.get("Api-Version") ??
+    response.headers.get("X-Simpro-Api-Version") ??
+    null
+  );
 }
 
 async function simproFetch(url: string, apiToken: string): Promise<Response> {
@@ -110,17 +134,17 @@ Deno.serve(async (req: Request) => {
   const action = String(body.action ?? "");
   log(action, "invoked");
 
-  const config = await loadSimproConfig(db);
-  const configError = assertSimproConfig(config);
-  if (configError) return json({ error: configError });
-
-  const authHeadersNote = "Credentials loaded server-side only — never returned to client";
+  const storedConfig = await loadSimproConfig(db);
 
   // ── test_connection ───────────────────────────────────────────────────────────
-  // Lightweight read: list quotes with pageSize=1 to verify base URL, company, token.
+  // Accepts optional base_url, company_id, api_token in body (wizard session — not persisted).
   if (action === "test_connection") {
-    const params = new URLSearchParams({ pageSize: "1", columns: "ID,Reference" });
-    const url = buildApiUrl(config.baseUrl, config.companyId, "/quotes/", params);
+    const config = resolveConfigFromBody(body, storedConfig);
+    const configError = assertSimproConfig(config);
+    if (configError) return json({ error: configError });
+
+    const params = new URLSearchParams({ pageSize: "1", columns: "ID,Reference,Name" });
+    const url = buildApiUrl(config.baseUrl, config.companyId, "/jobs/", params);
     log("test_connection", url);
 
     const r = await simproFetch(url, config.apiToken).catch(() => null);
@@ -129,54 +153,68 @@ Deno.serve(async (req: Request) => {
     const parsed = await readSimproJson(r);
     if (!parsed.ok) return json({ error: parsed.error, status: parsed.status });
 
+    let companyName: string | null = null;
+    const companyUrl = buildApiUrl(config.baseUrl, config.companyId, "/");
+    const companyR = await simproFetch(companyUrl, config.apiToken).catch(() => null);
+    if (companyR?.ok) {
+      const companyParsed = await readSimproJson(companyR);
+      if (companyParsed.ok) companyName = pickCompanyName(companyParsed.raw);
+    }
+
+    const apiVersion = pickApiVersion(r) ?? (companyR ? pickApiVersion(companyR) : null);
+
     return json({
       ok: true,
-      message: authHeadersNote,
-      status: parsed.status,
+      status: "connected",
+      company_name: companyName,
+      api_version: apiVersion,
       raw: parsed.raw,
     });
   }
 
-  // ── search_quotes ─────────────────────────────────────────────────────────────
-  // Read-only quote search by reference/number string. Returns raw Simpro list payload.
-  if (action === "search_quotes") {
-    const query = String(body.query ?? body.quote_number ?? "").trim();
-    if (!query) return json({ error: "query or quote_number required" });
+  const config = storedConfig;
+  const configError = assertSimproConfig(config);
+  if (configError) return json({ error: configError });
+
+  // ── search_jobs ───────────────────────────────────────────────────────────────
+  // Read-only job search by job number. Returns raw Simpro list payload (quotes are out of scope).
+  if (action === "search_jobs") {
+    const query = String(body.query ?? body.job_number ?? "").trim();
+    if (!query) return json({ error: "query or job_number required" });
 
     const params = new URLSearchParams({
       pageSize: "25",
-      columns: "ID,Reference,Name,Status,DateIssued,Total",
+      columns: "ID,Reference,Name,Status,DateIssued,Site,Customer",
     });
-    // Simpro tenants may filter by Reference; pass through when supported.
     params.set("Reference", query);
 
-    const url = buildApiUrl(config.baseUrl, config.companyId, "/quotes/", params);
-    log("search_quotes", `${url} (query="${query}")`);
+    const url = buildApiUrl(config.baseUrl, config.companyId, "/jobs/", params);
+    log("search_jobs", `${url} (job_number="${query}")`);
 
     const r = await simproFetch(url, config.apiToken).catch(() => null);
-    if (!r) return json({ error: "Network error connecting to Simpro", quotes: [] });
+    if (!r) return json({ error: "Network error connecting to Simpro", jobs: [] });
 
     const parsed = await readSimproJson(r);
-    if (!parsed.ok) return json({ error: parsed.error, status: parsed.status, quotes: [] });
+    if (!parsed.ok) return json({ error: parsed.error, status: parsed.status, jobs: [] });
 
     return json({
       ok: true,
-      query,
+      job_number: query,
       raw: parsed.raw,
     });
   }
 
-  // ── get_quote ─────────────────────────────────────────────────────────────────
-  // Read-only quote detail with nested sections/cost centres when Simpro supports display=all.
-  if (action === "get_quote") {
-    const quoteId = body.quote_id ?? body.quoteId ?? body.id;
-    if (quoteId === undefined || quoteId === null || String(quoteId).trim() === "") {
-      return json({ error: "quote_id required" });
+  // ── get_job ───────────────────────────────────────────────────────────────────
+  // Read-only job detail with nested sections/cost centres when Simpro supports display=all.
+  if (action === "get_job") {
+    const jobId = body.job_id ?? body.jobId ?? body.id;
+    if (jobId === undefined || jobId === null || String(jobId).trim() === "") {
+      return json({ error: "job_id required" });
     }
 
     const params = new URLSearchParams({ display: "all" });
-    const url = buildApiUrl(config.baseUrl, config.companyId, `/quotes/${quoteId}`, params);
-    log("get_quote", url);
+    const url = buildApiUrl(config.baseUrl, config.companyId, `/jobs/${jobId}`, params);
+    log("get_job", url);
 
     const r = await simproFetch(url, config.apiToken).catch(() => null);
     if (!r) return json({ error: "Network error connecting to Simpro" });
@@ -186,7 +224,7 @@ Deno.serve(async (req: Request) => {
 
     return json({
       ok: true,
-      quote_id: quoteId,
+      job_id: jobId,
       raw: parsed.raw,
     });
   }

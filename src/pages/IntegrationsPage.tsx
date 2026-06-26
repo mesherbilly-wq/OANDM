@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import {
-  Building, Briefcase, Truck, FileText, FileSpreadsheet, ImageIcon, PenLine, Plug, Unplug,
+  Building, Briefcase, Truck, FileText, FileSpreadsheet, ImageIcon, PenLine, Plug,
 } from 'lucide-react';
 import { createIntegrationCentre } from '../integrations';
 import {
@@ -9,6 +9,7 @@ import {
   INTEGRATION_SETTINGS_STATUS_STYLES,
   type IntegrationSettingsGroupView,
 } from '../integrations/settings/integrationSettingsGroups';
+import { SimproConnectionWizard } from '../components/SimproConnectionWizard';
 
 const GROUP_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   simpro: Building,
@@ -19,60 +20,6 @@ const GROUP_ICONS: Record<string, React.ComponentType<{ className?: string }>> =
   ai_drawings: ImageIcon,
   manual: PenLine,
 };
-
-const inputClass =
-  'w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-400 bg-slate-50 cursor-not-allowed';
-
-function SimproConfigShell() {
-  return (
-    <div className="mt-4 pt-4 border-t border-slate-100 space-y-4">
-      <p className="text-xs text-slate-500">
-        One Simpro company connection per workspace (single base URL, company ID, and credentials).
-        Settings will be saved securely server-side in a future release. No credentials are stored yet.
-      </p>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <label className="block">
-          <span className="text-xs font-medium text-slate-600 mb-1 block">Base URL</span>
-          <input
-            type="text"
-            disabled
-            placeholder="https://your-company.simprosuite.com"
-            className={inputClass}
-          />
-        </label>
-        <label className="block">
-          <span className="text-xs font-medium text-slate-600 mb-1 block">Company ID (one per workspace)</span>
-          <input type="text" disabled placeholder="e.g. 0" className={inputClass} />
-        </label>
-        <label className="block">
-          <span className="text-xs font-medium text-slate-600 mb-1 block">API token / OAuth</span>
-          <input type="text" disabled value="Not configured" readOnly className={inputClass} />
-        </label>
-        <label className="block">
-          <span className="text-xs font-medium text-slate-600 mb-1 block">Last sync</span>
-          <input type="text" disabled value="Never" readOnly className={inputClass} />
-        </label>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          disabled
-          title="Simpro connection will be enabled in a future release"
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-slate-200 text-slate-500 cursor-not-allowed"
-        >
-          <Plug className="w-4 h-4" />
-          Connect
-        </button>
-        <span className="inline-flex items-center gap-1.5 text-xs text-amber-700">
-          <Unplug className="w-3.5 h-3.5" />
-          Status: Not Connected
-        </span>
-      </div>
-    </div>
-  );
-}
 
 function IntegrationSettingsCard({ group }: { group: IntegrationSettingsGroupView }) {
   const Icon = GROUP_ICONS[group.id] ?? Plug;
@@ -99,7 +46,7 @@ function IntegrationSettingsCard({ group }: { group: IntegrationSettingsGroupVie
         </div>
       </div>
 
-      {group.showSimproConfig && <SimproConfigShell />}
+      {group.showSimproConfig && <SimproConnectionWizard />}
 
       {!group.showSimproConfig && group.settingsStatus !== 'existing' && group.settingsStatus !== 'available' && (
         <p className="mt-4 pt-4 border-t border-slate-100 text-xs text-slate-400">
@@ -139,8 +86,8 @@ export function IntegrationsPage() {
         </div>
         <p className="text-slate-500 ml-[52px]">
           Manage connections to external business systems. OANDM currently supports one active Simpro company
-          connection per workspace — multi-company setup is not available yet. Credentials will be stored
-          server-side only when enabled.
+          connection per workspace. Simpro import will use jobs (by job number), not quotes. Multi-company setup is
+          not available yet. Credentials will be stored server-side only when enabled.
         </p>
       </div>
 

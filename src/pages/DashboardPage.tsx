@@ -410,7 +410,7 @@ export function DashboardPage() {
             <div className="p-3 space-y-1">
               {[
                 { to: '/projects',            icon: Plus,         label: 'Create New Project',     sub: 'Start from scratch',          color: 'text-cyan-600' },
-                { to: '/create-project',  icon: Plus,         label: 'Create Project',         sub: 'Import from Simpro, AI, or files', color: 'text-violet-600' },
+                { to: '/create-project',  icon: Plus,         label: 'Create Project',         sub: 'Import from Simpro jobs, AI, or files', color: 'text-violet-600' },
                 { to: '/projects',            icon: FileText,     label: 'O&M Builder',            sub: 'Build operation manuals',      color: 'text-teal-600' },
                 { to: '/product-models',      icon: Cpu,          label: 'Product Library',        sub: 'Manage device catalogue',      color: 'text-slate-500' },
               ].map(({ to, icon: Icon, label, sub, color }) => (
