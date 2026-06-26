@@ -7,6 +7,17 @@ import {
   type ImportReviewIssue,
 } from '../../models/ImportReviewDraft';
 import { createSystemDraft } from '../../models/ImportSystemDraft';
+import {
+  cleanTextField,
+  inferSystemTypeFromTexts,
+  mapSimproCatalogLine,
+  pickNestedName,
+  pickProjectName,
+  pickScopeOfWorks,
+  pickSimproJobId,
+  pickSimproJobNumber,
+  pickString,
+} from './simproImportHelpers';
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
@@ -16,60 +27,6 @@ function normalizeArray(value: unknown): unknown[] {
   if (Array.isArray(value)) return value;
   if (value == null) return [];
   return [value];
-}
-
-function pickString(value: unknown): string | null {
-  if (value == null) return null;
-  const text = String(value).trim();
-  return text || null;
-}
-
-function pickNestedName(value: unknown): string | null {
-  const record = asRecord(value);
-  if (!record) return pickString(value);
-  return (
-    pickString(record.Name) ??
-    pickString(record.name) ??
-    pickString(record.CompanyName) ??
-    pickString(record.company_name)
-  );
-}
-
-function looksLikeHtml(value: string): boolean {
-  return /<[a-z][\s\S]*>/i.test(value);
-}
-
-function htmlToPlainText(html: string): string {
-  try {
-    const doc = new DOMParser().parseFromString(html, 'text/html');
-    const text = doc.body.textContent ?? '';
-    return text
-      .replace(/\u00a0/g, ' ')
-      .replace(/[ \t]+\n/g, '\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .replace(/[ \t]{2,}/g, ' ')
-      .trim();
-  } catch {
-    return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-  }
-}
-
-function pickScopeText(record: Record<string, unknown>): string | null {
-  for (const key of ['Description', 'Notes', 'ScopeOfWorks', 'Scope']) {
-    const value = record[key];
-    if (value == null) continue;
-    const raw = String(value);
-    return looksLikeHtml(raw) ? htmlToPlainText(raw) : raw.trim();
-  }
-  return null;
-}
-
-function pickJobNumber(record: Record<string, unknown>): string | null {
-  for (const key of ['JobNo', 'OrderNo', 'RequestNo', 'Reference', 'Name']) {
-    const value = pickString(record[key]);
-    if (value) return value;
-  }
-  return null;
 }
 
 function pickSiteAddress(site: Record<string, unknown>): string | null {
@@ -100,28 +57,6 @@ function pickCatalogLines(centreRecord: Record<string, unknown>): Record<string,
   return lines;
 }
 
-function pickLineText(record: Record<string, unknown>, keys: string[]): string | null {
-  for (const key of keys) {
-    const direct = pickString(record[key]);
-    if (direct) return direct;
-    const nested = pickNestedName(record[key]);
-    if (nested) return nested;
-  }
-  return null;
-}
-
-function pickLineQuantity(record: Record<string, unknown>): number {
-  for (const key of ['Qty', 'Quantity', 'quantity', 'TotalQty']) {
-    const value = record[key];
-    if (typeof value === 'number' && Number.isFinite(value)) return Math.max(1, value);
-    if (value != null) {
-      const parsed = Number(value);
-      if (Number.isFinite(parsed) && parsed > 0) return parsed;
-    }
-  }
-  return 1;
-}
-
 export interface NormalizeSimproJobOptions {
   jobId?: string | number | null;
 }
@@ -133,29 +68,51 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
   }
 
   const issues: ImportReviewIssue[] = [];
-  const jobId =
-    pickString(options.jobId) ??
-    pickString(record.ID) ??
-    pickString(record.Id) ??
-    pickString(record.id);
+  const jobId = pickSimproJobId(record, options.jobId);
+  const jobNumber = pickSimproJobNumber(record);
+  const scopeOfWorks = pickScopeOfWorks(record);
 
   const project = {
     ...createEmptyProjectDraft(),
-    projectName: pickString(record.Name),
+    projectName: pickProjectName(record),
     clientName: pickNestedName(record.Customer),
     siteName: pickNestedName(record.Site),
     siteAddress: asRecord(record.Site) ? pickSiteAddress(asRecord(record.Site)!) : null,
-    jobNumber: pickJobNumber(record),
+    jobNumber,
     projectNumber: jobId,
     projectManager: pickNestedName(record.ProjectManager),
-    projectSummary: pickScopeText(record),
-    projectNotes: pickString(record.Notes),
+    projectSummary: scopeOfWorks,
+    projectNotes: cleanTextField(record.Notes),
   };
 
   if (!project.projectName) {
     issues.push({
       code: 'simpro.missing_project_name',
-      message: 'Simpro job did not return a Name field.',
+      message: 'Simpro job did not return a usable Name or Description title.',
+      severity: 'warning',
+    });
+  }
+
+  if (!scopeOfWorks) {
+    issues.push({
+      code: 'simpro.missing_scope',
+      message: 'Simpro job Description is empty — Scope of Works could not be populated.',
+      severity: 'warning',
+    });
+  }
+
+  if (!jobNumber) {
+    issues.push({
+      code: 'simpro.missing_job_number',
+      message: 'No JobNo, OrderNo, RequestNo, or Reference found on this job.',
+      severity: 'info',
+    });
+  }
+
+  if (!jobId) {
+    issues.push({
+      code: 'simpro.missing_job_id',
+      message: 'Simpro internal job ID was not found on the payload.',
       severity: 'warning',
     });
   }
@@ -200,23 +157,26 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
         pickNestedName(centreRecord.CostCenter ?? centreRecord.CostCentre) ??
         'Cost Centre';
       const systemDraftId = createDraftId('system');
-      const equipment = pickCatalogLines(centreRecord).map(line => {
-        const lineId = pickString(line.ID ?? line.Id ?? line.id);
+      const catalogLines = pickCatalogLines(centreRecord);
+      const equipment = catalogLines.map(line => {
+        const mapped = mapSimproCatalogLine(line, pickString(line._itemGroup));
+        for (const issue of mapped.issues) {
+          issues.push({ ...issue, draftId: mapped.sourceLineRef ?? systemDraftId });
+        }
+
         return createEquipmentDraft({
           draftId: createDraftId('equip'),
           systemDraftId,
-          deviceType:
-            pickLineText(line, ['Name', 'PartNo', 'Catalog', 'Description', 'ItemName']) ??
-            pickString(line._itemGroup),
-          manufacturer: pickLineText(line, ['Manufacturer', 'Supplier', 'Brand']),
-          modelNumber: pickLineText(line, ['PartNo', 'Model', 'CatalogNo', 'StockNo']),
-          modelName: pickLineText(line, ['Name', 'Description']),
-          quantity: pickLineQuantity(line),
+          deviceType: mapped.deviceType,
+          manufacturer: mapped.manufacturer,
+          modelNumber: mapped.modelNumber,
+          modelName: mapped.modelName,
+          quantity: mapped.quantity,
           location: sectionName,
-          notes: pickString(line._itemGroup),
+          notes: mapped.notes,
           systemType: null,
           selected: true,
-          sourceLineRef: lineId,
+          sourceLineRef: mapped.sourceLineRef,
           metadata: {
             simproSectionId: sectionId,
             simproCostCentreId: centreId,
@@ -224,6 +184,22 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
           },
         });
       });
+
+      const inferenceTexts = [
+        centreName,
+        pickString(centreRecord.Description),
+        ...equipment.flatMap(item => [item.deviceType, item.modelName, item.modelNumber]),
+      ];
+      const inference = inferSystemTypeFromTexts(inferenceTexts);
+
+      if (!inference.suggestedSystemType) {
+        issues.push({
+          code: 'simpro.unresolved_system_type',
+          message: `Could not infer system type for cost centre "${centreName}".`,
+          severity: 'info',
+          draftId: systemDraftId,
+        });
+      }
 
       if (equipment.length === 0) {
         issues.push({
@@ -238,14 +214,14 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
         createSystemDraft({
           draftId: systemDraftId,
           name: centreName,
-          description: pickString(sectionRecord.Description),
+          description: cleanTextField(centreRecord.Description) ?? cleanTextField(sectionRecord.Description),
           selected: true,
           sourceSectionRef: [sectionId, centreId].filter(Boolean).join(':') || null,
           inference: {
-            suggestedSystemType: null,
+            suggestedSystemType: inference.suggestedSystemType,
             confirmedSystemType: null,
-            method: 'unresolved',
-            confidence: 0,
+            method: inference.method,
+            confidence: inference.confidence,
           },
           equipment,
         }),
@@ -265,10 +241,11 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
     reviewId: createDraftId('review'),
     source: {
       connectorId: 'simpro',
-      displayReference: project.jobNumber ?? jobId,
+      displayReference: jobNumber ?? jobId,
       fetchedAt: new Date().toISOString(),
       externalIds: {
         ...(jobId ? { jobId } : {}),
+        ...(jobNumber ? { jobNumber } : {}),
       },
     },
     project,
