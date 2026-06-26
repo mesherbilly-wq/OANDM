@@ -21,6 +21,7 @@ import ExportCentrePage from './pages/ExportCentrePage';
 import { ProductModelsPage } from './pages/ProductModelsPage';
 import { OMPreviewPage } from './pages/OMPreviewPage';
 import { AIProjectBuilderPage } from './pages/AIProjectBuilderPage';
+import { IntegrationsPage } from './pages/IntegrationsPage';
 import AsBuiltDrawingsPage from './pages/AsBuiltDrawingsPage';
 
 function App() {
@@ -99,6 +100,7 @@ function App() {
           </Route>
 
           <Route path="product-models" element={<ProductModelsPage />} />
+          <Route path="integrations"   element={<IntegrationsPage />} />
           <Route path="om-preview"     element={<OMPreviewPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useLocation, Outlet } from 'react-router-dom';
 import {
-  Shield, LayoutDashboard, FolderOpen, Box, Menu, X, Plus,
+  Shield, LayoutDashboard, FolderOpen, Box, Menu, X, Plus, Plug,
   ChevronDown, ChevronRight,
   Camera, Lock, PhoneCall, ShieldAlert, Network, ScanLine, Radar,
   ImageIcon, BookOpen, Cpu, Wifi, ClipboardCheck, Award, Download, Info,
@@ -141,6 +141,9 @@ export function Layout({ companyName, userEmail, onSignOut }: {
               <Plus className="w-5 h-5 flex-shrink-0" />
               <span className="font-medium">Create Project</span>
             </Link>
+
+            <NavLink href="/integrations" icon={Plug} label="Integrations"
+              active={isActive('/integrations')} onClick={() => setSidebarOpen(false)} />
           </div>
         </nav>
 
