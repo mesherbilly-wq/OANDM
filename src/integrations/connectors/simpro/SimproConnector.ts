@@ -1,4 +1,4 @@
-import { createPlannedConnector } from './createPlannedConnector';
+import { createPlannedConnector } from '../createPlannedConnector';
 
 /** Simpro job/quote import — API adapter to be added in a later phase. */
 export const simproConnector = createPlannedConnector({

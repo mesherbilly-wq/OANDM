@@ -4,11 +4,13 @@ import {
   Sparkles, Upload, FileText, X, CheckCircle, AlertCircle, Plus, Trash2,
   ChevronRight, Building, MapPin, User, FileSearch, ArrowLeft, Loader2,
   Camera, Lock, PhoneCall, ShieldAlert, Network, FolderOpen, Eye, Edit3,
-  ClipboardList, Tag, ImageIcon, FileSpreadsheet, PenLine,
+  ClipboardList, Tag, ImageIcon,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { SystemType } from '../types';
 import { getDevicePrefix } from '../lib/deviceLabel';
+import { ImportSourceSelector } from '../components/ImportSourceSelector';
+import type { ConnectorId } from '../integrations';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -16,7 +18,6 @@ import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 type Step = 'source' | 'upload' | 'analyzing' | 'review' | 'creating' | 'done';
 type AnalyzePhase = 'extracting' | 'generating';
 type ReviewTab = 'devices' | 'documents';
-type ImportSource = 'simpro' | 'ai_documents' | 'ai_drawings' | 'csv_excel' | 'manual';
 
 interface UploadedDoc {
   id: string;
@@ -189,7 +190,7 @@ export function AIProjectBuilderPage() {
   const updateLabel = (id: string, label: UploadedDoc['label']) =>
     setDocs(prev => prev.map(d => d.id === id ? { ...d, label } : d));
 
-  const selectImportSource = (source: ImportSource) => {
+  const selectImportSource = (source: ConnectorId) => {
     if (source === 'ai_documents') {
       setSourceMode('documents');
       setStep('upload');
@@ -421,14 +422,14 @@ export function AIProjectBuilderPage() {
           </div>
           <h1 className="text-2xl font-bold text-slate-900">Create Project</h1>
         </div>
-        <p className="text-slate-500 ml-[52px]">Choose an import source to start a new project — AI extraction, integrations, and manual entry</p>
+        <p className="text-slate-500 ml-[52px]">Choose an import source from the Integration Centre — AI extraction, integrations, and manual entry</p>
       </div>
 
       {step !== 'source' && <StepIndicator current={step} />}
 
       <div className={step === 'source' ? 'mt-0' : 'mt-8'}>
         {step === 'source' && (
-          <SourceSelectionStep onSelect={selectImportSource} />
+          <ImportSourceSelector onSelect={selectImportSource} />
         )}
         {step === 'upload' && (
           <UploadStep
@@ -488,53 +489,6 @@ function StepIndicator({ current }: { current: Step }) {
           </React.Fragment>
         );
       })}
-    </div>
-  );
-}
-
-// ── Source selection step ──────────────────────────────────────────────────────
-
-const IMPORT_SOURCES: {
-  id: ImportSource;
-  label: string;
-  description: string;
-  icon: React.ComponentType<{ className?: string }>;
-  enabled: boolean;
-}[] = [
-  { id: 'simpro',        label: 'Simpro',        description: 'Pull job or quote data from Simpro',              icon: Building,          enabled: false },
-  { id: 'ai_documents',  label: 'AI Documents',  description: 'Quotes, proposals, specs — AI extracts devices',  icon: FileText,        enabled: true },
-  { id: 'ai_drawings',   label: 'AI Drawings',   description: 'Floor plans and schedules — AI vision extraction', icon: ImageIcon,       enabled: true },
-  { id: 'csv_excel',     label: 'CSV / Excel',   description: 'Import device lists from spreadsheets',           icon: FileSpreadsheet, enabled: false },
-  { id: 'manual',        label: 'Manual',        description: 'Start blank and add project details yourself',    icon: PenLine,         enabled: false },
-];
-
-function SourceSelectionStep({ onSelect }: { onSelect: (source: ImportSource) => void }) {
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-      {IMPORT_SOURCES.map(({ id, label, description, icon: Icon, enabled }) => (
-        <button
-          key={id}
-          type="button"
-          disabled={!enabled}
-          onClick={() => enabled && onSelect(id)}
-          className={`relative text-left bg-white border rounded-xl p-5 transition-all ${
-            enabled
-              ? 'border-slate-200 hover:border-cyan-400 hover:shadow-md cursor-pointer'
-              : 'border-slate-100 opacity-60 cursor-not-allowed'
-          }`}
-        >
-          {!enabled && (
-            <span className="absolute top-3 right-3 text-[10px] font-semibold uppercase tracking-wide text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
-              Coming Soon
-            </span>
-          )}
-          <div className={`w-10 h-10 rounded-lg flex items-center justify-center mb-3 ${enabled ? 'bg-cyan-50' : 'bg-slate-100'}`}>
-            <Icon className={`w-5 h-5 ${enabled ? 'text-cyan-600' : 'text-slate-400'}`} />
-          </div>
-          <h3 className="text-sm font-semibold text-slate-900 mb-1">{label}</h3>
-          <p className="text-xs text-slate-500 leading-relaxed">{description}</p>
-        </button>
-      ))}
     </div>
   );
 }
