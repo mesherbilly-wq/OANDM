@@ -3,8 +3,11 @@ import { Link, Navigate } from 'react-router-dom';
 import {
   AlertCircle, ArrowLeft, Building, ChevronDown, FolderOpen, Info, MapPin, Tag, User,
 } from 'lucide-react';
-import type { ImportReviewDraft } from '../integrations';
-import { resolvedSystemType, selectedDeviceCount } from '../integrations';
+import {
+  resolvedSystemType,
+  selectedDeviceCount,
+  type ImportReviewDraft,
+} from '../integrations';
 import { pickRawDescriptionHtml } from '../integrations/connectors/simpro/simproImportHelpers';
 import { getSimproImportSession } from '../lib/simproImportSession';
 import type { SystemType } from '../types';
@@ -312,6 +315,20 @@ export function ImportReviewPage() {
           </div>
         </div>
       )}
+
+      <div className="mt-8 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4">
+        <p className="text-sm text-slate-600">
+          Import draft is kept in this browser session only. Project creation arrives in the next phase.
+        </p>
+        <button
+          type="button"
+          disabled
+          title="Project creation is disabled until the next phase"
+          className="inline-flex items-center gap-2 rounded-xl bg-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-500 cursor-not-allowed"
+        >
+          Create Project (Phase 11)
+        </button>
+      </div>
     </div>
   );
 }

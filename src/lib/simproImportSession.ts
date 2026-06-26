@@ -28,6 +28,16 @@ export function getSimproImportSession(): SimproImportSession | null {
   }
 }
 
+export function updateSimproImportSession(
+  updater: (session: SimproImportSession) => SimproImportSession,
+): SimproImportSession | null {
+  const current = getSimproImportSession();
+  if (!current) return null;
+  const next = updater(current);
+  setSimproImportSession(next);
+  return next;
+}
+
 export function clearSimproImportSession(): void {
   sessionStorage.removeItem(SESSION_KEY);
 }
