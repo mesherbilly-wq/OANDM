@@ -1,16 +1,30 @@
-import type { Device, SystemType } from '../types';
+import type { Device } from '../types';
+
+export const IMPORT_LINE_NOTE_TAG = '[oandm:line:';
 
 export interface GroupedEquipment {
   manufacturer: string | null;
   model_number: string | null;
   description: string | null;
-  system_type: SystemType | null;
+  system_type: string | null;
   quantity: number;
   devices: Device[];
 }
 
 function normalizeKey(value: string | null | undefined): string {
   return (value ?? '').trim().toLowerCase();
+}
+
+/** Stable import-line id written during Simpro persist (`[oandm:line:{draftId}]`). */
+export function extractImportLineDraftId(notes: string | null | undefined): string | null {
+  if (!notes) return null;
+  const start = notes.indexOf(IMPORT_LINE_NOTE_TAG);
+  if (start < 0) return null;
+  const from = start + IMPORT_LINE_NOTE_TAG.length;
+  const end = notes.indexOf(']', from);
+  if (end < 0) return null;
+  const draftId = notes.slice(from, end).trim();
+  return draftId || null;
 }
 
 /** Uses device_type as the equipment description (Device has no separate description field). */
@@ -20,6 +34,11 @@ function getDescription(device: Device): string | null {
 }
 
 function buildGroupKey(device: Device): string {
+  const importLineDraftId = extractImportLineDraftId(device.notes);
+  if (importLineDraftId) {
+    return ['import-line', importLineDraftId, normalizeKey(device.system_type)].join('\0');
+  }
+
   return [
     normalizeKey(device.manufacturer),
     normalizeKey(device.model_number),

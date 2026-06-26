@@ -3,7 +3,9 @@ import { useParams } from 'react-router-dom';
 import { useProject } from './ProjectLayout';
 import { supabase } from '../lib/supabase';
 import { groupDevices } from '../lib/deviceGrouping';
-import { Device, SystemType, SYSTEM_TYPES } from '../types';
+import { fetchProjectDevices } from '../lib/fetchProjectDevices';
+import { deriveProjectSystems, getCategoryStyle } from '../lib/systems';
+import { Device } from '../types';
 import {
   ChevronDown,
   ChevronRight,
@@ -14,7 +16,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 
-const SYSTEM_TYPE_COLORS: Record<SystemType, string> = {
+const SYSTEM_TYPE_COLORS: Record<string, string> = {
   'CCTV': 'bg-blue-100 text-blue-800 border-blue-300',
   'Access Control': 'bg-emerald-100 text-emerald-800 border-emerald-300',
   'Intruder': 'bg-red-100 text-red-800 border-red-300',
@@ -23,6 +25,11 @@ const SYSTEM_TYPE_COLORS: Record<SystemType, string> = {
   'Perimeter Detection': 'bg-teal-100 text-teal-800 border-teal-300',
   'Networking': 'bg-amber-100 text-amber-800 border-amber-300',
 };
+
+function systemBadgeClass(systemName: string | null): string {
+  if (!systemName) return 'bg-slate-100 text-slate-700 border-slate-200';
+  return SYSTEM_TYPE_COLORS[systemName] ?? 'bg-slate-100 text-slate-700 border-slate-200';
+}
 
 function groupedLocations(devices: Device[]): string {
   const locs = [...new Set(devices.map(d => d.location?.trim()).filter(Boolean))] as string[];
@@ -51,7 +58,7 @@ export default function DeviceSchedulePage() {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'grouped' | 'individual'>('grouped');
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedSystemType, setSelectedSystemType] = useState<SystemType | 'All'>('All');
+  const [selectedSystemType, setSelectedSystemType] = useState<string>('All');
   const [selectedStatus, setSelectedStatus] = useState<'All' | 'Active' | 'Pending Review'>('All');
   const [showComponents, setShowComponents] = useState(true);
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
@@ -65,15 +72,8 @@ export default function DeviceSchedulePage() {
     if (!projectId) return;
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('devices')
-        .select('*')
-        .eq('project_id', projectId)
-        .order('sort_order')
-        .order('device_name');
-
-      if (error) throw error;
-      setDevices(data || []);
+      const data = await fetchProjectDevices(parseInt(projectId, 10));
+      setDevices(data);
     } catch (error) {
       console.error('Failed to fetch devices:', error);
     } finally {
@@ -81,16 +81,7 @@ export default function DeviceSchedulePage() {
     }
   };
 
-  const systemTypeStats = useMemo(() => {
-    const stats: Record<SystemType, number> = SYSTEM_TYPES.reduce(
-      (acc, type) => ({ ...acc, [type]: 0 }),
-      {} as Record<SystemType, number>
-    );
-    devices.forEach((device) => {
-      stats[device.system_type]++;
-    });
-    return stats;
-  }, [devices]);
+  const projectSystems = useMemo(() => deriveProjectSystems(devices), [devices]);
 
   const pendingCount = useMemo(() => {
     return devices.filter((d) => d.status === 'pending_review').length;
@@ -282,8 +273,8 @@ export default function DeviceSchedulePage() {
                 }} />
               )}
               <span className="font-semibold text-gray-900">{device.device_name}</span>
-              <span className={`text-xs px-2 py-1 rounded border ${SYSTEM_TYPE_COLORS[device.system_type]}`}>
-                {device.system_type}
+              <span className={`text-xs px-2 py-1 rounded border ${systemBadgeClass(device.system_type)}`}>
+                {device.system_type ?? 'Unnamed System'}
               </span>
               {isOrphan && (
                 <AlertCircle size={16} className="text-yellow-500" title="Parent device not found" />
@@ -292,7 +283,7 @@ export default function DeviceSchedulePage() {
           </td>
           <td className="px-4 py-3 text-gray-700">{device.component_type || '-'}</td>
           <td className="px-4 py-3 text-gray-700">{device.mac_address || '-'}</td>
-          <td className="px-4 py-3 text-gray-700">{device.model || '-'}</td>
+          <td className="px-4 py-3 text-gray-700">{device.model_number || '-'}</td>
           <td className="px-4 py-3 text-gray-700">{device.location || '-'}</td>
           <td className="px-4 py-3">
             <span className={`text-xs px-2 py-1 rounded-full ${
@@ -344,11 +335,14 @@ export default function DeviceSchedulePage() {
     <div className="p-6 space-y-6">
       {/* Summary Stats */}
       <div className="flex flex-wrap items-center gap-3 p-4 bg-white rounded-lg border border-gray-200">
-        {SYSTEM_TYPES.map((type) => (
-          <div key={type} className={`text-sm font-medium px-3 py-1 rounded-full border ${SYSTEM_TYPE_COLORS[type]}`}>
-            {type}: {systemTypeStats[type]}
-          </div>
-        ))}
+        {projectSystems.map((system) => {
+          const style = getCategoryStyle(system.category);
+          return (
+            <div key={system.slug} className={`text-sm font-medium px-3 py-1 rounded-full border ${style.badgeClass}`}>
+              {system.name}: {system.deviceCount}
+            </div>
+          );
+        })}
         {pendingCount > 0 && (
           <div className="ml-auto text-sm font-medium px-3 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
             Pending Review: {pendingCount}
@@ -367,13 +361,13 @@ export default function DeviceSchedulePage() {
         />
         <select
           value={selectedSystemType}
-          onChange={(e) => setSelectedSystemType(e.target.value as SystemType | 'All')}
+          onChange={(e) => setSelectedSystemType(e.target.value)}
           className="px-3 py-2 border border-gray-300 rounded-lg"
         >
-          <option value="All">All System Types</option>
-          {SYSTEM_TYPES.map((type) => (
-            <option key={type} value={type}>
-              {type}
+          <option value="All">All Systems</option>
+          {projectSystems.map((system) => (
+            <option key={system.slug} value={system.name}>
+              {system.name}
             </option>
           ))}
         </select>
