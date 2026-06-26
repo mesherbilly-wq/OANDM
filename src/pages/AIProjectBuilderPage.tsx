@@ -4,7 +4,7 @@ import {
   Sparkles, Upload, FileText, X, CheckCircle, AlertCircle, Plus, Trash2,
   ChevronRight, Building, MapPin, User, FileSearch, ArrowLeft, Loader2,
   Camera, Lock, PhoneCall, ShieldAlert, Network, FolderOpen, Eye, Edit3,
-  ClipboardList, Tag, ImageIcon,
+  ClipboardList, Tag, ImageIcon, FileSpreadsheet, PenLine,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { SystemType } from '../types';
@@ -13,9 +13,10 @@ import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type Step = 'upload' | 'analyzing' | 'review' | 'creating' | 'done';
+type Step = 'source' | 'upload' | 'analyzing' | 'review' | 'creating' | 'done';
 type AnalyzePhase = 'extracting' | 'generating';
 type ReviewTab = 'devices' | 'documents';
+type ImportSource = 'simpro' | 'ai_documents' | 'ai_drawings' | 'csv_excel' | 'manual';
 
 interface UploadedDoc {
   id: string;
@@ -152,7 +153,7 @@ async function extractDocText(doc: UploadedDoc): Promise<{ name: string; content
 
 export function AIProjectBuilderPage() {
   const navigate = useNavigate();
-  const [step, setStep] = useState<Step>('upload');
+  const [step, setStep] = useState<Step>('source');
   const [analyzePhase, setAnalyzePhase] = useState<AnalyzePhase>('extracting');
   const [sourceMode, setSourceMode] = useState<'documents' | 'drawing'>('documents');
   const [docs, setDocs] = useState<UploadedDoc[]>([]);
@@ -187,6 +188,17 @@ export function AIProjectBuilderPage() {
   const removeDoc = (id: string) => setDocs(prev => prev.filter(d => d.id !== id));
   const updateLabel = (id: string, label: UploadedDoc['label']) =>
     setDocs(prev => prev.map(d => d.id === id ? { ...d, label } : d));
+
+  const selectImportSource = (source: ImportSource) => {
+    if (source === 'ai_documents') {
+      setSourceMode('documents');
+      setStep('upload');
+    } else if (source === 'ai_drawings') {
+      setSourceMode('drawing');
+      setDrawingFile(null);
+      setStep('upload');
+    }
+  };
 
   const analyze = async () => {
     setAnalyzeError(null);
@@ -405,19 +417,22 @@ export function AIProjectBuilderPage() {
       <div className="mb-8">
         <div className="flex items-center gap-3 mb-1">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center shadow-md">
-            <Sparkles className="w-5 h-5 text-white" />
+            <Plus className="w-5 h-5 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-slate-900">AI Project Builder</h1>
+          <h1 className="text-2xl font-bold text-slate-900">Create Project</h1>
         </div>
-        <p className="text-slate-500 ml-[52px]">Upload project documents — Claude extracts every device, names them sequentially, and drafts your full document pack</p>
+        <p className="text-slate-500 ml-[52px]">Choose an import source to start a new project — AI extraction, integrations, and manual entry</p>
       </div>
 
-      <StepIndicator current={step} />
+      {step !== 'source' && <StepIndicator current={step} />}
 
-      <div className="mt-8">
+      <div className={step === 'source' ? 'mt-0' : 'mt-8'}>
+        {step === 'source' && (
+          <SourceSelectionStep onSelect={selectImportSource} />
+        )}
         {step === 'upload' && (
           <UploadStep
-            sourceMode={sourceMode} onSetSourceMode={setSourceMode}
+            sourceMode={sourceMode}
             docs={docs} isDragOver={isDragOver} analyzeError={analyzeError}
             fileInputRef={fileInputRef} drawingInputRef={drawingInputRef}
             drawingFile={drawingFile} onSetDrawingFile={setDrawingFile}
@@ -425,7 +440,8 @@ export function AIProjectBuilderPage() {
             onDragOver={e => { e.preventDefault(); setIsDragOver(true); }}
             onDragLeave={() => setIsDragOver(false)}
             onFileInput={e => { if (e.target.files) addFiles(e.target.files); }}
-            onRemove={removeDoc} onUpdateLabel={updateLabel} onAnalyze={analyze} />
+            onRemove={removeDoc} onUpdateLabel={updateLabel} onAnalyze={analyze}
+            onBack={() => setStep('source')} />
         )}
         {step === 'analyzing' && <AnalyzingStep phase={analyzePhase} />}
         {step === 'review' && project && (
@@ -443,9 +459,9 @@ export function AIProjectBuilderPage() {
 
 // ── Step indicator ─────────────────────────────────────────────────────────────
 
-const STEP_ORDER: Step[] = ['upload', 'analyzing', 'review', 'creating', 'done'];
-const STEP_LABELS: Record<string, string> = { upload: 'Upload', analyzing: 'Analyse', review: 'Review', done: 'Done' };
-const VISIBLE_STEPS: Step[] = ['upload', 'analyzing', 'review', 'done'];
+const STEP_ORDER: Step[] = ['source', 'upload', 'analyzing', 'review', 'creating', 'done'];
+const STEP_LABELS: Record<string, string> = { source: 'Source', upload: 'Upload', analyzing: 'Analyse', review: 'Review', done: 'Done' };
+const VISIBLE_STEPS: Step[] = ['source', 'upload', 'analyzing', 'review', 'done'];
 
 function StepIndicator({ current }: { current: Step }) {
   const currentIdx = STEP_ORDER.indexOf(current);
@@ -476,16 +492,63 @@ function StepIndicator({ current }: { current: Step }) {
   );
 }
 
+// ── Source selection step ──────────────────────────────────────────────────────
+
+const IMPORT_SOURCES: {
+  id: ImportSource;
+  label: string;
+  description: string;
+  icon: React.ComponentType<{ className?: string }>;
+  enabled: boolean;
+}[] = [
+  { id: 'simpro',        label: 'Simpro',        description: 'Pull job or quote data from Simpro',              icon: Building,          enabled: false },
+  { id: 'ai_documents',  label: 'AI Documents',  description: 'Quotes, proposals, specs — AI extracts devices',  icon: FileText,        enabled: true },
+  { id: 'ai_drawings',   label: 'AI Drawings',   description: 'Floor plans and schedules — AI vision extraction', icon: ImageIcon,       enabled: true },
+  { id: 'csv_excel',     label: 'CSV / Excel',   description: 'Import device lists from spreadsheets',           icon: FileSpreadsheet, enabled: false },
+  { id: 'manual',        label: 'Manual',        description: 'Start blank and add project details yourself',    icon: PenLine,         enabled: false },
+];
+
+function SourceSelectionStep({ onSelect }: { onSelect: (source: ImportSource) => void }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {IMPORT_SOURCES.map(({ id, label, description, icon: Icon, enabled }) => (
+        <button
+          key={id}
+          type="button"
+          disabled={!enabled}
+          onClick={() => enabled && onSelect(id)}
+          className={`relative text-left bg-white border rounded-xl p-5 transition-all ${
+            enabled
+              ? 'border-slate-200 hover:border-cyan-400 hover:shadow-md cursor-pointer'
+              : 'border-slate-100 opacity-60 cursor-not-allowed'
+          }`}
+        >
+          {!enabled && (
+            <span className="absolute top-3 right-3 text-[10px] font-semibold uppercase tracking-wide text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
+              Coming Soon
+            </span>
+          )}
+          <div className={`w-10 h-10 rounded-lg flex items-center justify-center mb-3 ${enabled ? 'bg-cyan-50' : 'bg-slate-100'}`}>
+            <Icon className={`w-5 h-5 ${enabled ? 'text-cyan-600' : 'text-slate-400'}`} />
+          </div>
+          <h3 className="text-sm font-semibold text-slate-900 mb-1">{label}</h3>
+          <p className="text-xs text-slate-500 leading-relaxed">{description}</p>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // ── Upload step ────────────────────────────────────────────────────────────────
 
 function UploadStep({
-  sourceMode, onSetSourceMode,
+  sourceMode,
   docs, isDragOver, analyzeError,
   fileInputRef, drawingInputRef, drawingFile, onSetDrawingFile,
   onDrop, onDragOver, onDragLeave, onFileInput,
-  onRemove, onUpdateLabel, onAnalyze,
+  onRemove, onUpdateLabel, onAnalyze, onBack,
 }: {
-  sourceMode: 'documents' | 'drawing'; onSetSourceMode: (m: 'documents' | 'drawing') => void;
+  sourceMode: 'documents' | 'drawing';
   docs: UploadedDoc[]; isDragOver: boolean; analyzeError: string | null;
   fileInputRef: React.RefObject<HTMLInputElement>;
   drawingInputRef: React.RefObject<HTMLInputElement>;
@@ -493,22 +556,27 @@ function UploadStep({
   onDrop: (e: React.DragEvent) => void; onDragOver: (e: React.DragEvent) => void;
   onDragLeave: () => void; onFileInput: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onRemove: (id: string) => void; onUpdateLabel: (id: string, label: UploadedDoc['label']) => void;
-  onAnalyze: () => void;
+  onAnalyze: () => void; onBack: () => void;
 }) {
   const canAnalyze = sourceMode === 'drawing' ? !!drawingFile : docs.length > 0;
+  const sourceLabel = sourceMode === 'drawing' ? 'AI Drawings' : 'AI Documents';
 
   return (
     <div className="space-y-6">
-      {/* Source mode toggle */}
-      <div className="bg-white border border-slate-200 rounded-xl p-1 flex gap-1">
-        <button onClick={() => onSetSourceMode('documents')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-medium transition-all ${sourceMode === 'documents' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-          <FileText className="w-4 h-4" />From Documents
-        </button>
-        <button onClick={() => onSetSourceMode('drawing')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-medium transition-all ${sourceMode === 'drawing' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-          <ImageIcon className="w-4 h-4" />From Drawing
-        </button>
+      <button
+        type="button"
+        onClick={onBack}
+        className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 transition-colors"
+      >
+        <ArrowLeft className="w-4 h-4" />
+        Back to import sources
+      </button>
+
+      <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 flex items-center gap-2">
+        <Sparkles className="w-4 h-4 text-cyan-600 flex-shrink-0" />
+        <span className="text-sm text-slate-700">
+          Importing via <strong className="font-semibold text-slate-900">{sourceLabel}</strong>
+        </span>
       </div>
 
       {sourceMode === 'documents' ? (

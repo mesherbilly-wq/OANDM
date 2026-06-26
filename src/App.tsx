@@ -72,7 +72,8 @@ function App() {
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard"   element={<DashboardPage />} />
           <Route path="projects"    element={<ProjectsPage />} />
-          <Route path="ai-builder"  element={<AIProjectBuilderPage />} />
+          <Route path="create-project" element={<AIProjectBuilderPage />} />
+          <Route path="ai-builder"     element={<Navigate to="/create-project" replace />} />
 
           <Route path="projects/:id" element={<ProjectLayout />}>
             <Route index                  element={<Navigate to="info" replace />} />

@@ -259,7 +259,7 @@ export default function ProjectSystemsPage() {
           <div className="text-center py-16 text-slate-400">
             <cfg.icon className="w-10 h-10 mx-auto mb-3 opacity-30" />
             <p className="text-sm font-medium">No {activeSystem} devices yet</p>
-            <p className="text-xs mt-1">Add a device or use the AI Project Builder to import.</p>
+            <p className="text-xs mt-1">Add a device or use Create Project to import.</p>
           </div>
         ) : viewMode === 'grouped' ? (
           <div className="overflow-x-auto">

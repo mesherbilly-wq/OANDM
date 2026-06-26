@@ -217,11 +217,11 @@ export function DashboardPage() {
             <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
           </button>
           <Link
-            to="/ai-project-builder"
+            to="/create-project"
             className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-violet-600 to-purple-600 text-white rounded-xl text-sm font-semibold hover:from-violet-700 hover:to-purple-700 transition-all shadow-sm shadow-violet-200"
           >
-            <Sparkles className="w-4 h-4" />
-            AI Project Builder
+            <Plus className="w-4 h-4" />
+            Create Project
           </Link>
           <Link
             to="/projects"
@@ -410,7 +410,7 @@ export function DashboardPage() {
             <div className="p-3 space-y-1">
               {[
                 { to: '/projects',            icon: Plus,         label: 'Create New Project',     sub: 'Start from scratch',          color: 'text-cyan-600' },
-                { to: '/ai-project-builder',  icon: Sparkles,     label: 'AI Project Builder',     sub: 'Import from documents',        color: 'text-violet-600' },
+                { to: '/create-project',  icon: Plus,         label: 'Create Project',         sub: 'Import from Simpro, AI, or files', color: 'text-violet-600' },
                 { to: '/projects',            icon: FileText,     label: 'O&M Builder',            sub: 'Build operation manuals',      color: 'text-teal-600' },
                 { to: '/product-models',      icon: Cpu,          label: 'Product Library',        sub: 'Manage device catalogue',      color: 'text-slate-500' },
               ].map(({ to, icon: Icon, label, sub, color }) => (

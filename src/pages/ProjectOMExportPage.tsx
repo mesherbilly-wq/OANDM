@@ -1814,7 +1814,7 @@ function ScopeSection({ content, onChange, onSave, onRegenerate, saving, regener
 
       {!content && !preview && missingSystems.length === 0 && !regenerating && (
         <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
-          No Scope of Works found. You can type it below, or use the AI Project Builder (upload your quote/proposal) to auto-generate it.
+          No Scope of Works found. You can type it below, or use Create Project (upload your quote/proposal) to auto-generate it.
         </div>
       )}
 

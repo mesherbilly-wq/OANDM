@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useLocation, Outlet } from 'react-router-dom';
 import {
-  Shield, LayoutDashboard, FolderOpen, Box, Menu, X, Sparkles,
+  Shield, LayoutDashboard, FolderOpen, Box, Menu, X, Plus,
   ChevronDown, ChevronRight,
   Camera, Lock, PhoneCall, ShieldAlert, Network, ScanLine, Radar,
   ImageIcon, BookOpen, Cpu, Wifi, ClipboardCheck, Award, Download, Info,
@@ -136,10 +136,10 @@ export function Layout({ companyName, userEmail, onSignOut }: {
             <NavLink href="/product-models" icon={Box} label="Product Database"
               active={isActive('/product-models')} onClick={() => setSidebarOpen(false)} />
 
-            <Link to="/ai-builder" onClick={() => setSidebarOpen(false)}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all mt-0.5 ${isActive('/ai-builder') ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-900/30' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>
-              <Sparkles className="w-5 h-5 flex-shrink-0" />
-              <span className="font-medium">AI Project Builder</span>
+            <Link to="/create-project" onClick={() => setSidebarOpen(false)}
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all mt-0.5 ${isActive('/create-project') ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-900/30' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>
+              <Plus className="w-5 h-5 flex-shrink-0" />
+              <span className="font-medium">Create Project</span>
             </Link>
           </div>
         </nav>
