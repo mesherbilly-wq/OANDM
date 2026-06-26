@@ -46,10 +46,13 @@ export async function updateProjectSystemCategory(
 export interface EquipmentGroupUpdates {
   manufacturer?: string | null;
   model_number?: string | null;
+  model_name?: string | null;
   device_type?: string | null;
   location?: string | null;
   notes?: string | null;
+  ai_confidence?: number | null;
   quantity?: number;
+  system_category?: SystemCategory | null;
 }
 
 export async function updateEquipmentGroup(
@@ -63,9 +66,12 @@ export async function updateEquipmentGroup(
 
   if (updates.manufacturer !== undefined) fieldUpdates.manufacturer = updates.manufacturer;
   if (updates.model_number !== undefined) fieldUpdates.model_number = updates.model_number;
+  if (updates.model_name !== undefined) fieldUpdates.model_name = updates.model_name;
   if (updates.device_type !== undefined) fieldUpdates.device_type = updates.device_type;
   if (updates.location !== undefined) fieldUpdates.location = updates.location;
   if (updates.notes !== undefined) fieldUpdates.notes = updates.notes;
+  if (updates.ai_confidence !== undefined) fieldUpdates.ai_confidence = updates.ai_confidence;
+  if (updates.system_category !== undefined) fieldUpdates.system_category = updates.system_category;
 
   if (Object.keys(fieldUpdates).length > 0) {
     const { error } = await supabase.from('devices').update(fieldUpdates).in('id', ids);

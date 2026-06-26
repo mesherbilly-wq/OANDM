@@ -45,8 +45,11 @@ export type {
 
 export {
   matchEquipmentToProduct,
+  matchEquipmentInputToProduct,
+  equipmentFromDraft,
   buildEquipmentProductMatches,
   summarizeProductMatches,
   applyProductMatchesToDraft,
   savedMatchesFromEquipmentMatches,
+  AUTO_MATCH_THRESHOLD,
 } from './productMatching';

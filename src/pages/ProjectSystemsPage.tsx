@@ -2,10 +2,12 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { fetchProjectDevices } from '../lib/fetchProjectDevices';
-import { groupDevices, type GroupedEquipment } from '../lib/deviceGrouping';
+import { groupDevices, getGroupRowKey, type GroupedEquipment } from '../lib/deviceGrouping';
 import {
   buildPrefixCounters,
   saveProjectSystem,
+  updateEquipmentGroup,
+  type EquipmentGroupUpdates,
 } from '../lib/deviceProjectEdits';
 import { loadProjectSystemsForProject } from '../lib/projectSystemsDb';
 import {
@@ -17,12 +19,20 @@ import {
   systemNameToSlug,
   SYSTEM_CATEGORIES,
 } from '../lib/systems';
-import { Plus, Trash2, Pencil, Check, X, CheckCheck, Sparkles, FileSearch } from 'lucide-react';
+import { Plus, Trash2, Pencil, Check, X, CheckCheck, Sparkles, FileSearch, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 import { AddDeviceModal } from '../components/AddDeviceModal';
 import { EditDeviceModal } from '../components/EditDeviceModal';
-import { EditEquipmentGroupModal } from '../components/EditEquipmentGroupModal';
 import { AIImportModal } from '../components/AIImportModal';
+import { ManufacturerSuggestHelper } from '../components/ManufacturerSuggestHelper';
 import { useProject } from './ProjectLayout';
+import type { ManufacturerSuggestion } from '../lib/manufacturerSuggestion';
+import { saveProductModelPairIfNew } from '../lib/productModelPairing';
+import {
+  enrichDeviceWithAutoManufacturer,
+  extractPendingManufacturerSuggestion,
+  stripManufacturerLookupNotes,
+  type PendingManufacturerSuggestion,
+} from '../lib/autoManufacturerLookup';
 import type { Device, ProjectSystemRecord, SystemCategory } from '../types';
 
 function groupedLocations(devices: Device[]): string {
@@ -32,17 +42,55 @@ function groupedLocations(devices: Device[]): string {
   return locs.slice(0, 3).join(', ') + (locs.length > 3 ? ` +${locs.length - 3}` : '');
 }
 
-function groupedNotes(devices: Device[]): string {
-  const notes = [...new Set(devices.map(d => d.notes?.trim()).filter(Boolean))] as string[];
-  if (notes.length === 0) return '—';
-  if (notes.length === 1) return notes[0];
-  return notes.slice(0, 2).join('; ') + (notes.length > 2 ? ` +${notes.length - 2}` : '');
+function primaryLocation(devices: Device[]): string {
+  const locations = [...new Set(devices.map(d => d.location?.trim()).filter(Boolean))] as string[];
+  return locations[0] ?? '';
+}
+
+function getGroupPendingSuggestion(row: GroupedEquipment): PendingManufacturerSuggestion | null {
+  for (const device of row.devices) {
+    const pending = extractPendingManufacturerSuggestion(device.notes);
+    if (pending) return pending;
+  }
+  return null;
+}
+
+function getDevicePendingSuggestion(device: Device): PendingManufacturerSuggestion | null {
+  return extractPendingManufacturerSuggestion(device.notes);
+}
+
+type GroupedField = 'description' | 'manufacturer' | 'model' | 'quantity' | 'location';
+type IndividualField = 'type' | 'manufacturer' | 'model' | 'location';
+
+type EditingCell =
+  | { mode: 'grouped'; rowKey: string; field: GroupedField; draft: string }
+  | { mode: 'individual'; deviceId: number; field: IndividualField; draft: string };
+
+type SortDir = 'asc' | 'desc';
+
+type GroupedSortKey = 'description' | 'manufacturer' | 'model' | 'quantity' | 'locations';
+type IndividualSortKey = 'label' | 'type' | 'manufacturerModel' | 'location' | 'status';
+
+function cycleSort<K extends string>(
+  current: { key: K; dir: SortDir } | null,
+  key: K,
+): { key: K; dir: SortDir } | null {
+  if (!current || current.key !== key) return { key, dir: 'asc' };
+  if (current.dir === 'asc') return { key, dir: 'desc' };
+  return null;
+}
+
+function sortIcon(active: boolean, dir: SortDir | null) {
+  if (!active || !dir) return <ArrowUpDown className="w-3.5 h-3.5 opacity-40" />;
+  return dir === 'asc'
+    ? <ArrowUp className="w-3.5 h-3.5" />
+    : <ArrowDown className="w-3.5 h-3.5" />;
 }
 
 export default function ProjectSystemsPage() {
   const navigate = useNavigate();
   const { id, system: systemSlug } = useParams<{ id: string; system?: string }>();
-  const { productModels, datasheets } = useProject();
+  const { productModels, datasheets, refreshProductModels } = useProject();
   const projectId = id ? parseInt(id, 10) : null;
 
   const [allDevices, setAllDevices] = useState<Device[]>([]);
@@ -52,13 +100,17 @@ export default function ProjectSystemsPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [showAIImport, setShowAIImport] = useState(false);
   const [editDevice, setEditDevice] = useState<Device | null>(null);
-  const [editGroup, setEditGroup] = useState<GroupedEquipment | null>(null);
   const [viewMode, setViewMode] = useState<'grouped' | 'individual'>('grouped');
+  const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
+  const [cellSaveError, setCellSaveError] = useState<string | null>(null);
+  const [savingCell, setSavingCell] = useState(false);
   const [editingSystem, setEditingSystem] = useState(false);
   const [systemNameDraft, setSystemNameDraft] = useState('');
   const [systemCategoryDraft, setSystemCategoryDraft] = useState<SystemCategory | ''>('');
   const [systemSaveError, setSystemSaveError] = useState<string | null>(null);
   const [savingSystem, setSavingSystem] = useState(false);
+  const [groupedSort, setGroupedSort] = useState<{ key: GroupedSortKey; dir: SortDir } | null>(null);
+  const [individualSort, setIndividualSort] = useState<{ key: IndividualSortKey; dir: SortDir } | null>(null);
 
   const projectSystems = useMemo(
     () => deriveProjectSystems(allDevices, systemRows),
@@ -91,6 +143,79 @@ export default function ProjectSystemsPage() {
   );
 
   const equipmentGroups = useMemo(() => groupDevices(systemDevices), [systemDevices]);
+
+  const sortedEquipmentGroups = useMemo(() => {
+    if (!groupedSort) return equipmentGroups;
+    const factor = groupedSort.dir === 'asc' ? 1 : -1;
+    return [...equipmentGroups].sort((a, b) => {
+      let left: string | number;
+      let right: string | number;
+      switch (groupedSort.key) {
+        case 'description':
+          left = (a.description ?? '').toLowerCase();
+          right = (b.description ?? '').toLowerCase();
+          break;
+        case 'manufacturer':
+          left = (a.manufacturer ?? '').toLowerCase();
+          right = (b.manufacturer ?? '').toLowerCase();
+          break;
+        case 'model':
+          left = (a.model_number ?? '').toLowerCase();
+          right = (b.model_number ?? '').toLowerCase();
+          break;
+        case 'quantity':
+          left = a.quantity;
+          right = b.quantity;
+          break;
+        case 'locations':
+          left = groupedLocations(a.devices).toLowerCase();
+          right = groupedLocations(b.devices).toLowerCase();
+          break;
+        default:
+          left = '';
+          right = '';
+      }
+      if (typeof left === 'number' && typeof right === 'number') {
+        return (left - right) * factor;
+      }
+      return String(left).localeCompare(String(right)) * factor;
+    });
+  }, [equipmentGroups, groupedSort]);
+
+  const sortedSystemDevices = useMemo(() => {
+    if (!individualSort) return systemDevices;
+    const factor = individualSort.dir === 'asc' ? 1 : -1;
+    return [...systemDevices].sort((a, b) => {
+      let left: string;
+      let right: string;
+      switch (individualSort.key) {
+        case 'label':
+          left = (a.device_name ?? '').toLowerCase();
+          right = (b.device_name ?? '').toLowerCase();
+          break;
+        case 'type':
+          left = (a.device_type ?? '').toLowerCase();
+          right = (b.device_type ?? '').toLowerCase();
+          break;
+        case 'manufacturerModel':
+          left = [a.manufacturer, a.model_number].filter(Boolean).join(' · ').toLowerCase();
+          right = [b.manufacturer, b.model_number].filter(Boolean).join(' · ').toLowerCase();
+          break;
+        case 'location':
+          left = (a.location ?? '').toLowerCase();
+          right = (b.location ?? '').toLowerCase();
+          break;
+        case 'status':
+          left = (a.status ?? '').toLowerCase();
+          right = (b.status ?? '').toLowerCase();
+          break;
+        default:
+          left = '';
+          right = '';
+      }
+      return left.localeCompare(right) * factor;
+    });
+  }, [systemDevices, individualSort]);
 
   const fetchDevices = useCallback(async (): Promise<Device[]> => {
     if (!projectId) return [];
@@ -172,14 +297,21 @@ export default function ProjectSystemsPage() {
 
   const handleAddDevice = async (deviceData: Partial<Device>): Promise<string | null> => {
     if (!projectId) return 'No project ID';
-    const { error } = await supabase.from('devices').insert({
+
+    const row: Partial<Device> = {
       ...deviceData,
       project_id: projectId,
       project_system_id: activeSystemMeta?.id ?? null,
       system_type: activeSystemName,
       system_category: activeSystemMeta?.category ?? null,
       status: 'active',
+    };
+
+    await enrichDeviceWithAutoManufacturer(row, productModels, {
+      context: `systems-add:project-${projectId}`,
     });
+
+    const { error } = await supabase.from('devices').insert(row);
     if (error) return error.message;
     setShowAdd(false);
     fetchDevices();
@@ -190,6 +322,319 @@ export default function ProjectSystemsPage() {
     if (!confirm('Delete this device?')) return;
     await supabase.from('devices').delete().eq('id', deviceId);
     fetchDevices();
+  };
+
+  const cancelCellEdit = () => setEditingCell(null);
+
+  const persistManufacturerPairing = async (
+    manufacturer: string,
+    modelNumber: string | null,
+    deviceType: string | null,
+    deviceIds: number[],
+    productId: number | null,
+  ) => {
+    if (modelNumber?.trim()) {
+      const saved = await saveProductModelPairIfNew(
+        manufacturer,
+        modelNumber,
+        deviceType,
+        productModels,
+      );
+      if ('error' in saved) {
+        setCellSaveError(saved.error);
+      } else {
+        await refreshProductModels();
+      }
+    }
+
+    if (productId != null || modelNumber?.trim()) {
+      await supabase.from('devices').update({ matched: true }).in('id', deviceIds);
+    }
+  };
+
+  const applyGroupedManufacturerSuggestion = async (
+    row: GroupedEquipment,
+    manufacturer: string,
+    suggestion: ManufacturerSuggestion,
+  ) => {
+    if (!projectId) return;
+
+    const strippedNotes = stripManufacturerLookupNotes(row.devices[0]?.notes);
+    const error = await updateEquipmentGroup(
+      projectId,
+      row,
+      {
+        manufacturer,
+        ai_confidence: suggestion.confidence,
+        notes: strippedNotes,
+      },
+      { ...prefixCounters },
+    );
+    if (error) {
+      setCellSaveError(error);
+      throw new Error(error);
+    }
+
+    await persistManufacturerPairing(
+      manufacturer,
+      row.model_number,
+      row.description,
+      row.devices.map(device => device.id),
+      suggestion.productId,
+    );
+    await fetchDevices();
+  };
+
+  const applyIndividualManufacturerSuggestion = async (
+    device: Device,
+    manufacturer: string,
+    suggestion: ManufacturerSuggestion,
+  ) => {
+    const { error } = await supabase
+      .from('devices')
+      .update({
+        manufacturer,
+        ai_confidence: suggestion.confidence,
+        notes: stripManufacturerLookupNotes(device.notes),
+      })
+      .eq('id', device.id);
+    if (error) {
+      setCellSaveError(error.message);
+      throw new Error(error.message);
+    }
+
+    notifyProjectDevicesChanged();
+    await persistManufacturerPairing(
+      manufacturer,
+      device.model_number,
+      device.device_type,
+      [device.id],
+      suggestion.productId,
+    );
+    await fetchDevices();
+  };
+
+  const beginGroupedManufacturerEdit = (row: GroupedEquipment, draft = '') => {
+    setEditingCell({
+      mode: 'grouped',
+      rowKey: getGroupRowKey(row),
+      field: 'manufacturer',
+      draft,
+    });
+  };
+
+  const beginIndividualManufacturerEdit = (device: Device, draft = '') => {
+    setEditingCell({
+      mode: 'individual',
+      deviceId: device.id,
+      field: 'manufacturer',
+      draft,
+    });
+  };
+
+  const commitCellEdit = async () => {
+    if (!editingCell || !projectId || savingCell) return;
+    setSavingCell(true);
+    setCellSaveError(null);
+    const trimmed = editingCell.draft.trim();
+    let error: string | null = null;
+
+    if (editingCell.mode === 'grouped') {
+      const group = equipmentGroups.find(row => getGroupRowKey(row) === editingCell.rowKey);
+      if (!group) {
+        cancelCellEdit();
+        setSavingCell(false);
+        return;
+      }
+
+      const hadManufacturer = Boolean(group.manufacturer?.trim());
+      const updates: EquipmentGroupUpdates = {};
+      switch (editingCell.field) {
+        case 'description':
+          updates.device_type = trimmed || null;
+          break;
+        case 'manufacturer':
+          updates.manufacturer = trimmed || null;
+          updates.notes = stripManufacturerLookupNotes(group.devices[0]?.notes);
+          break;
+        case 'model':
+          updates.model_number = trimmed || null;
+          break;
+        case 'quantity': {
+          const parsed = parseInt(editingCell.draft, 10);
+          if (Number.isFinite(parsed)) updates.quantity = parsed;
+          break;
+        }
+        case 'location':
+          updates.location = trimmed || null;
+          break;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        error = await updateEquipmentGroup(
+          projectId,
+          group,
+          updates,
+          { ...prefixCounters },
+        );
+      }
+
+      if (
+        !error &&
+        editingCell.field === 'manufacturer' &&
+        !hadManufacturer &&
+        trimmed &&
+        group.model_number?.trim()
+      ) {
+        await persistManufacturerPairing(
+          trimmed,
+          group.model_number,
+          group.description,
+          group.devices.map(device => device.id),
+          null,
+        );
+      }
+    } else {
+      const device = systemDevices.find(entry => entry.id === editingCell.deviceId);
+      if (!device) {
+        cancelCellEdit();
+        setSavingCell(false);
+        return;
+      }
+
+      const hadManufacturer = Boolean(device.manufacturer?.trim());
+      const updates: Partial<Pick<Device, 'device_type' | 'manufacturer' | 'model_number' | 'location'>> = {};
+      switch (editingCell.field) {
+        case 'type':
+          updates.device_type = trimmed || null;
+          break;
+        case 'manufacturer':
+          updates.manufacturer = trimmed || null;
+          updates.notes = stripManufacturerLookupNotes(device.notes);
+          break;
+        case 'model':
+          updates.model_number = trimmed || null;
+          break;
+        case 'location':
+          updates.location = trimmed || null;
+          break;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        const { error: saveError } = await supabase
+          .from('devices')
+          .update(updates)
+          .eq('id', editingCell.deviceId);
+        error = saveError?.message ?? null;
+        if (!error) notifyProjectDevicesChanged();
+      }
+
+      if (
+        !error &&
+        editingCell.field === 'manufacturer' &&
+        !hadManufacturer &&
+        trimmed &&
+        device.model_number?.trim()
+      ) {
+        await persistManufacturerPairing(
+          trimmed,
+          device.model_number,
+          device.device_type,
+          [device.id],
+          null,
+        );
+      }
+    }
+
+    setSavingCell(false);
+    if (error) {
+      setCellSaveError(error);
+      return;
+    }
+
+    cancelCellEdit();
+    await fetchDevices();
+  };
+
+  const renderCellInput = (cell: EditingCell) => (
+    <input
+      autoFocus
+      value={cell.draft}
+      onChange={event => setEditingCell({ ...cell, draft: event.target.value })}
+      onKeyDown={event => {
+        if (event.key === 'Enter') void commitCellEdit();
+        if (event.key === 'Escape') cancelCellEdit();
+      }}
+      onBlur={() => void commitCellEdit()}
+      disabled={savingCell}
+      className="w-full min-w-[72px] border border-cyan-500 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-400"
+    />
+  );
+
+  const renderGroupedCell = (
+    row: GroupedEquipment,
+    field: GroupedField,
+    display: string,
+  ) => {
+    const rowKey = getGroupRowKey(row);
+    const isEditing =
+      editingCell?.mode === 'grouped' &&
+      editingCell.rowKey === rowKey &&
+      editingCell.field === field;
+    const wrapText = field === 'description';
+
+    if (isEditing) {
+      return renderCellInput(editingCell);
+    }
+
+    return (
+      <button
+        type="button"
+        onClick={() => setEditingCell({ mode: 'grouped', rowKey, field, draft: display === '—' ? '' : display })}
+        className={`w-full text-left px-1 py-0.5 rounded hover:bg-slate-100 ${
+          wrapText ? 'whitespace-normal break-words' : 'truncate'
+        }`}
+        title="Click to edit"
+      >
+        {display || '—'}
+      </button>
+    );
+  };
+
+  const renderIndividualCell = (
+    device: Device,
+    field: IndividualField,
+    display: string,
+  ) => {
+    const isEditing =
+      editingCell?.mode === 'individual' &&
+      editingCell.deviceId === device.id &&
+      editingCell.field === field;
+    const wrapText = field === 'type';
+
+    if (isEditing) {
+      return renderCellInput(editingCell);
+    }
+
+    return (
+      <button
+        type="button"
+        onClick={() =>
+          setEditingCell({
+            mode: 'individual',
+            deviceId: device.id,
+            field,
+            draft: display === '—' ? '' : display,
+          })
+        }
+        className={`w-full text-left px-1 py-0.5 rounded hover:bg-slate-100 ${
+          wrapText ? 'whitespace-normal break-words' : 'truncate'
+        }`}
+        title="Click to edit"
+      >
+        {display || '—'}
+      </button>
+    );
   };
 
   const categoryStyle = getCategoryStyle(activeSystemMeta?.category ?? null);
@@ -370,32 +815,80 @@ export default function ProjectSystemsPage() {
           </div>
         ) : viewMode === 'grouped' ? (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            {cellSaveError && (
+              <div className="mx-4 mt-4 px-4 py-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg">
+                {cellSaveError}
+              </div>
+            )}
+            <table className="w-full text-sm table-fixed">
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50">
-                  {['Description', 'Manufacturer', 'Model', 'Quantity', 'Locations', 'Notes', ''].map(h => (
-                    <th key={h || 'actions'} className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">{h}</th>
+                  {([
+                    ['description', 'Description', 'w-[11rem]'],
+                    ['manufacturer', 'Manufacturer', 'w-[7rem]'],
+                    ['model', 'Model', 'w-[7rem]'],
+                    ['quantity', 'Quantity', 'w-[5rem]'],
+                    ['locations', 'Locations', 'w-[12rem]'],
+                  ] as const).map(([key, label, widthClass]) => (
+                    <th key={key} className={`text-left px-4 py-3 ${widthClass}`}>
+                      <button
+                        type="button"
+                        onClick={() => setGroupedSort(prev => cycleSort(prev, key))}
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 uppercase tracking-wider hover:text-cyan-700"
+                      >
+                        {label}
+                        {sortIcon(groupedSort?.key === key, groupedSort?.key === key ? groupedSort.dir : null)}
+                      </button>
+                    </th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {equipmentGroups.map(row => (
-                  <tr key={`${row.system_type}|${row.manufacturer}|${row.model_number}|${row.description}`} className="hover:bg-slate-50 transition-colors">
-                    <td className="px-4 py-3 text-slate-600">{row.description ?? '—'}</td>
-                    <td className="px-4 py-3 text-slate-600">{row.manufacturer ?? '—'}</td>
-                    <td className="px-4 py-3 text-slate-600">{row.model_number ?? '—'}</td>
-                    <td className="px-4 py-3 font-semibold text-slate-900">{row.quantity}</td>
-                    <td className="px-4 py-3 text-slate-500 max-w-[200px]">{groupedLocations(row.devices)}</td>
-                    <td className="px-4 py-3 text-slate-500 max-w-[200px]">{groupedNotes(row.devices)}</td>
-                    <td className="px-4 py-3">
-                      <button
-                        type="button"
-                        onClick={() => setEditGroup(row)}
-                        className="p-1.5 text-slate-400 hover:text-cyan-600 hover:bg-cyan-50 rounded-lg transition-colors"
-                        title="Edit equipment group"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
+                {sortedEquipmentGroups.map(row => (
+                  <tr key={getGroupRowKey(row)} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-4 py-3 text-slate-600 align-top w-[11rem] max-w-[11rem]">
+                      {renderGroupedCell(row, 'description', row.description ?? '')}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">
+                      <div className="flex items-start gap-1">
+                        <div className="flex-1 min-w-0">
+                          {renderGroupedCell(row, 'manufacturer', row.manufacturer ?? '')}
+                          {(() => {
+                            const pending = getGroupPendingSuggestion(row);
+                            if (!pending) return null;
+                            const label = row.manufacturer?.trim() ? 'Review' : 'Suggested';
+                            return (
+                              <p className="text-xs text-amber-600 mt-0.5" title={pending.reason}>
+                                {label}: {pending.manufacturer} ({Math.round(pending.confidence * 100)}%)
+                              </p>
+                            );
+                          })()}
+                        </div>
+                        {(!row.manufacturer?.trim() || getGroupPendingSuggestion(row)) && (
+                          <ManufacturerSuggestHelper
+                            context={{
+                              description: row.description,
+                              modelNumber: row.model_number,
+                              deviceType: row.description,
+                            }}
+                            productModels={productModels}
+                            pendingSuggestion={getGroupPendingSuggestion(row)}
+                            onAccept={(manufacturer, suggestion) =>
+                              applyGroupedManufacturerSuggestion(row, manufacturer, suggestion)
+                            }
+                            onManualEdit={draft => beginGroupedManufacturerEdit(row, draft)}
+                          />
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {renderGroupedCell(row, 'model', row.model_number ?? '')}
+                    </td>
+                    <td className="px-4 py-3 font-semibold text-slate-900">
+                      {renderGroupedCell(row, 'quantity', String(row.quantity))}
+                    </td>
+                    <td className="px-4 py-3 text-slate-500 max-w-[12rem] align-top">
+                      {renderGroupedCell(row, 'location', primaryLocation(row.devices) || groupedLocations(row.devices))}
                     </td>
                   </tr>
                 ))}
@@ -404,26 +897,80 @@ export default function ProjectSystemsPage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
+            {cellSaveError && (
+              <div className="mx-4 mt-4 px-4 py-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg">
+                {cellSaveError}
+              </div>
+            )}
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50">
-                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider w-32">Label</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Type</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Manufacturer / Model</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Location</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Status</th>
+                  {([
+                    ['label', 'Label', 'text-left px-5 py-3 w-32'],
+                    ['type', 'Type', 'text-left px-4 py-3'],
+                    ['manufacturerModel', 'Manufacturer / Model', 'text-left px-4 py-3'],
+                    ['location', 'Location', 'text-left px-4 py-3'],
+                    ['status', 'Status', 'text-left px-4 py-3'],
+                  ] as const).map(([key, label, className]) => (
+                    <th key={key} className={className}>
+                      <button
+                        type="button"
+                        onClick={() => setIndividualSort(prev => cycleSort(prev, key))}
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 uppercase tracking-wider hover:text-cyan-700"
+                      >
+                        {label}
+                        {sortIcon(individualSort?.key === key, individualSort?.key === key ? individualSort.dir : null)}
+                      </button>
+                    </th>
+                  ))}
                   <th className="px-4 py-3 w-20" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {systemDevices.map(d => (
+                {sortedSystemDevices.map(d => (
                   <tr key={d.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-5 py-3 font-mono text-xs font-bold text-slate-700">{d.device_name ?? '—'}</td>
-                    <td className="px-4 py-3 text-slate-600">{d.device_type ?? '—'}</td>
-                    <td className="px-4 py-3 text-slate-600">
-                      {[d.manufacturer, d.model_number].filter(Boolean).join(' · ') || '—'}
+                    <td className="px-4 py-3 text-slate-600 align-top w-[11rem] max-w-[11rem]">
+                      {renderIndividualCell(d, 'type', d.device_type ?? '')}
                     </td>
-                    <td className="px-4 py-3 text-slate-500 max-w-[180px] truncate">{d.location ?? '—'}</td>
+                    <td className="px-4 py-3 text-slate-600">
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-start gap-1">
+                          <div className="flex-1 min-w-0">
+                            {renderIndividualCell(d, 'manufacturer', d.manufacturer ?? '')}
+                            {(() => {
+                              const pending = getDevicePendingSuggestion(d);
+                              if (!pending) return null;
+                              const label = d.manufacturer?.trim() ? 'Review' : 'Suggested';
+                              return (
+                                <p className="text-xs text-amber-600 mt-0.5" title={pending.reason}>
+                                  {label}: {pending.manufacturer} ({Math.round(pending.confidence * 100)}%)
+                                </p>
+                              );
+                            })()}
+                          </div>
+                          {(!d.manufacturer?.trim() || getDevicePendingSuggestion(d)) && (
+                            <ManufacturerSuggestHelper
+                              context={{
+                                description: d.device_type,
+                                modelNumber: d.model_number,
+                                deviceType: d.device_type,
+                              }}
+                              productModels={productModels}
+                              pendingSuggestion={getDevicePendingSuggestion(d)}
+                              onAccept={(manufacturer, suggestion) =>
+                                applyIndividualManufacturerSuggestion(d, manufacturer, suggestion)
+                              }
+                              onManualEdit={draft => beginIndividualManufacturerEdit(d, draft)}
+                            />
+                          )}
+                        </div>
+                        {renderIndividualCell(d, 'model', d.model_number ?? '')}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-500 max-w-[180px]">
+                      {renderIndividualCell(d, 'location', d.location ?? '')}
+                    </td>
                     <td className="px-4 py-3">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                         d.status === 'active' ? 'bg-emerald-100 text-emerald-700' :
@@ -490,16 +1037,6 @@ export default function ProjectSystemsPage() {
           projectSystemNames={projectSystemNames}
           onClose={() => setEditDevice(null)}
           onSave={() => { setEditDevice(null); fetchDevices(); }}
-        />
-      )}
-
-      {editGroup && projectId && (
-        <EditEquipmentGroupModal
-          projectId={projectId}
-          group={editGroup}
-          prefixCounters={{ ...prefixCounters }}
-          onClose={() => setEditGroup(null)}
-          onSaved={() => { setEditGroup(null); fetchDevices(); }}
         />
       )}
     </div>

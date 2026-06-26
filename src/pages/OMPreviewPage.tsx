@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import type { Project, Device, ProductModel, Datasheet } from '../types';
+import { matchEquipmentInputToProduct } from '../integrations/core/productMatching';
+import { findDatasheetForDeviceFields } from '../lib/datasheetMatching';
 import {
   FileText,
   CheckCircle,
@@ -77,26 +79,27 @@ export function OMPreviewPage() {
     }
 
     const devicesWithMatches: DeviceWithMatch[] = (data || []).map((device) => {
-      const mfr = device.manufacturer?.trim().toLowerCase();
-      const model = device.model_number?.trim().toLowerCase();
+      const productMatch = matchEquipmentInputToProduct(
+        {
+          manufacturer: device.manufacturer,
+          modelNumber: device.model_number,
+          modelName: device.model_name,
+          deviceType: device.device_type,
+        },
+        productModels,
+      );
+      const datasheet = findDatasheetForDeviceFields(
+        device.manufacturer,
+        device.model_number,
+        productModels,
+        datasheets,
+      );
 
-      const productModel =
-        productModels.find(
-          (pm) =>
-            pm.manufacturer?.trim().toLowerCase() === mfr &&
-            pm.model_number?.trim().toLowerCase() === model
-        ) ?? null;
-
-      // Only match datasheets that have a non-empty datasheet_url
-      const datasheet =
-        datasheets.find(
-          (ds) =>
-            ds.manufacturer?.trim().toLowerCase() === mfr &&
-            ds.model_number?.trim().toLowerCase() === model &&
-            ds.datasheet_url?.trim()
-        ) ?? null;
-
-      return { ...device, productModel, datasheet };
+      return {
+        ...device,
+        productModel: productMatch.matchedProduct,
+        datasheet,
+      };
     });
 
     setDevices(devicesWithMatches);

@@ -1,5 +1,6 @@
 import type { ImportReviewDraft, ImportSystemDraft } from '../integrations';
 import { resolvedCategory } from '../integrations';
+import { buildSimproPersistSourceReference } from '../integrations/connectors/simpro/simproImportHelpers';
 import type { Device, ProjectSystemRecord, SystemCategory } from '../types';
 import { legacySystemNameToCategory, normalizeSystemCategory, resolveSystemName } from './systems';
 import { supabase } from './supabase';
@@ -105,7 +106,7 @@ export async function insertProjectSystemsFromSimproDraft(
         system_name: systemName,
         system_category: resolvedCategory(system),
         source_type: 'simpro',
-        source_reference: system.sourceSectionRef,
+        source_reference: buildSimproPersistSourceReference(system) ?? system.sourceSectionRef,
         notes: system.description,
         display_order: displayOrder,
       })

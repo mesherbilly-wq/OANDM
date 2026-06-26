@@ -9,6 +9,7 @@ interface ProjectContextType {
   productModels: ProductModel[];
   datasheets: Datasheet[];
   refreshDatasheets: () => Promise<void>;
+  refreshProductModels: () => Promise<void>;
   refreshProject: () => Promise<void>;
 }
 
@@ -56,6 +57,11 @@ export function ProjectLayout() {
     setDatasheets(data ?? []);
   }, []);
 
+  const refreshProductModels = useCallback(async () => {
+    const { data } = await supabase.from('product_models').select('*').order('manufacturer');
+    setProductModels(data ?? []);
+  }, []);
+
   const refreshProject = useCallback(async () => {
     if (!id) return;
     const { data: proj } = await supabase.from('projects').select('*').eq('id', parseInt(id)).single();
@@ -77,7 +83,7 @@ export function ProjectLayout() {
   const StatusIcon = status.icon;
 
   return (
-    <ProjectContext.Provider value={{ project, productModels, datasheets, refreshDatasheets, refreshProject }}>
+    <ProjectContext.Provider value={{ project, productModels, datasheets, refreshDatasheets, refreshProductModels, refreshProject }}>
       <div className="max-w-7xl mx-auto">
         <div className="mb-6 pb-5 border-b border-slate-200">
           <Link to="/projects" className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-600 mb-3 transition-colors font-medium uppercase tracking-wider">

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Search, CheckCircle, X, AlertCircle, Info } from 'lucide-react';
 import type { Device, ProductModel, SystemType } from '../types';
+import { equipmentHasDatasheet } from '../lib/datasheetMatching';
 
 const DEVICE_TYPES = ['Camera', 'Door', 'Access Control', 'Recorder', 'Sensor', 'Intercom', 'Network Switch', 'Other'];
 
@@ -74,13 +75,13 @@ export function AddDeviceModal({ productModels, datasheets, defaultSystemType, o
     setSaving(true);
     setError(null);
 
-    const mfr = (selectedModel?.manufacturer ?? manufacturer).trim().toLowerCase();
-    const model = (selectedModel?.model_number ?? modelNumber).trim().toLowerCase();
-    const hasDatasheet = datasheets.some(
-      (ds) =>
-        ds.manufacturer?.trim().toLowerCase() === mfr &&
-        ds.model_number?.trim().toLowerCase() === model &&
-        ds.datasheet_url?.trim()
+    const resolvedManufacturer = selectedModel?.manufacturer ?? manufacturer;
+    const resolvedModelNumber = selectedModel?.model_number ?? modelNumber;
+    const hasDatasheet = equipmentHasDatasheet(
+      resolvedManufacturer,
+      resolvedModelNumber,
+      productModels,
+      datasheets,
     );
 
     const err = await onAdd({

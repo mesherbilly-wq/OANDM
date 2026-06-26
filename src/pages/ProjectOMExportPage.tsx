@@ -8,6 +8,8 @@ import {
   mergeDocumentSystemNames,
 } from '../lib/documentProjectSystems';
 import { fetchProjectSystems } from '../lib/projectSystemsDb';
+import { findDatasheetForDeviceFields } from '../lib/datasheetMatching';
+import { matchEquipmentInputToProduct } from '../integrations/core/productMatching';
 import { useProject } from './ProjectLayout';
 import type { Device, CommissioningRecord, HandoverDocument, Datasheet, ProjectSystemRecord } from '../types';
 import {
@@ -268,11 +270,23 @@ export function ProjectOMExportPage() {
     ]);
 
     const enriched: DeviceWithDatasheet[] = (devData ?? []).map(d => {
-      const mfr = d.manufacturer?.trim().toLowerCase();
-      const mod = d.model_number?.trim().toLowerCase();
-      const pm = productModels.find(p => p.manufacturer?.trim().toLowerCase() === mfr && p.model_number?.trim().toLowerCase() === mod);
-      const ds = datasheets.find(s => s.manufacturer?.trim().toLowerCase() === mfr && s.model_number?.trim().toLowerCase() === mod && s.datasheet_url);
-      return { ...d, datasheet: ds ?? null, warrantyYears: pm?.warranty_years ?? null, maintenanceNotes: pm?.maintenance_notes ?? null };
+      const productMatch = matchEquipmentInputToProduct(
+        {
+          manufacturer: d.manufacturer,
+          modelNumber: d.model_number,
+          modelName: d.model_name,
+          deviceType: d.device_type,
+        },
+        productModels,
+      );
+      const pm = productMatch.matchedProduct;
+      const ds = findDatasheetForDeviceFields(d.manufacturer, d.model_number, productModels, datasheets);
+      return {
+        ...d,
+        datasheet: ds ?? null,
+        warrantyYears: pm?.warranty_years ?? null,
+        maintenanceNotes: pm?.maintenance_notes ?? null,
+      };
     });
 
     setDevices(enriched);

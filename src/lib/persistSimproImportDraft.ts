@@ -1,5 +1,6 @@
 import type { ImportReviewDraft, ImportReviewIssue } from '../integrations';
 import type { ImportEquipmentDraft } from '../integrations/models/ImportEquipmentDraft';
+import type { Datasheet, ProductModel } from '../types';
 import {
   getImportReviewBlockingIssues,
   getImportReviewCreateConfirmationIssues,
@@ -10,12 +11,17 @@ import {
 import { clampLineQuantity } from './devicePersistConstants';
 import { IMPORT_LINE_NOTE_TAG } from './deviceGrouping';
 import { buildPrefixCounters } from './deviceProjectEdits';
+import { equipmentHasDatasheet } from './datasheetMatching';
 import { getDevicePrefix } from './deviceLabel';
 import {
   buildPersistSystemNameMap,
   insertProjectSystemsFromSimproDraft,
 } from './projectSystemsDb';
 import { supabase } from './supabase';
+import {
+  enrichDeviceRowsWithAutoManufacturer,
+  type DeviceRowForManufacturerLookup,
+} from './autoManufacturerLookup';
 
 const DEVICE_INSERT_BATCH = 100;
 const SOURCE_DOCUMENT = 'Simpro Import';
@@ -101,6 +107,8 @@ function buildDeviceRows(
   prefixCounters: Record<string, number>,
   persistSystemNames: Map<string, string>,
   systemIdByDraftId: Map<string, number>,
+  productModels: ProductModel[],
+  datasheets: Datasheet[],
 ): Record<string, unknown>[] {
   const rows: Record<string, unknown>[] = [];
 
@@ -121,6 +129,12 @@ function buildDeviceRows(
       const deviceType = nullIfEmpty(item.deviceType ?? item.modelName);
       const prefix = getDevicePrefix(category ?? 'Other', deviceType ?? '');
       const quantity = clampLineQuantity(item.quantity);
+      const hasDatasheet = equipmentHasDatasheet(
+        item.manufacturer,
+        item.modelNumber,
+        productModels,
+        datasheets,
+      );
 
       for (let unit = 0; unit < quantity; unit += 1) {
         prefixCounters[prefix] = (prefixCounters[prefix] ?? 0) + 1;
@@ -137,8 +151,8 @@ function buildDeviceRows(
           location: nullIfEmpty(item.location),
           notes: buildPersistDeviceNotes(item),
           matched: item.matched,
-          datasheet_found: false,
-          status: 'pending_review',
+          datasheet_found: hasDatasheet,
+          status: 'active',
           source_document: SOURCE_DOCUMENT,
         });
       }
@@ -197,6 +211,12 @@ export async function persistSimproImportReviewDraft(
 
   const prefixCounters = buildPrefixCounters(existingDevices ?? []);
   const persistSystemNames = buildPersistSystemNameMap(draft.systems);
+
+  const [{ data: productModels }, { data: datasheets }] = await Promise.all([
+    supabase.from('product_models').select('*'),
+    supabase.from('datasheets').select('*'),
+  ]);
+
   const systemIdByDraftId = await insertProjectSystemsFromSimproDraft(
     draft,
     project.id,
@@ -208,6 +228,14 @@ export async function persistSimproImportReviewDraft(
     prefixCounters,
     persistSystemNames,
     systemIdByDraftId,
+    productModels ?? [],
+    datasheets ?? [],
+  );
+
+  await enrichDeviceRowsWithAutoManufacturer(
+    deviceRows as DeviceRowForManufacturerLookup[],
+    productModels ?? [],
+    { context: `simpro-import:project-${project.id}` },
   );
 
   const quantityAudit = buildPersistQuantityAudit(draft, deviceRows, persistSystemNames);

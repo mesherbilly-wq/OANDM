@@ -552,6 +552,95 @@ export function isSimproCommercialLine(
   return COMMERCIAL_LINE_PATTERNS.some(pattern => pattern.test(filterText));
 }
 
+/** Template/account cost centre name — e.g. Equipment/Materials. */
+export function pickSimproCostCentreName(centreRecord: Record<string, unknown>): string {
+  const templateName = pickNestedName(centreRecord.CostCenter ?? centreRecord.CostCentre);
+  const instanceName = pickString(centreRecord.Name ?? centreRecord.name);
+  return templateName ?? instanceName ?? 'Cost Centre';
+}
+
+function pickSimproCostCentreTemplateId(centreRecord: Record<string, unknown>): string | null {
+  const template = asRecord(centreRecord.CostCenter ?? centreRecord.CostCentre);
+  if (!template) return null;
+  return pickString(template.ID ?? template.Id ?? template.id);
+}
+
+/**
+ * Location header for grouping O&M systems.
+ * Checked in order: CostCenters[].Location, CostCenters[].Site.Name, Sections[].Name.
+ * The section name is what Simpro shows as the location/area header (e.g. House Block 1).
+ */
+export function pickSimproCostCentreLocation(
+  centreRecord: Record<string, unknown>,
+  sectionRecord: Record<string, unknown> | null,
+): string | null {
+  const directLocation =
+    pickString(centreRecord.Location ?? centreRecord.location) ??
+    pickNestedName(centreRecord.Location ?? centreRecord.location);
+  if (directLocation) return directLocation;
+
+  const siteLocation = pickNestedName(centreRecord.Site ?? centreRecord.site);
+  if (siteLocation) return siteLocation;
+
+  if (sectionRecord) {
+    const sectionName = pickString(sectionRecord.Name ?? sectionRecord.name);
+    if (sectionName && sectionName.trim().toLowerCase() !== 'section') {
+      return sectionName;
+    }
+  }
+
+  return null;
+}
+
+export function formatSimproCostCentreReference(
+  sectionId: string | null,
+  centreInstanceId: string | null,
+  costCenterTemplateId: string | null,
+): string | null {
+  const left = sectionId ?? costCenterTemplateId;
+  const right = centreInstanceId;
+  if (left && right) return `#${left}-${right}`;
+  if (right) return `#${right}`;
+  if (left) return `#${left}`;
+  return null;
+}
+
+export function formatSimproCostCentreSourceLabel(
+  costCentreName: string,
+  sectionId: string | null,
+  centreInstanceId: string | null,
+  costCenterTemplateId: string | null,
+): string {
+  const reference = formatSimproCostCentreReference(sectionId, centreInstanceId, costCenterTemplateId);
+  return reference ? `${costCentreName} (${reference})` : costCentreName;
+}
+
+export function buildSimproSystemMergeKey(
+  locationName: string | null,
+  sectionId: string | null,
+  centreInstanceId: string | null,
+  costCentreName: string,
+): string {
+  if (locationName?.trim()) {
+    return `loc:${locationName.trim().toLowerCase()}`;
+  }
+  return `cc:${sectionId ?? 'na'}:${centreInstanceId ?? costCentreName.trim().toLowerCase()}`;
+}
+
+export function buildSimproPersistSourceReference(system: {
+  sourceLocationName: string | null;
+  sourceCostCentreLabel: string | null;
+  sourceSectionRef: string | null;
+}): string | null {
+  if (system.sourceCostCentreLabel) {
+    if (system.sourceLocationName) {
+      return `Location: ${system.sourceLocationName} | Cost centres: ${system.sourceCostCentreLabel}`;
+    }
+    return `Cost centres: ${system.sourceCostCentreLabel}`;
+  }
+  return system.sourceSectionRef;
+}
+
 export function pickSimproCostCentreCatalogLines(centreRecord: Record<string, unknown>): Record<string, unknown>[] {
   const lines: Record<string, unknown>[] = [];
   const seen = new Set<string>();

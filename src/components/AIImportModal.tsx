@@ -8,6 +8,10 @@ import {
 import type { SystemType } from '../types';
 import { getDevicePrefix } from '../lib/deviceLabel';
 import { ensureProjectSystem } from '../lib/projectSystemsDb';
+import {
+  enrichDeviceRowsWithAutoManufacturer,
+  type DeviceRowForManufacturerLookup,
+} from '../lib/autoManufacturerLookup';
 
 interface ExtractedDevice {
   system_type: string;
@@ -181,9 +185,17 @@ export function AIImportModal({
           device_name: `${prefix}-${String(prefixCounters[prefix]).padStart(3, '0')}`,
           status: 'pending_review',
           ai_confidence: d.confidence,
+          source_document: fileName || 'AI Import',
         });
       }
     }
+
+    const { data: productModels } = await supabase.from('product_models').select('*');
+    await enrichDeviceRowsWithAutoManufacturer(
+      rows as DeviceRowForManufacturerLookup[],
+      productModels ?? [],
+      { context: `ai-import:project-${projectId}` },
+    );
 
     const { error: dbErr } = await supabase.from('devices').insert(rows);
     if (dbErr) {

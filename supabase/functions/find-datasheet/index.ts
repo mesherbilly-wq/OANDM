@@ -27,7 +27,6 @@ async function verify(url: string): Promise<boolean> {
     const ct = res.headers.get("content-type") ?? "";
     return res.ok && (ct.includes("pdf") || url.toLowerCase().includes(".pdf"));
   } catch {
-    // If HEAD fails, check if URL looks like a PDF
     return url.toLowerCase().includes(".pdf");
   }
 }
@@ -41,7 +40,7 @@ Deno.serve(async (req: Request) => {
   if (!ANTHROPIC_API_KEY) {
     return new Response(
       JSON.stringify({ error: "ANTHROPIC_API_KEY not configured" }),
-      { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
 
@@ -49,7 +48,7 @@ Deno.serve(async (req: Request) => {
   if (!manufacturer || !model) {
     return new Response(
       JSON.stringify({ error: "manufacturer and model are required" }),
-      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
 
@@ -89,7 +88,7 @@ If you have no confident URLs return: []`;
     const err = await claudeRes.text();
     return new Response(
       JSON.stringify({ error: "Claude API error: " + err.substring(0, 200) }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
 
@@ -105,17 +104,15 @@ If you have no confident URLs return: []`;
     candidates = [];
   }
 
-  // Verify candidates in parallel (HEAD request)
   const verified: Candidate[] = await Promise.all(
     candidates.slice(0, 6).map(async (c) => ({
       url: c.url,
       title: c.title || c.url,
       domain: c.domain || new URL(c.url).hostname.replace("www.", ""),
       verified: await verify(c.url),
-    }))
+    })),
   );
 
-  // Sort: verified first
   verified.sort((a, b) => (b.verified ? 1 : 0) - (a.verified ? 1 : 0));
 
   return new Response(JSON.stringify({ candidates: verified }), {

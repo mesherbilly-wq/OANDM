@@ -13,8 +13,14 @@ function displayValue(value: string | null | undefined): string {
 
 function formatMatchMethod(method: ProductMatchMethod): string {
   switch (method) {
+    case 'exact_model_number':
+      return 'Exact model number';
+    case 'normalized_model':
+      return 'Normalized model number';
     case 'exact_part_number':
       return 'Exact model / part number';
+    case 'close_match':
+      return 'Close model match';
     case 'manufacturer_model':
       return 'Manufacturer + model';
     case 'catalogue_number':

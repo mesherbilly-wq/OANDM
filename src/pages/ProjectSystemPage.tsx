@@ -7,6 +7,7 @@ import { EditDeviceModal } from '../components/EditDeviceModal';
 import { UploadDatasheetModal } from '../components/UploadDatasheetModal';
 import { AIImportModal } from '../components/AIImportModal';
 import type { Device, Datasheet, SystemType } from '../types';
+import { equipmentHasDatasheet } from '../lib/datasheetMatching';
 import {
   Camera, Lock, PhoneCall, ShieldAlert, Network,
   Plus, Search, CheckCircle, XCircle, ExternalLink, Trash2, Cpu, AlertCircle,
@@ -92,12 +93,11 @@ export function ProjectSystemPage({ systemType }: Props) {
   };
 
   const handleAdd = async (device: Partial<Device>): Promise<string | null> => {
-    const mfr = device.manufacturer?.trim().toLowerCase();
-    const model = device.model_number?.trim().toLowerCase();
-    const hasDatasheet = datasheets.some(
-      (ds) => ds.manufacturer?.trim().toLowerCase() === mfr &&
-               ds.model_number?.trim().toLowerCase() === model &&
-               ds.datasheet_url?.trim()
+    const hasDatasheet = equipmentHasDatasheet(
+      device.manufacturer ?? null,
+      device.model_number ?? null,
+      productModels,
+      datasheets,
     );
     const { data, error } = await supabase
       .from('devices')

@@ -433,8 +433,18 @@ export function ImportReviewPage() {
                                 : 'border-slate-100 bg-slate-50 text-slate-500'
                             }`}
                           />
-                          {system.description && (
+                          {system.sourceCostCentreLabel ? (
+                            <p className="text-xs text-slate-500 mt-1">
+                              Source cost centre{system.sourceCostCentreLabel.includes(';') ? 's' : ''}:{' '}
+                              {system.sourceCostCentreLabel}
+                            </p>
+                          ) : system.description ? (
                             <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">{system.description}</p>
+                          ) : null}
+                          {system.sourceLocationName && system.sourceLocationName !== system.name && (
+                            <p className="text-[11px] text-slate-400 mt-1">
+                              Simpro location: {system.sourceLocationName}
+                            </p>
                           )}
                           {system.sourceSectionRef && (
                             <p className="text-[11px] text-slate-400 mt-1 font-mono">Ref {system.sourceSectionRef}</p>
@@ -459,9 +469,9 @@ export function ImportReviewPage() {
                     </div>
                   </summary>
                   {!system.selected ? (
-                    <p className="px-5 py-4 text-sm text-slate-500">This cost centre is deselected and will not be imported.</p>
+                    <p className="px-5 py-4 text-sm text-slate-500">This system is deselected and will not be imported.</p>
                   ) : system.equipment.length === 0 ? (
-                    <p className="px-5 py-4 text-sm text-slate-500">No equipment lines for this cost centre.</p>
+                    <p className="px-5 py-4 text-sm text-slate-500">No equipment lines for this system.</p>
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm text-left min-w-[1100px]">

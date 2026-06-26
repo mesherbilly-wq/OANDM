@@ -33,6 +33,14 @@ function getDescription(device: Device): string | null {
   return description || null;
 }
 
+export function getDeviceGroupKey(device: Device): string {
+  return buildGroupKey(device);
+}
+
+export function getGroupRowKey(group: GroupedEquipment): string {
+  return getDeviceGroupKey(group.devices[0]);
+}
+
 function buildGroupKey(device: Device): string {
   const importLineDraftId = extractImportLineDraftId(device.notes);
   if (importLineDraftId) {

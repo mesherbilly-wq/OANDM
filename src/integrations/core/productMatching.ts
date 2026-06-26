@@ -1,11 +1,30 @@
 import type { ImportEquipmentDraft, ImportReviewDraft } from '../models';
 import type { ProductModel } from '../../types';
+import {
+  equipmentIdentityKey,
+  normalizeModelKey,
+  normalizePart,
+  normalizeToken,
+  normalizedModelMatch,
+  exactModelMatch,
+  pickMetadataString,
+  tokenOverlapScore,
+  type EquipmentMatchInput,
+} from '../../lib/equipmentMatchUtils';
+
+export type ProductModelLike = Pick<
+  ProductModel,
+  'id' | 'manufacturer' | 'model_number' | 'model_name' | 'device_type' | 'part_number'
+>;
 
 export type ProductMatchMethod =
+  | 'exact_model_number'
+  | 'normalized_model'
   | 'exact_part_number'
   | 'manufacturer_model'
   | 'catalogue_number'
   | 'stock_number'
+  | 'close_match'
   | 'description_similarity'
   | 'user_selected'
   | 'none';
@@ -23,7 +42,7 @@ export interface EquipmentProductMatch {
   equipmentDraftId: string;
   equipment: ImportEquipmentDraft;
   systemName: string;
-  matchedProduct: ProductModel | null;
+  matchedProduct: ProductModelLike | null;
   confidence: number | null;
   method: ProductMatchMethod;
   suggestions: ProductMatchSuggestion[];
@@ -44,76 +63,87 @@ export interface SavedEquipmentProductMatch {
   confidence: number | null;
 }
 
-const AUTO_MATCH_THRESHOLD = 0.85;
+export const AUTO_MATCH_THRESHOLD = 0.85;
+const CLOSE_MATCH_THRESHOLD = 0.72;
 const MAX_SUGGESTIONS = 5;
 
-function normalizeToken(value: string | null | undefined): string {
-  return (value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+export function equipmentFromDraft(item: ImportEquipmentDraft): EquipmentMatchInput {
+  return {
+    manufacturer: item.manufacturer,
+    modelNumber: item.modelNumber,
+    modelName: item.modelName,
+    deviceType: item.deviceType,
+    metadata: item.metadata,
+  };
 }
 
-function normalizePart(value: string | null | undefined): string {
-  return normalizeToken(value).replace(/[^a-z0-9]/g, '');
-}
-
-function pickMetadataString(metadata: Record<string, unknown>, key: string): string | null {
-  const value = metadata[key];
-  if (value == null) return null;
-  const text = String(value).trim();
-  return text || null;
-}
-
-function equipmentDescription(item: ImportEquipmentDraft): string {
+function equipmentDescription(item: EquipmentMatchInput): string {
   return [item.modelName, item.deviceType, item.modelNumber].filter(Boolean).join(' ');
 }
 
-function productSearchText(product: ProductModel): string {
+function productSearchText(product: ProductModelLike): string {
   return [product.model_name, product.device_type, product.model_number, product.part_number, product.manufacturer]
     .filter(Boolean)
     .join(' ');
 }
 
-function tokenize(value: string): Set<string> {
-  return new Set(
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, ' ')
-      .split(/\s+/)
-      .filter(token => token.length > 2),
-  );
-}
-
-function descriptionSimilarity(left: string, right: string): number {
-  const a = tokenize(left);
-  const b = tokenize(right);
-  if (a.size === 0 || b.size === 0) return 0;
-  let overlap = 0;
-  for (const token of a) {
-    if (b.has(token)) overlap += 1;
-  }
-  return overlap / Math.max(a.size, b.size);
-}
-
-function findProductById(products: ProductModel[], productId: number | null): ProductModel | null {
-  if (productId == null) return null;
-  return products.find(product => product.id === productId) ?? null;
-}
-
-function suggestionLabel(product: ProductModel): string {
+function suggestionLabel(product: ProductModelLike): string {
   const parts = [product.manufacturer, product.model_number ?? product.part_number, product.model_name]
     .filter(Boolean);
   return parts.join(' · ') || `Product #${product.id}`;
 }
 
-function tryExactPartNumber(
-  item: ImportEquipmentDraft,
-  products: ProductModel[],
-): { product: ProductModel; confidence: number; method: ProductMatchMethod } | null {
-  const candidates = [
+function findProductById(products: ProductModelLike[], productId: number | null): ProductModelLike | null {
+  if (productId == null) return null;
+  return products.find(product => product.id === productId) ?? null;
+}
+
+function modelCandidates(item: EquipmentMatchInput): string[] {
+  return [
     item.modelNumber,
+    item.modelName,
     pickMetadataString(item.metadata, 'simproPartNo'),
   ].filter(Boolean) as string[];
+}
 
-  for (const candidate of candidates) {
+function tryExactModelNumber(
+  item: EquipmentMatchInput,
+  products: ProductModelLike[],
+): { product: ProductModelLike; confidence: number; method: ProductMatchMethod } | null {
+  for (const candidate of modelCandidates(item)) {
+    const hit = products.find(product =>
+      exactModelMatch(candidate, product.model_number) ||
+      exactModelMatch(candidate, product.part_number),
+    );
+    if (hit) {
+      return { product: hit, confidence: 1, method: 'exact_model_number' };
+    }
+  }
+  return null;
+}
+
+function tryNormalizedModel(
+  item: EquipmentMatchInput,
+  products: ProductModelLike[],
+): { product: ProductModelLike; confidence: number; method: ProductMatchMethod } | null {
+  for (const candidate of modelCandidates(item)) {
+    const hit = products.find(product =>
+      normalizedModelMatch(candidate, product.model_number) ||
+      normalizedModelMatch(candidate, product.part_number) ||
+      normalizedModelMatch(candidate, product.model_name),
+    );
+    if (hit) {
+      return { product: hit, confidence: 0.98, method: 'normalized_model' };
+    }
+  }
+  return null;
+}
+
+function tryExactPartNumber(
+  item: EquipmentMatchInput,
+  products: ProductModelLike[],
+): { product: ProductModelLike; confidence: number; method: ProductMatchMethod } | null {
+  for (const candidate of modelCandidates(item)) {
     const needle = normalizePart(candidate);
     if (!needle) continue;
     const hit = products.find(product => {
@@ -129,9 +159,9 @@ function tryExactPartNumber(
 }
 
 function tryManufacturerModel(
-  item: ImportEquipmentDraft,
-  products: ProductModel[],
-): { product: ProductModel; confidence: number; method: ProductMatchMethod } | null {
+  item: EquipmentMatchInput,
+  products: ProductModelLike[],
+): { product: ProductModelLike; confidence: number; method: ProductMatchMethod } | null {
   const manufacturer = normalizeToken(item.manufacturer);
   const modelNeedle = normalizePart(item.modelNumber) || normalizePart(item.modelName);
   if (!manufacturer || !modelNeedle) return null;
@@ -149,9 +179,9 @@ function tryManufacturerModel(
 }
 
 function tryCatalogueNumber(
-  item: ImportEquipmentDraft,
-  products: ProductModel[],
-): { product: ProductModel; confidence: number; method: ProductMatchMethod } | null {
+  item: EquipmentMatchInput,
+  products: ProductModelLike[],
+): { product: ProductModelLike; confidence: number; method: ProductMatchMethod } | null {
   const catalogue = pickMetadataString(item.metadata, 'simproCatalogNo');
   const needle = normalizePart(catalogue);
   if (!needle) return null;
@@ -167,9 +197,9 @@ function tryCatalogueNumber(
 }
 
 function tryStockNumber(
-  item: ImportEquipmentDraft,
-  products: ProductModel[],
-): { product: ProductModel; confidence: number; method: ProductMatchMethod } | null {
+  item: EquipmentMatchInput,
+  products: ProductModelLike[],
+): { product: ProductModelLike; confidence: number; method: ProductMatchMethod } | null {
   const stock = pickMetadataString(item.metadata, 'simproStockNo');
   const needle = normalizePart(stock);
   if (!needle) return null;
@@ -184,9 +214,78 @@ function tryStockNumber(
   return { product: hit, confidence: 0.88, method: 'stock_number' };
 }
 
+function closeMatchScore(item: EquipmentMatchInput, product: ProductModelLike): number {
+  const scores: number[] = [];
+  const eqModel = item.modelNumber;
+  const eqName = item.modelName ?? item.deviceType;
+  const eqMfr = item.manufacturer;
+
+  if (eqModel) {
+    for (const field of [product.model_number, product.part_number, product.model_name]) {
+      if (!field) continue;
+      if (exactModelMatch(eqModel, field)) {
+        scores.push(1);
+        continue;
+      }
+      if (normalizedModelMatch(eqModel, field)) {
+        scores.push(0.92);
+        continue;
+      }
+      const a = normalizeModelKey(eqModel);
+      const b = normalizeModelKey(field);
+      if (a && b && (a.includes(b) || b.includes(a))) {
+        scores.push(0.82);
+      }
+    }
+  }
+
+  if (eqName) {
+    if (product.model_name) {
+      scores.push(tokenOverlapScore(eqName, product.model_name));
+    }
+    if (product.device_type) {
+      scores.push(tokenOverlapScore(eqName, product.device_type));
+    }
+    if (product.model_number) {
+      scores.push(tokenOverlapScore(eqName, product.model_number));
+    }
+  }
+
+  if (eqMfr && eqModel) {
+    const combo = normalizeModelKey(`${eqMfr}${eqModel}`);
+    const productCombo = normalizeModelKey(`${product.manufacturer ?? ''}${product.model_number ?? ''}`);
+    if (combo && productCombo && combo === productCombo) {
+      scores.push(0.96);
+    }
+  }
+
+  return scores.length ? Math.max(...scores) : 0;
+}
+
+function buildCloseMatchSuggestions(
+  item: EquipmentMatchInput,
+  products: ProductModelLike[],
+): ProductMatchSuggestion[] {
+  const scored = products
+    .map(product => ({
+      product,
+      score: closeMatchScore(item, product),
+    }))
+    .filter(entry => entry.score >= CLOSE_MATCH_THRESHOLD)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MAX_SUGGESTIONS);
+
+  return scored.map(entry => ({
+    productId: entry.product.id,
+    confidence: Math.min(0.84, entry.score),
+    method: 'close_match' as const,
+    label: suggestionLabel(entry.product),
+  }));
+}
+
 function buildDescriptionSuggestions(
-  item: ImportEquipmentDraft,
-  products: ProductModel[],
+  item: EquipmentMatchInput,
+  products: ProductModelLike[],
 ): ProductMatchSuggestion[] {
   const description = equipmentDescription(item);
   if (!description.trim()) return [];
@@ -194,7 +293,7 @@ function buildDescriptionSuggestions(
   const scored = products
     .map(product => ({
       product,
-      score: descriptionSimilarity(description, productSearchText(product)),
+      score: tokenOverlapScore(description, productSearchText(product)),
     }))
     .filter(entry => entry.score >= 0.35)
     .sort((a, b) => b.score - a.score)
@@ -208,11 +307,13 @@ function buildDescriptionSuggestions(
   }));
 }
 
-export function matchEquipmentToProduct(
-  item: ImportEquipmentDraft,
-  products: ProductModel[],
+export function matchEquipmentInputToProduct(
+  item: EquipmentMatchInput,
+  products: ProductModelLike[],
 ): Omit<EquipmentProductMatch, 'equipmentDraftId' | 'equipment' | 'systemName'> {
   const ordered = [
+    tryExactModelNumber(item, products),
+    tryNormalizedModel(item, products),
     tryExactPartNumber(item, products),
     tryManufacturerModel(item, products),
     tryCatalogueNumber(item, products),
@@ -235,7 +336,9 @@ export function matchEquipmentToProduct(
     };
   }
 
-  const suggestions = buildDescriptionSuggestions(item, products);
+  const closeSuggestions = buildCloseMatchSuggestions(item, products);
+  const descriptionSuggestions = buildDescriptionSuggestions(item, products);
+  const suggestions = mergeSuggestions(closeSuggestions, descriptionSuggestions);
 
   if (suggestions.length === 0) {
     return {
@@ -247,16 +350,32 @@ export function matchEquipmentToProduct(
     };
   }
 
-  const best = suggestions[0];
-  const bestProduct = findProductById(products, best.productId);
-  if (best.confidence >= AUTO_MATCH_THRESHOLD && bestProduct) {
-    return {
-      matchedProduct: bestProduct,
-      confidence: best.confidence,
-      method: best.method,
-      suggestions,
-      resolution: 'pending',
-    };
+  const topScore = suggestions[0].confidence;
+  const confidentHits = suggestions.filter(s => s.confidence >= AUTO_MATCH_THRESHOLD);
+  if (confidentHits.length === 1) {
+    const product = findProductById(products, confidentHits[0].productId);
+    if (product) {
+      return {
+        matchedProduct: product,
+        confidence: confidentHits[0].confidence,
+        method: confidentHits[0].method,
+        suggestions,
+        resolution: 'pending',
+      };
+    }
+  }
+
+  if (topScore >= AUTO_MATCH_THRESHOLD && suggestions.length === 1) {
+    const product = findProductById(products, suggestions[0].productId);
+    if (product) {
+      return {
+        matchedProduct: product,
+        confidence: suggestions[0].confidence,
+        method: suggestions[0].method,
+        suggestions,
+        resolution: 'pending',
+      };
+    }
   }
 
   return {
@@ -268,9 +387,31 @@ export function matchEquipmentToProduct(
   };
 }
 
+function mergeSuggestions(
+  primary: ProductMatchSuggestion[],
+  secondary: ProductMatchSuggestion[],
+): ProductMatchSuggestion[] {
+  const seen = new Set<number>();
+  const merged: ProductMatchSuggestion[] = [];
+  for (const suggestion of [...primary, ...secondary]) {
+    if (seen.has(suggestion.productId)) continue;
+    seen.add(suggestion.productId);
+    merged.push(suggestion);
+    if (merged.length >= MAX_SUGGESTIONS) break;
+  }
+  return merged;
+}
+
+export function matchEquipmentToProduct(
+  item: ImportEquipmentDraft,
+  products: ProductModelLike[],
+): Omit<EquipmentProductMatch, 'equipmentDraftId' | 'equipment' | 'systemName'> {
+  return matchEquipmentInputToProduct(equipmentFromDraft(item), products);
+}
+
 export function buildEquipmentProductMatches(
   draft: ImportReviewDraft,
-  products: ProductModel[],
+  products: ProductModelLike[],
   saved: Record<string, SavedEquipmentProductMatch> = {},
 ): EquipmentProductMatch[] {
   const matches: EquipmentProductMatch[] = [];
@@ -411,4 +552,8 @@ export function savedMatchesFromEquipmentMatches(
     };
   }
   return saved;
+}
+
+export function productMatchRowKey(item: EquipmentMatchInput): string {
+  return equipmentIdentityKey(item.manufacturer, item.modelNumber);
 }

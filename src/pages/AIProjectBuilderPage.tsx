@@ -10,6 +10,11 @@ import { supabase } from '../lib/supabase';
 import type { SystemType } from '../types';
 import { getDevicePrefix } from '../lib/deviceLabel';
 import { ensureProjectSystem } from '../lib/projectSystemsDb';
+import { equipmentHasDatasheet } from '../lib/datasheetMatching';
+import {
+  enrichDeviceRowsWithAutoManufacturer,
+  type DeviceRowForManufacturerLookup,
+} from '../lib/autoManufacturerLookup';
 import { ImportSourceSelector } from '../components/ImportSourceSelector';
 import { SimproImportFlow } from '../components/simpro/SimproImportFlow';
 import type { ConnectorId } from '../integrations';
@@ -371,11 +376,22 @@ export function AIProjectBuilderPage() {
         systemIdByName.set(name, systemId);
       }
 
+      const [{ data: productModels }, { data: datasheets }] = await Promise.all([
+        supabase.from('product_models').select('*'),
+        supabase.from('datasheets').select('*'),
+      ]);
+
       const deviceRows: any[] = [];
       for (const d of selectedDevices) {
         const systemName = String(d.system_type).trim() || 'Unnamed System';
         const prefix = getDevicePrefix(d.system_type, d.device_type);
         const qty = Math.min(d.quantity, MAX_PER_LINE);
+        const hasDatasheet = equipmentHasDatasheet(
+          d.manufacturer || null,
+          d.model_number || null,
+          productModels ?? [],
+          datasheets ?? [],
+        );
         for (let i = 0; i < qty; i++) {
           prefixCounters[prefix] = (prefixCounters[prefix] ?? 0) + 1;
           deviceRows.push({
@@ -389,7 +405,7 @@ export function AIProjectBuilderPage() {
             location: d.location || null,
             notes: d.notes || null,
             matched: false,
-            datasheet_found: false,
+            datasheet_found: hasDatasheet,
             status: 'pending_review',
             ai_confidence: d.ai_confidence ?? null,
             source_document: 'AI Project Builder',
@@ -398,6 +414,12 @@ export function AIProjectBuilderPage() {
       }
 
       if (deviceRows.length > 0) {
+        await enrichDeviceRowsWithAutoManufacturer(
+          deviceRows as DeviceRowForManufacturerLookup[],
+          productModels ?? [],
+          { context: `ai-project-builder:project-${proj.id}` },
+        );
+
         // Insert in batches of 100
         for (let i = 0; i < deviceRows.length; i += 100) {
           await supabase.from('devices').insert(deviceRows.slice(i, i + 100));

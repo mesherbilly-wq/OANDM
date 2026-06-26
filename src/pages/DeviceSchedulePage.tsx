@@ -32,20 +32,6 @@ function systemBadgeClass(systemName: string | null): string {
   return SYSTEM_TYPE_COLORS[systemName] ?? 'bg-slate-100 text-slate-700 border-slate-200';
 }
 
-function groupedLocations(devices: Device[]): string {
-  const locs = [...new Set(devices.map(d => d.location?.trim()).filter(Boolean))] as string[];
-  if (locs.length === 0) return '—';
-  if (locs.length === 1) return locs[0];
-  return locs.slice(0, 3).join(', ') + (locs.length > 3 ? ` +${locs.length - 3}` : '');
-}
-
-function groupedNotes(devices: Device[]): string {
-  const notes = [...new Set(devices.map(d => d.notes?.trim()).filter(Boolean))] as string[];
-  if (notes.length === 0) return '—';
-  if (notes.length === 1) return notes[0];
-  return notes.slice(0, 2).join('; ') + (notes.length > 2 ? ` +${notes.length - 2}` : '');
-}
-
 interface DeviceRow {
   device: Device;
   children: DeviceRow[];
@@ -292,7 +278,6 @@ export default function DeviceSchedulePage() {
           <td className="px-4 py-3 text-gray-700">{device.component_type || '-'}</td>
           <td className="px-4 py-3 text-gray-700">{device.mac_address || '-'}</td>
           <td className="px-4 py-3 text-gray-700">{device.model_number || '-'}</td>
-          <td className="px-4 py-3 text-gray-700">{device.location || '-'}</td>
           <td className="px-4 py-3">
             <span className={`text-xs px-2 py-1 rounded-full ${
               device.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'
@@ -438,7 +423,7 @@ export default function DeviceSchedulePage() {
             <table className="w-full">
               <thead>
                 <tr className="bg-gray-100 border-b border-gray-200">
-                  {['System Type', 'Description', 'Manufacturer', 'Model', 'Quantity', 'Locations', 'Notes'].map(h => (
+                  {['System Type', 'Description', 'Manufacturer', 'Model', 'Quantity'].map(h => (
                     <th key={h} className="px-4 py-3 text-left font-semibold text-gray-900">{h}</th>
                   ))}
                 </tr>
@@ -457,8 +442,6 @@ export default function DeviceSchedulePage() {
                     <td className="px-4 py-3 text-gray-700">{row.manufacturer || '—'}</td>
                     <td className="px-4 py-3 text-gray-700">{row.model_number || '—'}</td>
                     <td className="px-4 py-3 font-semibold text-gray-900">{row.quantity}</td>
-                    <td className="px-4 py-3 text-gray-700 max-w-[220px]">{groupedLocations(row.devices)}</td>
-                    <td className="px-4 py-3 text-gray-700 max-w-[220px]">{groupedNotes(row.devices)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -478,7 +461,6 @@ export default function DeviceSchedulePage() {
                 <th className="px-4 py-3 text-left font-semibold text-gray-900">Type</th>
                 <th className="px-4 py-3 text-left font-semibold text-gray-900">Manufacturer</th>
                 <th className="px-4 py-3 text-left font-semibold text-gray-900">Model</th>
-                <th className="px-4 py-3 text-left font-semibold text-gray-900">Location</th>
                 <th className="px-4 py-3 text-left font-semibold text-gray-900">Status</th>
                 <th className="px-4 py-3 text-left font-semibold text-gray-900">Actions</th>
               </tr>
