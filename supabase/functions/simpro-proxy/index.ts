@@ -3,7 +3,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
@@ -34,8 +34,49 @@ function log(action: string, detail: string) {
   console.log(`[Simpro-proxy][${action}] ${detail}`);
 }
 
-function simproErr(status: number, text: string) {
-  return `Simpro API ${status}: ${text.substring(0, 400)}`;
+function parseSimproBody(text: string): unknown {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+function formatSimproBodyForDisplay(body: unknown): string {
+  if (body == null) return "(empty response body)";
+  if (typeof body === "string") return body;
+  return JSON.stringify(body, null, 2);
+}
+
+function redactSecrets(text: string, apiToken: string): string {
+  let result = text;
+  if (apiToken) {
+    result = result.split(apiToken).join("[REDACTED]");
+  }
+  return result.replace(/Bearer\s+[A-Za-z0-9._\-+/=]+/gi, "Bearer [REDACTED]");
+}
+
+function simproErrorResponse(status: number, endpoint: string, bodyText: string, apiToken: string) {
+  const simpro_body = parseSimproBody(bodyText);
+  const bodyDisplay = redactSecrets(formatSimproBodyForDisplay(simpro_body), apiToken);
+  return {
+    error: `Simpro returned HTTP ${status}\nEndpoint: ${endpoint}\nResponse:\n${bodyDisplay}`,
+    status,
+    endpoint,
+    simpro_body,
+  };
+}
+
+function logSimproFailure(
+  action: string,
+  status: number,
+  endpoint: string,
+  simpro_body: unknown,
+  apiToken = "",
+) {
+  const bodyPreview = redactSecrets(formatSimproBodyForDisplay(simpro_body), apiToken).substring(0, 500);
+  log(action, `HTTP ${status} ${endpoint} body=${bodyPreview}`);
 }
 
 function buildApiUrl(baseUrl: string, companyId: string, path: string, searchParams?: URLSearchParams): string {
@@ -104,17 +145,178 @@ async function simproFetch(url: string, apiToken: string): Promise<Response> {
   });
 }
 
-async function readSimproJson(r: Response): Promise<{ ok: boolean; status: number; raw: unknown; error?: string }> {
+async function readSimproJson(
+  r: Response,
+  endpoint: string,
+  apiToken: string,
+): Promise<
+  | { ok: true; status: number; raw: unknown }
+  | { ok: false; status: number; endpoint: string; simpro_body: unknown; error: string }
+> {
   const status = r.status;
   const text = await r.text().catch(() => "");
   if (!r.ok) {
-    return { ok: false, status, raw: null, error: simproErr(status, text || `HTTP ${status}`) };
+    return { ok: false, ...simproErrorResponse(status, endpoint, text, apiToken) };
   }
   try {
     return { ok: true, status, raw: text ? JSON.parse(text) : null };
   } catch {
     return { ok: true, status, raw: text };
   }
+}
+
+function extractJobList(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === "object") {
+    const record = raw as Record<string, unknown>;
+    for (const key of ["Results", "results", "data", "items", "jobs"]) {
+      if (Array.isArray(record[key])) return record[key] as unknown[];
+    }
+  }
+  return [];
+}
+
+function jobMatchesSearchQuery(job: unknown, query: string): boolean {
+  if (!job || typeof job !== "object") return false;
+  const record = job as Record<string, unknown>;
+  const needle = query.trim().toLowerCase();
+  if (!needle) return false;
+
+  for (const key of ["ID", "id", "JobNo", "OrderNo", "Name", "Description"]) {
+    const value = record[key];
+    if (value == null) continue;
+    const hay = String(value).trim().toLowerCase();
+    if (hay === needle || hay.includes(needle)) return true;
+  }
+  return false;
+}
+
+function pickJobIdFromRecord(record: Record<string, unknown>): string | null {
+  const id = record.ID ?? record.Id ?? record.id;
+  if (id == null || String(id).trim() === "") return null;
+  return String(id);
+}
+
+function isNumericJobQuery(query: string): boolean {
+  return /^\d+$/.test(query.trim());
+}
+
+const SEARCH_PAGE_SIZE = 100;
+const SEARCH_MAX_PAGES = 20;
+
+async function fetchJobById(
+  config: SimproConfig,
+  jobId: string,
+  displayAll = false,
+): Promise<
+  | { ok: true; status: number; raw: unknown; url: string }
+  | { ok: false; status: number; url: string; endpoint: string; simpro_body: unknown; error: string }
+> {
+  const params = displayAll ? new URLSearchParams({ display: "all" }) : undefined;
+  const url = buildApiUrl(config.baseUrl, config.companyId, `/jobs/${jobId}`, params);
+  const r = await simproFetch(url, config.apiToken).catch(() => null);
+  if (!r) {
+    return {
+      ok: false,
+      status: 0,
+      url,
+      endpoint: url,
+      simpro_body: null,
+      error: `Network error connecting to Simpro\nEndpoint: ${url}`,
+    };
+  }
+  const parsed = await readSimproJson(r, url, config.apiToken);
+  if (!parsed.ok) {
+    return { ...parsed, url };
+  }
+  return { ok: true, status: parsed.status, raw: parsed.raw, url };
+}
+
+async function searchJobsPaged(
+  config: SimproConfig,
+  query: string,
+): Promise<
+  | { ok: true; matches: unknown[] }
+  | { ok: false; status: number; endpoint: string; simpro_body: unknown; error: string }
+> {
+  const matches: unknown[] = [];
+  const seenIds = new Set<string>();
+
+  for (let page = 1; page <= SEARCH_MAX_PAGES; page++) {
+    const params = new URLSearchParams({
+      pageSize: String(SEARCH_PAGE_SIZE),
+      page: String(page),
+    });
+    const list = await fetchJobList(config, params);
+    if (!list.ok) {
+      if (page === 1) {
+        return {
+          ok: false,
+          status: list.status,
+          endpoint: list.endpoint,
+          simpro_body: list.simpro_body,
+          error: list.error,
+        };
+      }
+      break;
+    }
+
+    const jobs = extractJobList(list.raw);
+    if (jobs.length === 0) break;
+
+    for (const job of jobs) {
+      if (!jobMatchesSearchQuery(job, query)) continue;
+      if (!job || typeof job !== "object") continue;
+      const id = pickJobIdFromRecord(job as Record<string, unknown>);
+      if (id && seenIds.has(id)) continue;
+      if (id) seenIds.add(id);
+      matches.push(job);
+    }
+
+    if (jobs.length < SEARCH_PAGE_SIZE) break;
+  }
+
+  return { ok: true, matches };
+}
+
+async function fetchJobList(
+  config: SimproConfig,
+  params: URLSearchParams,
+): Promise<
+  | { ok: true; status: number; raw: unknown; url: string }
+  | { ok: false; status: number; url: string; endpoint: string; simpro_body: unknown; error: string }
+> {
+  const url = buildApiUrl(config.baseUrl, config.companyId, "/jobs/", params);
+  const r = await simproFetch(url, config.apiToken).catch(() => null);
+  if (!r) {
+    return {
+      ok: false,
+      status: 0,
+      url,
+      endpoint: url,
+      simpro_body: null,
+      error: `Network error connecting to Simpro\nEndpoint: ${url}`,
+    };
+  }
+  const parsed = await readSimproJson(r, url, config.apiToken);
+  if (!parsed.ok) {
+    return { ...parsed, url };
+  }
+  return { ok: true, status: parsed.status, raw: parsed.raw, url };
+}
+
+function simproFailureJson(parsed: {
+  error: string;
+  status: number;
+  endpoint: string;
+  simpro_body: unknown;
+}) {
+  return json({
+    error: parsed.error,
+    status: parsed.status,
+    endpoint: parsed.endpoint,
+    simpro_body: parsed.simpro_body,
+  });
 }
 
 Deno.serve(async (req: Request) => {
@@ -143,21 +345,31 @@ Deno.serve(async (req: Request) => {
     const configError = assertSimproConfig(config);
     if (configError) return json({ error: configError });
 
-    const params = new URLSearchParams({ pageSize: "1", columns: "ID,Reference,Name" });
+    const params = new URLSearchParams({ pageSize: "1" });
     const url = buildApiUrl(config.baseUrl, config.companyId, "/jobs/", params);
     log("test_connection", url);
 
     const r = await simproFetch(url, config.apiToken).catch(() => null);
-    if (!r) return json({ error: "Network error connecting to Simpro" });
+    if (!r) {
+      return json({
+        error: `Network error connecting to Simpro\nEndpoint: ${url}`,
+        status: 0,
+        endpoint: url,
+        simpro_body: null,
+      });
+    }
 
-    const parsed = await readSimproJson(r);
-    if (!parsed.ok) return json({ error: parsed.error, status: parsed.status });
+    const parsed = await readSimproJson(r, url, config.apiToken);
+    if (!parsed.ok) {
+      logSimproFailure("test_connection", parsed.status, parsed.endpoint, parsed.simpro_body, config.apiToken);
+      return simproFailureJson(parsed);
+    }
 
     let companyName: string | null = null;
     const companyUrl = buildApiUrl(config.baseUrl, config.companyId, "/");
     const companyR = await simproFetch(companyUrl, config.apiToken).catch(() => null);
     if (companyR?.ok) {
-      const companyParsed = await readSimproJson(companyR);
+      const companyParsed = await readSimproJson(companyR, companyUrl, config.apiToken);
       if (companyParsed.ok) companyName = pickCompanyName(companyParsed.raw);
     }
 
@@ -172,41 +384,78 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  const config = storedConfig;
-  const configError = assertSimproConfig(config);
-  if (configError) return json({ error: configError });
+  // ── list_jobs ─────────────────────────────────────────────────────────────────
+  // Discovery: first page of jobs, unfiltered raw Simpro payload.
+  if (action === "list_jobs") {
+    const config = resolveConfigFromBody(body, storedConfig);
+    const configError = assertSimproConfig(config);
+    if (configError) return json({ error: configError });
 
-  // ── search_jobs ───────────────────────────────────────────────────────────────
-  // Read-only job search by job number. Returns raw Simpro list payload (quotes are out of scope).
-  if (action === "search_jobs") {
-    const query = String(body.query ?? body.job_number ?? "").trim();
-    if (!query) return json({ error: "query or job_number required" });
+    const params = new URLSearchParams({ pageSize: "100", page: "1" });
+    const list = await fetchJobList(config, params);
+    log("list_jobs", list.url);
 
-    const params = new URLSearchParams({
-      pageSize: "25",
-      columns: "ID,Reference,Name,Status,DateIssued,Site,Customer",
-    });
-    params.set("Reference", query);
-
-    const url = buildApiUrl(config.baseUrl, config.companyId, "/jobs/", params);
-    log("search_jobs", `${url} (job_number="${query}")`);
-
-    const r = await simproFetch(url, config.apiToken).catch(() => null);
-    if (!r) return json({ error: "Network error connecting to Simpro", jobs: [] });
-
-    const parsed = await readSimproJson(r);
-    if (!parsed.ok) return json({ error: parsed.error, status: parsed.status, jobs: [] });
+    if (!list.ok) {
+      logSimproFailure("list_jobs", list.status, list.endpoint, list.simpro_body, config.apiToken);
+      return simproFailureJson(list);
+    }
 
     return json({
       ok: true,
+      raw: list.raw,
+    });
+  }
+
+  // ── search_jobs ───────────────────────────────────────────────────────────────
+  // Read-only job search: direct get_job for numeric IDs, then paged list fallback.
+  if (action === "search_jobs") {
+    const config = resolveConfigFromBody(body, storedConfig);
+    const configError = assertSimproConfig(config);
+    if (configError) return json({ error: configError });
+
+    const query = String(body.query ?? body.job_number ?? "").trim();
+    if (!query) return json({ error: "query or job_number required" });
+
+    if (isNumericJobQuery(query)) {
+      const direct = await fetchJobById(config, query, false);
+      log("search_jobs", `${direct.url} (direct job_id="${query}")`);
+      if (direct.ok) {
+        return json({
+          ok: true,
+          job_number: query,
+          raw: [direct.raw],
+        });
+      }
+      log("search_jobs", `direct get_job failed for "${query}", falling back to paged search`);
+    }
+
+    const paged = await searchJobsPaged(config, query);
+    if (!paged.ok) {
+      logSimproFailure("search_jobs", paged.status, paged.endpoint, paged.simpro_body, config.apiToken);
+      return json({
+        error: paged.error,
+        status: paged.status,
+        endpoint: paged.endpoint,
+        simpro_body: paged.simpro_body,
+        jobs: [],
+      });
+    }
+
+    log("search_jobs", `paged search complete (job_number="${query}", matches=${paged.matches.length})`);
+    return json({
+      ok: true,
       job_number: query,
-      raw: parsed.raw,
+      raw: paged.matches,
     });
   }
 
   // ── get_job ───────────────────────────────────────────────────────────────────
   // Read-only job detail with nested sections/cost centres when Simpro supports display=all.
   if (action === "get_job") {
+    const config = resolveConfigFromBody(body, storedConfig);
+    const configError = assertSimproConfig(config);
+    if (configError) return json({ error: configError });
+
     const jobId = body.job_id ?? body.jobId ?? body.id;
     if (jobId === undefined || jobId === null || String(jobId).trim() === "") {
       return json({ error: "job_id required" });
@@ -217,10 +466,20 @@ Deno.serve(async (req: Request) => {
     log("get_job", url);
 
     const r = await simproFetch(url, config.apiToken).catch(() => null);
-    if (!r) return json({ error: "Network error connecting to Simpro" });
+    if (!r) {
+      return json({
+        error: `Network error connecting to Simpro\nEndpoint: ${url}`,
+        status: 0,
+        endpoint: url,
+        simpro_body: null,
+      });
+    }
 
-    const parsed = await readSimproJson(r);
-    if (!parsed.ok) return json({ error: parsed.error, status: parsed.status });
+    const parsed = await readSimproJson(r, url, config.apiToken);
+    if (!parsed.ok) {
+      logSimproFailure("get_job", parsed.status, parsed.endpoint, parsed.simpro_body, config.apiToken);
+      return simproFailureJson(parsed);
+    }
 
     return json({
       ok: true,

@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Building, Briefcase, Truck, FileText, FileSpreadsheet, ImageIcon, PenLine, Plug,
 } from 'lucide-react';
@@ -9,7 +9,7 @@ import {
   INTEGRATION_SETTINGS_STATUS_STYLES,
   type IntegrationSettingsGroupView,
 } from '../integrations/settings/integrationSettingsGroups';
-import { SimproConnectionWizard } from '../components/SimproConnectionWizard';
+import { SimproConnectionSetup } from '../components/simpro/SimproConnectionSetup';
 
 const GROUP_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   simpro: Building,
@@ -23,8 +23,15 @@ const GROUP_ICONS: Record<string, React.ComponentType<{ className?: string }>> =
 
 function IntegrationSettingsCard({ group }: { group: IntegrationSettingsGroupView }) {
   const Icon = GROUP_ICONS[group.id] ?? Plug;
-  const statusLabel = INTEGRATION_SETTINGS_STATUS_LABELS[group.settingsStatus];
-  const statusStyle = INTEGRATION_SETTINGS_STATUS_STYLES[group.settingsStatus];
+  const [simproSessionConnected, setSimproSessionConnected] = useState(false);
+  const statusLabel =
+    group.id === 'simpro' && simproSessionConnected
+      ? 'Connected'
+      : INTEGRATION_SETTINGS_STATUS_LABELS[group.settingsStatus];
+  const statusStyle =
+    group.id === 'simpro' && simproSessionConnected
+      ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+      : INTEGRATION_SETTINGS_STATUS_STYLES[group.settingsStatus];
 
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
@@ -46,7 +53,9 @@ function IntegrationSettingsCard({ group }: { group: IntegrationSettingsGroupVie
         </div>
       </div>
 
-      {group.showSimproConfig && <SimproConnectionWizard />}
+      {group.showSimproConfig && (
+        <SimproConnectionSetup onSessionConnectedChange={setSimproSessionConnected} />
+      )}
 
       {!group.showSimproConfig && group.settingsStatus !== 'existing' && group.settingsStatus !== 'available' && (
         <p className="mt-4 pt-4 border-t border-slate-100 text-xs text-slate-400">

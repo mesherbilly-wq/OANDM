@@ -35,21 +35,22 @@ const STATUS_STYLES: Record<ConnectorUiStatus, string> = {
   coming_soon: 'text-slate-400 bg-slate-100',
 };
 
-/** Legacy Create Project flows wired outside the connector engine for now. */
-const LEGACY_ACTIVE_CONNECTORS = new Set<ConnectorId>(['ai_documents', 'ai_drawings']);
 
 function getConnectorUiStatus(connector: AnyIntegrationConnector): ConnectorUiStatus {
-  if (LEGACY_ACTIVE_CONNECTORS.has(connector.id)) return 'existing';
-  if (connector.id === 'simpro') return 'coming_soon';
+  if (connector.id === 'ai_documents' || connector.id === 'ai_drawings') return 'existing';
+  if (connector.id === 'simpro') return 'available';
   if (connector.availability === 'available') return 'available';
   return 'planned';
 }
 
 function isConnectorSelectable(status: ConnectorUiStatus): boolean {
-  return status === 'existing';
+  return status === 'existing' || status === 'available';
 }
 
 function connectorFootnote(connector: AnyIntegrationConnector, status: ConnectorUiStatus): string | null {
+  if (connector.id === 'simpro' && status === 'available') {
+    return 'Configure connection in Integrations first';
+  }
   if (connector.id === 'manual' && status === 'available') {
     return 'Start blank project coming soon';
   }

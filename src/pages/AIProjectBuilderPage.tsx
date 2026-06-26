@@ -10,12 +10,13 @@ import { supabase } from '../lib/supabase';
 import type { SystemType } from '../types';
 import { getDevicePrefix } from '../lib/deviceLabel';
 import { ImportSourceSelector } from '../components/ImportSourceSelector';
+import { SimproImportFlow } from '../components/simpro/SimproImportFlow';
 import type { ConnectorId } from '../integrations';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type Step = 'source' | 'upload' | 'analyzing' | 'review' | 'creating' | 'done';
+type Step = 'source' | 'upload' | 'analyzing' | 'review' | 'creating' | 'done' | 'simpro';
 type AnalyzePhase = 'extracting' | 'generating';
 type ReviewTab = 'devices' | 'documents';
 
@@ -198,6 +199,8 @@ export function AIProjectBuilderPage() {
       setSourceMode('drawing');
       setDrawingFile(null);
       setStep('upload');
+    } else if (source === 'simpro') {
+      setStep('simpro');
     }
   };
 
@@ -425,11 +428,14 @@ export function AIProjectBuilderPage() {
         <p className="text-slate-500 ml-[52px]">Choose an import source from the Integration Centre — AI extraction, integrations, and manual entry</p>
       </div>
 
-      {step !== 'source' && <StepIndicator current={step} />}
+      {step !== 'source' && step !== 'simpro' && <StepIndicator current={step} />}
 
-      <div className={step === 'source' ? 'mt-0' : 'mt-8'}>
+      <div className={step === 'source' || step === 'simpro' ? 'mt-0' : 'mt-8'}>
         {step === 'source' && (
           <ImportSourceSelector onSelect={selectImportSource} />
+        )}
+        {step === 'simpro' && (
+          <SimproImportFlow onBack={() => setStep('source')} />
         )}
         {step === 'upload' && (
           <UploadStep
