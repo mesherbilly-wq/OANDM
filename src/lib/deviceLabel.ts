@@ -142,8 +142,18 @@ export function getDevicePrefix(systemType: string, deviceType: string): string 
   if (dt.includes('fence') || dt.includes('perimeter')) return 'PD';
   if (dt.includes('laser scanner') || dt.includes('lidar')) return 'LSR';
 
-  // ── System-type fallbacks ──────────────────────────────────────────────────
+  // ── Category fallbacks (trade-agnostic) ───────────────────────────────────
   switch (systemType) {
+    case 'Security':        return 'SEC';
+    case 'Fire':            return 'FIR';
+    case 'Electrical':      return 'ELC';
+    case 'Mechanical':      return 'MEC';
+    case 'HVAC':            return 'HVC';
+    case 'Plumbing':        return 'PLM';
+    case 'Audio Visual':    return 'AV';
+    case 'IT':              return 'IT';
+    case 'Building Fabric': return 'BLD';
+    // Legacy system names still stored on old projects
     case 'CCTV':                return 'CAM';
     case 'Access Control':      return 'RDR';
     case 'Intercom':            return 'INT';

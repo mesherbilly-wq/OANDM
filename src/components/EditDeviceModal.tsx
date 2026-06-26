@@ -1,19 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { X, AlertCircle, Search, CheckCircle, Link as LinkIcon, Unlink } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import type { Device, ProductModel, SystemType } from '../types';
-import { SYSTEM_TYPES } from '../types';
+import type { Device, ProductModel } from '../types';
 
 const DEVICE_TYPES = ['Camera', 'Door', 'Door Controller', 'Access Reader', 'Recorder', 'Sensor', 'Intercom', 'Network Switch', 'Other'];
 
 interface Props {
   device: Device;
   productModels: ProductModel[];
+  projectSystemNames?: string[];
   onClose: () => void;
   onSave: (updated?: Device) => void;
 }
 
-export function EditDeviceModal({ device, productModels, onClose, onSave }: Props) {
+export function EditDeviceModal({ device, productModels, projectSystemNames = [], onClose, onSave }: Props) {
   // Resolve initial linked product model
   const initialLinked = useMemo(() =>
     productModels.find(
@@ -34,6 +34,7 @@ export function EditDeviceModal({ device, productModels, onClose, onSave }: Prop
   const [deviceType, setDeviceType] = useState(device.device_type ?? '');
   const [manufacturer, setManufacturer] = useState(device.manufacturer ?? '');
   const [modelNumber, setModelNumber] = useState(device.model_number ?? '');
+  const [modelName, setModelName] = useState(device.model_name ?? '');
   const [serialNumber, setSerialNumber] = useState(device.serial_number ?? '');
   const [ipAddress, setIpAddress] = useState(device.ip_address ?? '');
   const [location, setLocation] = useState(device.location ?? '');
@@ -84,11 +85,12 @@ export function EditDeviceModal({ device, productModels, onClose, onSave }: Prop
     setError(null);
 
     const updates = {
-      system_type: (systemType as SystemType) || null,
+      system_type: systemType.trim() || null,
       device_name: deviceName || null,
       device_type: deviceType || null,
       manufacturer: manufacturer || null,
       model_number: modelNumber || null,
+      model_name: modelName || null,
       serial_number: serialNumber || null,
       ip_address: ipAddress || null,
       location: location || null,
@@ -234,10 +236,18 @@ export function EditDeviceModal({ device, productModels, onClose, onSave }: Prop
 
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1.5">System</label>
-                  <select value={systemType} onChange={(e) => setSystemType(e.target.value)} className={ic}>
-                    <option value="">Not assigned</option>
-                    {SYSTEM_TYPES.map((s) => <option key={s} value={s}>{s}</option>)}
-                  </select>
+                  <input
+                    list="project-system-names"
+                    value={systemType}
+                    onChange={(e) => setSystemType(e.target.value)}
+                    className={ic}
+                    placeholder="e.g. Level 1 Access Control"
+                  />
+                  <datalist id="project-system-names">
+                    {projectSystemNames.map(name => (
+                      <option key={name} value={name} />
+                    ))}
+                  </datalist>
                 </div>
 
                 <div>
@@ -258,6 +268,12 @@ export function EditDeviceModal({ device, productModels, onClose, onSave }: Prop
                   <label className="block text-xs font-medium text-slate-600 mb-1.5">Model Number</label>
                   <input value={modelNumber} onChange={(e) => { setModelNumber(e.target.value); setLinkedModel(null); }}
                     className={ic} placeholder="e.g. P3245-LVE" />
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block text-xs font-medium text-slate-600 mb-1.5">Model Name</label>
+                  <input value={modelName} onChange={(e) => setModelName(e.target.value)}
+                    className={ic} placeholder="Optional long description" />
                 </div>
 
                 <div>

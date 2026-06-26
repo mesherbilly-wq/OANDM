@@ -5,7 +5,7 @@ import type { Project } from '../types';
 import {
   FolderOpen, Plus, ArrowRight, Clock, CheckCircle2, PauseCircle,
   AlertCircle, Sparkles, FileText, Cpu, Calendar, ChevronRight,
-  Building2, MapPin, LayoutDashboard, RefreshCw,
+  Building2, MapPin, LayoutDashboard, RefreshCw, Trash2,
 } from 'lucide-react';
 
 interface ProjectWithMeta extends Project {
@@ -145,6 +145,19 @@ export function DashboardPage() {
   };
 
   useEffect(() => { load(); }, []);
+
+  const handleDelete = async (id: number, projectName: string | null) => {
+    const label = projectName?.trim() || 'this project';
+    if (!confirm(`Are you sure you want to delete "${label}"? This cannot be undone.`)) return;
+
+    const { error } = await supabase.from('projects').delete().eq('id', id);
+    if (error) {
+      window.alert(`Failed to delete project: ${error.message}`);
+      return;
+    }
+
+    setProjects(prev => prev.filter(project => project.id !== id));
+  };
 
   const stats = useMemo(() => ({
     total: projects.length,
@@ -340,12 +353,23 @@ export function DashboardPage() {
                               <DeadlinePill date={p.completion_date} />
                             </span>
                           </div>
-                          <button
-                            onClick={() => navigate(`/projects/${p.id}`)}
-                            className="inline-flex items-center gap-1.5 text-xs font-semibold text-cyan-600 hover:text-cyan-700 opacity-0 group-hover:opacity-100 transition-all"
-                          >
-                            Continue <ArrowRight className="w-3.5 h-3.5" />
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(p.id, p.project_name)}
+                              className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-semibold text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors"
+                              title="Delete project"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              Delete
+                            </button>
+                            <button
+                              onClick={() => navigate(`/projects/${p.id}`)}
+                              className="inline-flex items-center gap-1.5 text-xs font-semibold text-cyan-600 hover:text-cyan-700 opacity-0 group-hover:opacity-100 transition-all"
+                            >
+                              Continue <ArrowRight className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>

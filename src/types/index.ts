@@ -1,5 +1,32 @@
+export type SystemCategory =
+  | 'Security'
+  | 'Fire'
+  | 'Electrical'
+  | 'Mechanical'
+  | 'HVAC'
+  | 'Plumbing'
+  | 'Audio Visual'
+  | 'IT'
+  | 'Building Fabric'
+  | 'Other';
+
+export const SYSTEM_CATEGORIES: SystemCategory[] = [
+  'Security',
+  'Fire',
+  'Electrical',
+  'Mechanical',
+  'HVAC',
+  'Plumbing',
+  'Audio Visual',
+  'IT',
+  'Building Fabric',
+  'Other',
+];
+
+/** @deprecated Legacy Fire & Security hierarchy labels — use free-text system names + {@link SystemCategory}. */
 export type SystemType = 'CCTV' | 'Access Control' | 'Intercom' | 'Intruder' | 'Networking' | 'ANPR' | 'Perimeter Detection';
 
+/** @deprecated Use {@link SYSTEM_CATEGORIES} from `lib/systems`. */
 export const SYSTEM_TYPES: SystemType[] = [
   'CCTV', 'Access Control', 'Intruder', 'Intercom', 'ANPR', 'Perimeter Detection', 'Networking',
 ];
@@ -147,11 +174,29 @@ export interface ProjectRevision {
   revised_at: string | null;
 }
 
+/** First-class install section / system within a project. */
+export interface ProjectSystemRecord {
+  id: number;
+  project_id: number;
+  system_name: string;
+  system_category: SystemCategory | null;
+  source_type: string | null;
+  source_reference: string | null;
+  notes: string | null;
+  display_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Device {
   id: number;
   created_at: string;
   project_id: number | null;
-  system_type: SystemType | null;
+  project_system_id: number | null;
+  /** Denormalized system name — kept for backwards compatibility during migration. */
+  system_type: string | null;
+  /** Trade category for icons/reporting only — not the project hierarchy. */
+  system_category: SystemCategory | null;
   device_type: string | null;
   device_name: string | null;
   manufacturer: string | null;

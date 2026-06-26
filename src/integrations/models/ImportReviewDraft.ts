@@ -41,7 +41,6 @@ export function createImportReviewDraft(
   const systems = partial.systems ?? [];
   const totalEquipmentLines = systems.reduce((sum, sys) => sum + sys.equipment.length, 0);
   return {
-    issues: [],
     ...partial,
     systems,
     issues: partial.issues ?? [],

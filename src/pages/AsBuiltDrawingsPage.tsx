@@ -1,6 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import {
+  loadDocumentProjectSystems,
+  systemAssignmentFields,
+} from '../lib/documentProjectSystems';
+import { getCategoryStyle, type ProjectSystem } from '../lib/systems';
 import {
   Upload, FileText, X, Plus, ExternalLink, Pencil, Check, Loader2,
   ImageIcon, Hash, RefreshCw, AlertCircle, FileType,
@@ -27,6 +32,8 @@ interface AsBuiltDrawing {
   drawing_number: string | null;
   revision: string | null;
   drawing_type: string | null;
+  system_type: string | null;
+  project_system_id: number | null;
   notes: string | null;
   file_name: string;
   file_url: string;
@@ -39,6 +46,7 @@ interface EditState {
   drawing_number: string;
   revision: string;
   drawing_type: string;
+  system_name: string;
   notes: string;
 }
 
@@ -48,6 +56,7 @@ interface PendingUpload {
   drawing_type: string;
   drawing_number: string;
   revision: string;
+  system_name: string;
   notes: string;
 }
 
@@ -58,6 +67,7 @@ export default function AsBuiltDrawingsPage() {
   const pid = id ? parseInt(id) : null;
 
   const [drawings, setDrawings] = useState<AsBuiltDrawing[]>([]);
+  const [projectSystems, setProjectSystems] = useState<ProjectSystem[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -75,12 +85,20 @@ export default function AsBuiltDrawingsPage() {
 
   const load = useCallback(async () => {
     if (!pid) return;
-    const { data } = await supabase
-      .from('as_fitted_drawings')
-      .select('*')
-      .eq('project_id', pid)
-      .order('created_at', { ascending: false });
+    const [{ data }, { data: devData }] = await Promise.all([
+      supabase
+        .from('as_fitted_drawings')
+        .select('*')
+        .eq('project_id', pid)
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('devices')
+        .select('id, project_id, system_type, system_category, project_system_id')
+        .eq('project_id', pid),
+    ]);
     setDrawings(data ?? []);
+    const systems = await loadDocumentProjectSystems(pid, devData ?? []);
+    setProjectSystems(systems);
     setLoading(false);
   }, [pid]);
 
@@ -103,6 +121,7 @@ export default function AsBuiltDrawingsPage() {
       drawing_type: '',
       drawing_number: '',
       revision: '',
+      system_name: projectSystems[0]?.name ?? '',
       notes: '',
     });
   };
@@ -120,7 +139,9 @@ export default function AsBuiltDrawingsPage() {
 
   const confirmUpload = async () => {
     if (!pid || !pendingUpload) return;
-    const { file, title, drawing_type, drawing_number, revision, notes } = pendingUpload;
+    const { file, title, drawing_type, drawing_number, revision, notes, system_name } = pendingUpload;
+    const selectedSystem = projectSystems.find(system => system.name === system_name) ?? null;
+    const systemFields = systemAssignmentFields(selectedSystem);
     setUploading(true);
     setUploadError(null);
     try {
@@ -143,6 +164,7 @@ export default function AsBuiltDrawingsPage() {
         file_name: file.name,
         file_url: publicUrl,
         file_size: file.size,
+        ...systemFields,
       });
       if (dbErr) throw dbErr;
       setPendingUpload(null);
@@ -161,17 +183,21 @@ export default function AsBuiltDrawingsPage() {
       drawing_number: d.drawing_number ?? '',
       revision: d.revision ?? '',
       drawing_type: d.drawing_type ?? '',
+      system_name: d.system_type ?? projectSystems[0]?.name ?? '',
       notes: d.notes ?? '',
     });
   };
 
   const saveEdit = async (id: number) => {
+    const selectedSystem = projectSystems.find(system => system.name === editState.system_name) ?? null;
+    const systemFields = systemAssignmentFields(selectedSystem);
     await supabase.from('as_fitted_drawings').update({
       title: editState.title,
       drawing_number: editState.drawing_number || null,
       revision: editState.revision || null,
       drawing_type: editState.drawing_type || null,
       notes: editState.notes || null,
+      ...systemFields,
     }).eq('id', id);
     setEditingId(null);
     await load();
@@ -259,8 +285,15 @@ export default function AsBuiltDrawingsPage() {
                         <label className="block text-xs font-medium text-slate-600 mb-1">Drawing Title <span className="text-red-500">*</span></label>
                         <input value={editState.title} onChange={e => setEditState(s => ({ ...s, title: e.target.value }))} className={ic} placeholder="e.g. Ground Floor CCTV Layout" />
                       </div>
+                      <div className="col-span-2">
+                        <label className="block text-xs font-medium text-slate-600 mb-1">System / Cost Centre</label>
+                        <select value={editState.system_name} onChange={e => setEditState(s => ({ ...s, system_name: e.target.value }))} className={ic}>
+                          {projectSystems.map(system => (
+                            <option key={system.name} value={system.name}>{system.name}</option>
+                          ))}
+                        </select>
+                      </div>
                       <div>
-                        <label className="block text-xs font-medium text-slate-600 mb-1">Drawing Type</label>
                         <select value={editState.drawing_type} onChange={e => setEditState(s => ({ ...s, drawing_type: e.target.value }))} className={ic}>
                           <option value="">Select type…</option>
                           {DRAWING_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
@@ -372,6 +405,18 @@ export default function AsBuiltDrawingsPage() {
                 <input value={pendingUpload.title}
                   onChange={e => setPendingUpload(p => p ? { ...p, title: e.target.value } : p)}
                   className={ic} placeholder="e.g. Ground Floor CCTV Layout" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5">System / Cost Centre</label>
+                <select value={pendingUpload.system_name}
+                  onChange={e => setPendingUpload(p => p ? { ...p, system_name: e.target.value } : p)}
+                  className={ic}>
+                  {projectSystems.length === 0 ? (
+                    <option value="">No systems available</option>
+                  ) : projectSystems.map(system => (
+                    <option key={system.name} value={system.name}>{system.name}</option>
+                  ))}
+                </select>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">

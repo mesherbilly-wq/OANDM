@@ -30,10 +30,17 @@ export function ProjectsPage() {
     setLoading(false);
   };
 
-  const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this project?')) return;
-    await supabase.from('projects').delete().eq('id', id);
-    setProjects(projects.filter((p) => p.id !== id));
+  const handleDelete = async (project: Project) => {
+    const label = project.project_name?.trim() || 'this project';
+    if (!confirm(`Are you sure you want to delete "${label}"? This cannot be undone.`)) return;
+
+    const { error } = await supabase.from('projects').delete().eq('id', project.id);
+    if (error) {
+      window.alert(`Failed to delete project: ${error.message}`);
+      return;
+    }
+
+    setProjects(projects.filter(p => p.id !== project.id));
     setActiveMenu(null);
   };
 
@@ -170,6 +177,17 @@ export function ProjectsPage() {
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-1">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDelete(project);
+                          }}
+                          className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Delete project"
+                        >
+                          <Trash2 className="w-5 h-5" />
+                        </button>
                         <div className="relative inline-block" onClick={(e) => e.stopPropagation()}>
                           <button
                             onClick={() => setActiveMenu(activeMenu === project.id ? null : project.id)}
@@ -192,7 +210,7 @@ export function ProjectsPage() {
                                   Edit
                                 </button>
                                 <button
-                                  onClick={() => handleDelete(project.id)}
+                                  onClick={() => handleDelete(project)}
                                   className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50"
                                 >
                                   <Trash2 className="w-4 h-4" />

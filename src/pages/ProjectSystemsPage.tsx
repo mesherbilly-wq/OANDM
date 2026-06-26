@@ -5,14 +5,14 @@ import { fetchProjectDevices } from '../lib/fetchProjectDevices';
 import { groupDevices, type GroupedEquipment } from '../lib/deviceGrouping';
 import {
   buildPrefixCounters,
-  renameProjectSystem,
-  updateProjectSystemCategory,
+  saveProjectSystem,
 } from '../lib/deviceProjectEdits';
+import { loadProjectSystemsForProject } from '../lib/projectSystemsDb';
 import {
   deriveProjectSystems,
+  deviceBelongsToSystem,
   getCategoryStyle,
   notifyProjectDevicesChanged,
-  resolveSystemName,
   resolveSystemSlugToName,
   systemNameToSlug,
   SYSTEM_CATEGORIES,
@@ -23,7 +23,7 @@ import { EditDeviceModal } from '../components/EditDeviceModal';
 import { EditEquipmentGroupModal } from '../components/EditEquipmentGroupModal';
 import { AIImportModal } from '../components/AIImportModal';
 import { useProject } from './ProjectLayout';
-import type { Device, SystemCategory } from '../types';
+import type { Device, ProjectSystemRecord, SystemCategory } from '../types';
 
 function groupedLocations(devices: Device[]): string {
   const locs = [...new Set(devices.map(d => d.location?.trim()).filter(Boolean))] as string[];
@@ -46,6 +46,7 @@ export default function ProjectSystemsPage() {
   const projectId = id ? parseInt(id, 10) : null;
 
   const [allDevices, setAllDevices] = useState<Device[]>([]);
+  const [systemRows, setSystemRows] = useState<ProjectSystemRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [approvingAll, setApprovingAll] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
@@ -59,7 +60,10 @@ export default function ProjectSystemsPage() {
   const [systemSaveError, setSystemSaveError] = useState<string | null>(null);
   const [savingSystem, setSavingSystem] = useState(false);
 
-  const projectSystems = useMemo(() => deriveProjectSystems(allDevices), [allDevices]);
+  const projectSystems = useMemo(
+    () => deriveProjectSystems(allDevices, systemRows),
+    [allDevices, systemRows],
+  );
   const projectSystemNames = useMemo(() => projectSystems.map(system => system.name), [projectSystems]);
   const prefixCounters = useMemo(() => buildPrefixCounters(allDevices), [allDevices]);
 
@@ -74,10 +78,12 @@ export default function ProjectSystemsPage() {
     [projectSystems, activeSystemName],
   );
 
-  const systemDevices = useMemo(
-    () => allDevices.filter(device => resolveSystemName(device) === activeSystemName),
-    [allDevices, activeSystemName],
-  );
+  const systemDevices = useMemo(() => {
+    if (!activeSystemMeta) return [];
+    return allDevices.filter(device =>
+      deviceBelongsToSystem(device, { id: activeSystemMeta.id, name: activeSystemMeta.name }),
+    );
+  }, [allDevices, activeSystemMeta]);
 
   const pending = useMemo(
     () => systemDevices.filter(device => device.status === 'pending_review'),
@@ -91,7 +97,9 @@ export default function ProjectSystemsPage() {
     setLoading(true);
     try {
       const devices = await fetchProjectDevices(projectId);
+      const systems = await loadProjectSystemsForProject(projectId, devices);
       setAllDevices(devices);
+      setSystemRows(systems);
       notifyProjectDevicesChanged();
       return devices;
     } finally {
@@ -139,31 +147,25 @@ export default function ProjectSystemsPage() {
     setSavingSystem(true);
     setSystemSaveError(null);
 
-    const renameError = await renameProjectSystem(projectId, activeSystemName, systemNameDraft);
-    if (renameError) {
-      setSystemSaveError(renameError);
+    const savedName = systemNameDraft.trim() || activeSystemName;
+    const categoryToSave = systemCategoryDraft || null;
+    const saveError = await saveProjectSystem(
+      projectId,
+      activeSystemMeta?.id ?? null,
+      activeSystemName,
+      savedName,
+      categoryToSave,
+    );
+    if (saveError) {
+      setSystemSaveError(saveError);
       setSavingSystem(false);
       return;
     }
 
-    const savedName = systemNameDraft.trim() || activeSystemName;
-    if (systemCategoryDraft) {
-      const categoryError = await updateProjectSystemCategory(projectId, savedName, systemCategoryDraft);
-      if (categoryError) {
-        setSystemSaveError(categoryError);
-        setSavingSystem(false);
-        await fetchDevices();
-        return;
-      }
-    }
-
     setSavingSystem(false);
     setEditingSystem(false);
-    const refreshedDevices = await fetchDevices();
-    const savedSystem = deriveProjectSystems(refreshedDevices).find(system => system.name === savedName);
-    if (savedSystem && id) {
-      navigate(`/projects/${id}/systems/${savedSystem.slug}`, { replace: true });
-    } else if (savedName !== activeSystemName && id) {
+    await fetchDevices();
+    if (id) {
       navigate(`/projects/${id}/systems/${systemNameToSlug(savedName)}`, { replace: true });
     }
   };
@@ -173,7 +175,9 @@ export default function ProjectSystemsPage() {
     const { error } = await supabase.from('devices').insert({
       ...deviceData,
       project_id: projectId,
+      project_system_id: activeSystemMeta?.id ?? null,
       system_type: activeSystemName,
+      system_category: activeSystemMeta?.category ?? null,
       status: 'active',
     });
     if (error) return error.message;

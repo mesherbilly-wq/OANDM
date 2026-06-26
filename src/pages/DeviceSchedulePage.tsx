@@ -4,8 +4,9 @@ import { useProject } from './ProjectLayout';
 import { supabase } from '../lib/supabase';
 import { groupDevices } from '../lib/deviceGrouping';
 import { fetchProjectDevices } from '../lib/fetchProjectDevices';
+import { loadProjectSystemsForProject } from '../lib/projectSystemsDb';
 import { deriveProjectSystems, getCategoryStyle } from '../lib/systems';
-import { Device } from '../types';
+import { Device, ProjectSystemRecord } from '../types';
 import {
   ChevronDown,
   ChevronRight,
@@ -55,6 +56,7 @@ export default function DeviceSchedulePage() {
   const { id: projectId } = useParams<{ id: string }>();
   const { project } = useProject();
   const [devices, setDevices] = useState<Device[]>([]);
+  const [systemRows, setSystemRows] = useState<ProjectSystemRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'grouped' | 'individual'>('grouped');
   const [searchTerm, setSearchTerm] = useState('');
@@ -72,8 +74,11 @@ export default function DeviceSchedulePage() {
     if (!projectId) return;
     setLoading(true);
     try {
-      const data = await fetchProjectDevices(parseInt(projectId, 10));
+      const projectIdNum = parseInt(projectId, 10);
+      const data = await fetchProjectDevices(projectIdNum);
+      const systems = await loadProjectSystemsForProject(projectIdNum, data);
       setDevices(data);
+      setSystemRows(systems);
     } catch (error) {
       console.error('Failed to fetch devices:', error);
     } finally {
@@ -81,7 +86,10 @@ export default function DeviceSchedulePage() {
     }
   };
 
-  const projectSystems = useMemo(() => deriveProjectSystems(devices), [devices]);
+  const projectSystems = useMemo(
+    () => deriveProjectSystems(devices, systemRows),
+    [devices, systemRows],
+  );
 
   const pendingCount = useMemo(() => {
     return devices.filter((d) => d.status === 'pending_review').length;

@@ -1,23 +1,23 @@
-import type { SystemType } from '../../types';
-import type { ImportEquipmentDraft, SystemTypeInferenceMethod } from './ImportEquipmentDraft';
+import type { SystemCategory } from '../../types';
+import type { ImportEquipmentDraft, CategoryInferenceMethod } from './ImportEquipmentDraft';
 
-/** System-type suggestion for a section / cost centre / install area. */
-export interface SystemTypeInference {
-  suggestedSystemType: SystemType | null;
-  confirmedSystemType: SystemType | null;
-  method: SystemTypeInferenceMethod;
+/** Category suggestion for a cost centre / install section (styling only). */
+export interface CategoryInference {
+  suggestedCategory: SystemCategory | null;
+  confirmedCategory: SystemCategory | null;
+  method: CategoryInferenceMethod;
   confidence: number;
 }
 
 /**
- * A logical install section — maps to an OANDM `system_type` tab once confirmed.
- * Simpro cost centres, HaloPSA sites/sections, CSV groupings, etc. all land here.
+ * A project System — one install section / cost centre / AI-detected area.
+ * The name is the hierarchy; category is lightweight metadata only.
  */
 export interface ImportSystemDraft {
   draftId: string;
   name: string;
   description: string | null;
-  inference: SystemTypeInference;
+  category: CategoryInference;
   equipment: ImportEquipmentDraft[];
   selected: boolean;
   /** Opaque trace back to a source section (Simpro cost centre id, sheet name, etc.). */
@@ -25,24 +25,31 @@ export interface ImportSystemDraft {
 }
 
 export function createSystemDraft(
-  partial: Omit<ImportSystemDraft, 'inference' | 'equipment'> & {
-    inference?: Partial<SystemTypeInference>;
+  partial: Omit<ImportSystemDraft, 'category' | 'equipment'> & {
+    category?: Partial<CategoryInference>;
     equipment?: ImportEquipmentDraft[];
   },
 ): ImportSystemDraft {
   return {
-    equipment: [],
     selected: true,
     description: null,
     sourceSectionRef: null,
     ...partial,
-    inference: {
-      suggestedSystemType: null,
-      confirmedSystemType: null,
+    category: {
+      suggestedCategory: null,
+      confirmedCategory: null,
       method: 'unresolved',
       confidence: 0,
-      ...partial.inference,
+      ...partial.category,
     },
     equipment: partial.equipment ?? [],
   };
+}
+
+/** @deprecated Use CategoryInference */
+export type SystemTypeInference = CategoryInference;
+
+/** Resolved category for a system draft (user confirmation wins). */
+export function resolvedSystemCategory(system: ImportSystemDraft): SystemCategory | null {
+  return system.category.confirmedCategory ?? system.category.suggestedCategory;
 }

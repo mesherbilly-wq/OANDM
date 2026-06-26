@@ -1,22 +1,15 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useLocation, Outlet } from 'react-router-dom';
 import {
-  Shield, LayoutDashboard, FolderOpen, Box, Menu, X, Plus, Plug,
+  LayoutDashboard, FolderOpen, Box, Menu, X, Plus, Plug,
   ChevronDown, ChevronRight,
-  Camera, Lock, PhoneCall, ShieldAlert, Network, ScanLine, Radar,
-  ImageIcon, BookOpen, Cpu, Wifi, ClipboardCheck, Award, Download, Info,
-  FileText, Layers, ExternalLink, LogOut, Building2, User,
+  BookOpen, Cpu, Wifi, ClipboardCheck, ShieldAlert, Award, Download, Info,
+  FileText, Layers, LogOut, Building2, User,
 } from 'lucide-react';
-
-const SYSTEM_SUB_NAV = [
-  { name: 'CCTV',                slug: 'cctv',           icon: Camera },
-  { name: 'Access Control',      slug: 'access-control', icon: Lock },
-  { name: 'Intruder',            slug: 'intruder',       icon: ShieldAlert },
-  { name: 'Intercom',            slug: 'intercom',       icon: PhoneCall },
-  { name: 'ANPR',                slug: 'anpr',           icon: ScanLine },
-  { name: 'Perimeter Detection', slug: 'perimeter',      icon: Radar },
-  { name: 'Networking',          slug: 'networking',     icon: Network },
-];
+import { supabase } from '../lib/supabase';
+import { deriveProjectSystems, getCategoryStyle, PROJECT_DEVICES_CHANGED_EVENT, type ProjectSystem } from '../lib/systems';
+import { fetchProjectSystems } from '../lib/projectSystemsDb';
+import type { Device, ProjectSystemRecord } from '../types';
 
 const PROJECT_MODULES = [
   { name: 'Overview',           slug: 'info',          icon: Info },
@@ -39,10 +32,37 @@ export function Layout({ companyName, userEmail, onSignOut }: {
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [systemsExpanded, setSystemsExpanded] = useState(true);
+  const [projectSystems, setProjectSystems] = useState<ProjectSystem[]>([]);
   const location = useLocation();
 
   const projectMatch = location.pathname.match(/^\/projects\/(\d+)/);
   const currentProjectId = projectMatch?.[1] ?? null;
+
+  useEffect(() => {
+    if (!currentProjectId) {
+      setProjectSystems([]);
+      return;
+    }
+
+    const loadProjectSystems = () => {
+      const projectId = parseInt(currentProjectId, 10);
+      Promise.all([
+        fetchProjectSystems(projectId).catch(() => [] as ProjectSystemRecord[]),
+        supabase
+          .from('devices')
+          .select('system_type, system_category, project_system_id')
+          .eq('project_id', projectId),
+      ]).then(([systemRows, devicesRes]) => {
+        setProjectSystems(
+          deriveProjectSystems((devicesRes.data ?? []) as Device[], systemRows),
+        );
+      });
+    };
+
+    loadProjectSystems();
+    window.addEventListener(PROJECT_DEVICES_CHANGED_EVENT, loadProjectSystems);
+    return () => window.removeEventListener(PROJECT_DEVICES_CHANGED_EVENT, loadProjectSystems);
+  }, [currentProjectId]);
 
   const isActive = (href: string) =>
     location.pathname === href || (href !== '/dashboard' && href !== '/projects' && location.pathname.startsWith(href));
@@ -104,17 +124,28 @@ export function Layout({ companyName, userEmail, onSignOut }: {
                       </button>
                       {systemsExpanded && (
                         <div className="ml-3 mt-0.5 pl-3 border-l border-slate-800 space-y-0.5">
-                          {SYSTEM_SUB_NAV.map(s => {
-                            const sHref = `/projects/${currentProjectId}/systems/${s.slug}`;
-                            const sActive = location.pathname === sHref || location.pathname.startsWith(sHref);
-                            return (
-                              <Link key={s.slug} to={sHref} onClick={() => setSidebarOpen(false)}
-                                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-all ${sActive ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/60'}`}>
-                                <s.icon className="w-3.5 h-3.5 flex-shrink-0" />
-                                <span className="font-medium">{s.name}</span>
-                              </Link>
-                            );
-                          })}
+                          {projectSystems.length === 0 ? (
+                            <Link
+                              to={`/projects/${currentProjectId}/systems`}
+                              onClick={() => setSidebarOpen(false)}
+                              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-slate-500 hover:text-slate-300 hover:bg-slate-800/60"
+                            >
+                              <span className="font-medium">All systems</span>
+                            </Link>
+                          ) : (
+                            projectSystems.map(system => {
+                              const sHref = `/projects/${currentProjectId}/systems/${system.slug}`;
+                              const sActive = location.pathname === sHref || location.pathname.startsWith(`${sHref}/`);
+                              const Icon = getCategoryStyle(system.category).icon;
+                              return (
+                                <Link key={`${system.slug}:${system.name}`} to={sHref} onClick={() => setSidebarOpen(false)}
+                                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-all ${sActive ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/60'}`}>
+                                  <Icon className="w-3.5 h-3.5 flex-shrink-0" />
+                                  <span className="font-medium truncate">{system.name}</span>
+                                </Link>
+                              );
+                            })
+                          )}
                         </div>
                       )}
                     </div>
@@ -186,7 +217,7 @@ export function Layout({ companyName, userEmail, onSignOut }: {
               <Menu className="w-6 h-6" />
             </button>
             <div className="flex-1" />
-            <span className="text-xs text-slate-400 font-medium">Security Project Lifecycle Platform</span>
+            <span className="text-xs text-slate-400 font-medium">Operations &amp; Maintenance Platform</span>
           </div>
         </header>
 

@@ -1,5 +1,5 @@
 import type { ImportReviewDraft, ImportReviewIssue } from '../models';
-import { allSelectedSystemsTyped, hasSelectedEquipment, selectedSystems } from './draftHelpers';
+import { allSelectedSystemsCategorised, hasSelectedEquipment, resolvedCategory, selectedSystems } from './draftHelpers';
 
 /**
  * Structural validation for {@link ImportReviewDraft}.
@@ -27,16 +27,25 @@ export function validateImportReviewDraft(draft: ImportReviewDraft): ImportRevie
   if (draft.systems.length === 0) {
     issues.push({
       code: 'no_systems',
-      message: 'No install sections were produced by this import.',
+      message: 'No systems were produced by this import.',
       severity: 'warning',
     });
   }
 
   for (const system of draft.systems) {
-    if (system.selected && !system.inference.confirmedSystemType && !system.inference.suggestedSystemType) {
+    if (system.selected && !system.name?.trim()) {
       issues.push({
-        code: 'untyped_system',
-        message: `Section "${system.name}" has no system type assigned.`,
+        code: 'unnamed_system',
+        message: 'A selected system has no name.',
+        severity: 'error',
+        draftId: system.draftId,
+      });
+    }
+
+    if (system.selected && !resolvedCategory(system)) {
+      issues.push({
+        code: 'uncategorised_system',
+        message: `System "${system.name}" has no category assigned.`,
         severity: 'warning',
         draftId: system.draftId,
       });
@@ -45,7 +54,7 @@ export function validateImportReviewDraft(draft: ImportReviewDraft): ImportRevie
     if (system.equipment.length === 0) {
       issues.push({
         code: 'empty_system',
-        message: `Section "${system.name}" contains no equipment lines.`,
+        message: `System "${system.name}" contains no equipment lines.`,
         severity: 'info',
         draftId: system.draftId,
       });
@@ -64,11 +73,11 @@ export function assertReviewDraftReadyForPersist(draft: ImportReviewDraft): void
   }
 
   if (selectedSystems(draft).length === 0) {
-    throw new Error('At least one install section must be selected.');
+    throw new Error('At least one system must be selected.');
   }
 
-  if (!allSelectedSystemsTyped(draft)) {
-    throw new Error('Every selected section must have a system type.');
+  if (!allSelectedSystemsCategorised(draft)) {
+    throw new Error('Every selected system must have a category.');
   }
 
   if (!hasSelectedEquipment(draft)) {

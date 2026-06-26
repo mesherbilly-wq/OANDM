@@ -1,7 +1,15 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useProject } from './ProjectLayout';
 import { supabase } from '../lib/supabase';
-import type { Device, SCTemplateMapping } from '../types';
+import {
+  documentMatchesSystem,
+  loadDocumentProjectSystems,
+  PROJECT_WIDE_SYSTEM_KEY,
+  PROJECT_WIDE_SYSTEM_LABEL,
+  resolveActiveDocumentSystem,
+  systemAssignmentFields,
+} from '../lib/documentProjectSystems';
+import { getCategoryStyle, type ProjectSystem } from '../lib/systems';
 import SafetyCulturePage from './SafetyCulturePage';
 import {
   Upload, X, ExternalLink, CheckCircle, FileText, Loader2,
@@ -52,6 +60,8 @@ interface HandoverDoc {
   id: number;
   document_type: string;
   title: string;
+  system_type: string | null;
+  project_system_id: number | null;
   status: DocStatus;
   sc_inspection_id: string | null;
   sc_inspection_name: string | null;
@@ -67,6 +77,8 @@ interface HandoverDoc {
 interface LegacyUpload {
   id: number;
   section: string;
+  system_type: string | null;
+  project_system_id: number | null;
   file_name: string;
   file_url: string;
 }
@@ -75,6 +87,8 @@ interface OtherDoc {
   id: number;
   title: string;
   description: string | null;
+  system_type: string | null;
+  project_system_id: number | null;
   file_name: string | null;
   file_url: string | null;
   link_url: string | null;
@@ -97,6 +111,8 @@ export default function HandoverPage() {
   const [legacyUploads, setLegacyUploads] = useState<LegacyUpload[]>([]);
   const [otherDocs, setOtherDocs] = useState<OtherDoc[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [projectSystems, setProjectSystems] = useState<ProjectSystem[]>([]);
+  const [activeSystemKey, setActiveSystemKey] = useState<string>(PROJECT_WIDE_SYSTEM_KEY);
   const [loading, setLoading] = useState(true);
   const [scConnected, setScConnected] = useState(false);
   const [templates, setTemplates] = useState<any[]>([]);
@@ -146,6 +162,7 @@ export default function HandoverPage() {
     setLegacyUploads((uploadRows ?? []) as LegacyUpload[]);
     setOtherDocs((otherRows ?? []) as OtherDoc[]);
     setDevices(devRows ?? []);
+    setProjectSystems(await loadDocumentProjectSystems(pid, devRows ?? []));
     setScConnected(!!tokRow?.value);
     const byTmpl: Record<string, SCTemplateMapping> = {};
     for (const m of maps ?? []) byTmpl[m.template_id] = m;
@@ -161,18 +178,32 @@ export default function HandoverPage() {
     }
   }, [scConnected]);
 
-  // Determine which systems are installed
+  // Determine which systems are installed (legacy helper — doc visibility uses project systems tabs)
   const installedSystems = [...new Set(devices.map(d => d.system_type).filter(Boolean))] as string[];
+  const activeDocumentSystem = resolveActiveDocumentSystem(projectSystems, activeSystemKey);
+  const activeSystemFields = systemAssignmentFields(activeDocumentSystem);
 
-  // Filter SC documents to only show relevant ones
+  const docMatchesActiveSystem = (record: { system_type?: string | null; project_system_id?: number | null }) => {
+    if (activeSystemKey === PROJECT_WIDE_SYSTEM_KEY) {
+      return !record.system_type?.trim() && record.project_system_id == null;
+    }
+    if (!activeDocumentSystem) return false;
+    return documentMatchesSystem(record, activeDocumentSystem);
+  };
+
+  // Filter SC documents to only show relevant ones (legacy category hint; all show on active system tab)
   const visibleScDocs = SC_DOCUMENTS.filter(doc => {
-    if (!doc.systems) return true; // universal documents always show
+    if (activeSystemKey !== PROJECT_WIDE_SYSTEM_KEY && doc.systems) return true;
+    if (!doc.systems) return true;
     return doc.systems.some(s => installedSystems.includes(s));
   });
 
-  const getDocRecord = (docType: string) => docs.find(d => d.document_type === docType);
-  const getLegacyUpload = (section: string) => legacyUploads.find(u => u.section === section);
-  const getLegacyUploads = (section: string) => legacyUploads.filter(u => u.section === section);
+  const getDocRecord = (docType: string) =>
+    docs.find(d => d.document_type === docType && docMatchesActiveSystem(d));
+  const getLegacyUpload = (section: string) =>
+    legacyUploads.find(u => u.section === section && docMatchesActiveSystem(u));
+  const getLegacyUploads = (section: string) =>
+    legacyUploads.filter(u => u.section === section && docMatchesActiveSystem(u));
 
   const buildInspectionName = (docTitle: string) => {
     const name = project.project_name || project.job_number || 'Project';
@@ -211,7 +242,8 @@ export default function HandoverPage() {
         sc_inspection_id: inspId,
         sc_template_id: selectedTemplateId,
         sc_inspection_name: inspName,
-      }, { onConflict: 'project_id,document_type' });
+        ...activeSystemFields,
+      }, { onConflict: 'project_id,document_type,system_type' });
 
       setModalMode(null);
       setActiveDoc(null);
@@ -234,7 +266,8 @@ export default function HandoverPage() {
         status: 'in_progress',
         sc_inspection_id: linkInspectionId.trim(),
         sc_inspection_name: inspName,
-      }, { onConflict: 'project_id,document_type' });
+        ...activeSystemFields,
+      }, { onConflict: 'project_id,document_type,system_type' });
       setModalMode(null);
       setActiveDoc(null);
       await load();
@@ -309,7 +342,8 @@ export default function HandoverPage() {
         status: 'uploaded' as DocStatus,
         file_name: file.name,
         file_url: publicUrl,
-      }, { onConflict: 'project_id,document_type' });
+        ...activeSystemFields,
+      }, { onConflict: 'project_id,document_type,system_type' });
     } else {
       // Legacy upload for NSI/RAMS
       const isMulti = UPLOAD_ONLY_DOCUMENTS.find(d => d.id === docId)?.multi;
@@ -318,7 +352,11 @@ export default function HandoverPage() {
         if (existing) await supabase.from('om_pack_uploads').delete().eq('id', existing.id);
       }
       await supabase.from('om_pack_uploads').insert({
-        project_id: pid, section: docId, file_name: file.name, file_url: publicUrl,
+        project_id: pid,
+        section: docId,
+        file_name: file.name,
+        file_url: publicUrl,
+        ...activeSystemFields,
       });
     }
 
@@ -399,6 +437,7 @@ export default function HandoverPage() {
         file_name,
         file_url,
         link_url,
+        ...activeSystemFields,
       });
 
       setShowOtherModal(false);
@@ -462,6 +501,33 @@ export default function HandoverPage() {
 
       {activeTab === 'documents' && (
         <>
+      {/* System / cost centre tabs */}
+      <div className="flex flex-wrap gap-1.5 bg-white rounded-xl border border-slate-200 shadow-sm px-4 py-3">
+        <button
+          onClick={() => setActiveSystemKey(PROJECT_WIDE_SYSTEM_KEY)}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+            activeSystemKey === PROJECT_WIDE_SYSTEM_KEY ? 'bg-cyan-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+          }`}
+        >
+          {PROJECT_WIDE_SYSTEM_LABEL}
+        </button>
+        {projectSystems.map(system => {
+          const Icon = getCategoryStyle(system.category).icon;
+          return (
+            <button
+              key={system.name}
+              onClick={() => setActiveSystemKey(system.name)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                activeSystemKey === system.name ? 'bg-cyan-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5 flex-shrink-0" />
+              {system.name}
+            </button>
+          );
+        })}
+      </div>
+
       {/* Header */}
       <div className="flex items-center justify-between bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
         <div>
@@ -661,7 +727,7 @@ export default function HandoverPage() {
           </button>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {otherDocs.map(doc => (
+            {otherDocs.filter(docMatchesActiveSystem).map(doc => (
               <div key={doc.id} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                 <div className="flex items-start gap-3 px-4 py-3 border-b border-slate-100 bg-slate-50">
                   <div className="w-8 h-8 rounded-lg bg-slate-200 flex items-center justify-center flex-shrink-0 mt-0.5">

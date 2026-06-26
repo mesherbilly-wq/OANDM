@@ -1,12 +1,15 @@
-import type { SystemType } from '../../types';
+import type { SystemCategory } from '../../types';
 
-/** How a system type was inferred for a line or parent system. */
-export type SystemTypeInferenceMethod =
+/** How a category was inferred for a line or parent system. */
+export type CategoryInferenceMethod =
   | 'source_label'
   | 'product_match'
   | 'keyword_rule'
   | 'user'
   | 'unresolved';
+
+/** @deprecated Use CategoryInferenceMethod */
+export type SystemTypeInferenceMethod = CategoryInferenceMethod;
 
 /**
  * One importable equipment line before it becomes a `devices` row.
@@ -24,8 +27,8 @@ export interface ImportEquipmentDraft {
   quantity: number;
   location: string | null;
   notes: string | null;
-  /** Per-line system override when a mixed section is split. */
-  systemType: SystemType | null;
+  /** Per-line category override when a mixed section is split. */
+  category: SystemCategory | null;
   matchedProductId: number | null;
   matched: boolean;
   /** Normalised 0–1 confidence from extraction or matching. */
@@ -41,13 +44,13 @@ export function createEquipmentDraft(
   partial: Omit<ImportEquipmentDraft, 'metadata'> & { metadata?: Record<string, unknown> },
 ): ImportEquipmentDraft {
   return {
-    metadata: {},
     matched: false,
     matchedProductId: null,
     confidence: null,
     selected: true,
     quantity: 1,
     ...partial,
+    category: partial.category ?? null,
     metadata: partial.metadata ?? {},
   };
 }

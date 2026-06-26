@@ -9,6 +9,7 @@ import {
 import { supabase } from '../lib/supabase';
 import type { SystemType } from '../types';
 import { getDevicePrefix } from '../lib/deviceLabel';
+import { ensureProjectSystem } from '../lib/projectSystemsDb';
 import { ImportSourceSelector } from '../components/ImportSourceSelector';
 import { SimproImportFlow } from '../components/simpro/SimproImportFlow';
 import type { ConnectorId } from '../integrations';
@@ -362,14 +363,24 @@ export function AIProjectBuilderPage() {
       // Expand devices: one record per unit
       const selectedDevices = project.devices.filter(d => d.selected);
       const MAX_PER_LINE = 200;
+      const systemIdByName = new Map<string, number>();
+      for (const name of [
+        ...new Set(selectedDevices.map(d => String(d.system_type).trim() || 'Unnamed System')),
+      ]) {
+        const systemId = await ensureProjectSystem(proj.id, name, null, 'ai');
+        systemIdByName.set(name, systemId);
+      }
+
       const deviceRows: any[] = [];
       for (const d of selectedDevices) {
+        const systemName = String(d.system_type).trim() || 'Unnamed System';
         const prefix = getDevicePrefix(d.system_type, d.device_type);
         const qty = Math.min(d.quantity, MAX_PER_LINE);
         for (let i = 0; i < qty; i++) {
           prefixCounters[prefix] = (prefixCounters[prefix] ?? 0) + 1;
           deviceRows.push({
             project_id: proj.id,
+            project_system_id: systemIdByName.get(systemName) ?? null,
             system_type: d.system_type as SystemType,
             device_type: d.device_type || null,
             device_name: `${prefix}-${String(prefixCounters[prefix]).padStart(3, '0')}`,

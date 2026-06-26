@@ -22,7 +22,10 @@ export type {
   ImportSourceMeta,
   SystemTypeInference,
   SystemTypeInferenceMethod,
+  CategoryInference,
+  CategoryInferenceMethod,
 } from './models';
+export type { SystemCategory } from '../types';
 
 export {
   createEquipmentDraft,
@@ -47,7 +50,17 @@ export {
   selectedSystems,
   selectedDeviceCount,
   resolvedSystemType,
+  resolvedCategory,
+  resolvedEquipmentSystemType,
+  resolvedEquipmentCategory,
+  hasSelectedEquipment,
+  equipmentLineSelectionSummary,
+  importSelectionSummary,
   createDraftId,
+  classifyImportReviewNote,
+  partitionImportReviewNotes,
+  getImportReviewBlockingIssues,
+  getImportReviewCreateConfirmationIssues,
 } from './core';
 
 export {
@@ -63,6 +76,23 @@ export {
   aiDrawingsConnector,
   manualConnector,
 } from './connectors';
+
+export type {
+  ProductMatchMethod,
+  EquipmentMatchResolution,
+  ProductMatchSuggestion,
+  EquipmentProductMatch,
+  ProductMatchSummary,
+  SavedEquipmentProductMatch,
+} from './core/productMatching';
+
+export {
+  matchEquipmentToProduct,
+  buildEquipmentProductMatches,
+  summarizeProductMatches,
+  applyProductMatchesToDraft,
+  savedMatchesFromEquipmentMatches,
+} from './core/productMatching';
 
 import { createIntegrationEngine } from './core/IntegrationEngine';
 import { createIntegrationCentreRegistry } from './connectors';

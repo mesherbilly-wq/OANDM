@@ -1,11 +1,16 @@
 export type {
   ImportEquipmentDraft,
+  CategoryInferenceMethod,
   SystemTypeInferenceMethod,
 } from './ImportEquipmentDraft';
 export { createEquipmentDraft } from './ImportEquipmentDraft';
 
-export type { ImportSystemDraft, SystemTypeInference } from './ImportSystemDraft';
-export { createSystemDraft } from './ImportSystemDraft';
+export type {
+  ImportSystemDraft,
+  CategoryInference,
+  SystemTypeInference,
+} from './ImportSystemDraft';
+export { createSystemDraft, resolvedSystemCategory } from './ImportSystemDraft';
 
 export type { ImportProjectDraft } from './ImportProjectDraft';
 export { createEmptyProjectDraft } from './ImportProjectDraft';

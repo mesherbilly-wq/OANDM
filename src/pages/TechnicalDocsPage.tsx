@@ -1,12 +1,14 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import type { SystemType } from '../types';
-import { SYSTEM_TYPES } from '../types';
+import {
+  loadDocumentProjectSystems,
+  mergeDocumentSystemNames,
+} from '../lib/documentProjectSystems';
+import { getCategoryStyle, type ProjectSystem } from '../lib/systems';
 import {
   Upload, Download, X, Check, Eye, EyeOff, Trash2, Settings2,
   GripVertical, CheckCircle, AlertCircle, Table2, FileText,
-  Camera, Lock, ShieldAlert, PhoneCall, ScanLine, Radar, Network,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
@@ -40,15 +42,10 @@ interface ExtractedTable {
 }
 
 type ModalState =
-  | { type: 'pdf_select'; system: SystemType; file: File; tables: ExtractedTable[] }
-  | { type: 'import'; system: SystemType; rawHeaders: string[]; previewRows: Record<string, string>[]; file: File }
-  | { type: 'columns'; system: SystemType }
+  | { type: 'pdf_select'; system: string; file: File; tables: ExtractedTable[] }
+  | { type: 'import'; system: string; rawHeaders: string[]; previewRows: Record<string, string>[]; file: File }
+  | { type: 'columns'; system: string }
   | null;
-
-const SYS_ICONS: Record<SystemType, React.ElementType> = {
-  'CCTV': Camera, 'Access Control': Lock, 'Intruder': ShieldAlert,
-  'Intercom': PhoneCall, 'ANPR': ScanLine, 'Perimeter Detection': Radar, 'Networking': Network,
-};
 
 // ── PDF table extraction ──────────────────────────────────────────────────────
 
@@ -265,8 +262,9 @@ export default function TechnicalDocsPage() {
   const { id } = useParams<{ id: string }>();
   const pid = id ? parseInt(id) : null;
 
-  const [activeSystem, setActiveSystem] = useState<SystemType>(SYSTEM_TYPES[0]);
-  const [systemState, setSystemState] = useState<Partial<Record<SystemType, SystemState>>>({});
+  const [projectSystems, setProjectSystems] = useState<ProjectSystem[]>([]);
+  const [activeSystem, setActiveSystem] = useState<string>('');
+  const [systemState, setSystemState] = useState<Record<string, SystemState>>({});
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<ModalState>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
@@ -286,24 +284,50 @@ export default function TechnicalDocsPage() {
   const [savingCols, setSavingCols] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const importSystemRef = useRef<SystemType>(SYSTEM_TYPES[0]);
+  const importSystemRef = useRef<string>('');
+
+  const activeSystemMeta = useMemo(
+    () => projectSystems.find(system => system.name === activeSystem) ?? null,
+    [projectSystems, activeSystem],
+  );
 
   // ── Load ────────────────────────────────────────────────────────────────────
 
   const load = useCallback(async () => {
     if (!pid) return;
     setLoading(true);
-    const [{ data: rowData }, { data: cfgData }] = await Promise.all([
+    const [{ data: rowData }, { data: cfgData }, { data: devData }] = await Promise.all([
       supabase.from('tech_doc_rows').select('*').eq('project_id', pid).order('system_type').order('row_index'),
       supabase.from('tech_doc_column_configs').select('*').eq('project_id', pid),
+      supabase.from('devices').select('id, project_id, system_type, system_category, project_system_id').eq('project_id', pid),
     ]);
-    const state: Partial<Record<SystemType, SystemState>> = {};
-    for (const sys of SYSTEM_TYPES) {
-      const rows = (rowData ?? []).filter((r: any) => r.system_type === sys) as TechDocRow[];
-      const cfg = (cfgData ?? []).find((c: any) => c.system_type === sys);
-      state[sys] = { rows, colConfig: (cfg?.columns as ColConfig[]) ?? [], configId: cfg?.id ?? null };
+
+    const devices = devData ?? [];
+    const baseSystems = await loadDocumentProjectSystems(pid, devices);
+    const extraNames = [
+      ...new Set([
+        ...(rowData ?? []).map((row: { system_type: string }) => row.system_type),
+        ...(cfgData ?? []).map((cfg: { system_type: string }) => cfg.system_type),
+      ].filter(Boolean)),
+    ] as string[];
+    const systems = mergeDocumentSystemNames(baseSystems, extraNames);
+    setProjectSystems(systems);
+
+    const state: Record<string, SystemState> = {};
+    for (const system of systems) {
+      const rows = (rowData ?? []).filter((row: { system_type: string }) => row.system_type === system.name) as TechDocRow[];
+      const cfg = (cfgData ?? []).find((c: { system_type: string }) => c.system_type === system.name);
+      state[system.name] = {
+        rows,
+        colConfig: (cfg?.columns as ColConfig[]) ?? [],
+        configId: cfg?.id ?? null,
+      };
     }
     setSystemState(state);
+    setActiveSystem(current => {
+      if (current && systems.some(system => system.name === current)) return current;
+      return systems[0]?.name ?? '';
+    });
     setLoading(false);
   }, [pid]);
 
@@ -446,7 +470,7 @@ export default function TechnicalDocsPage() {
 
   // ── Clear system ─────────────────────────────────────────────────────────────
 
-  const clearSystem = async (system: SystemType) => {
+  const clearSystem = async (system: string) => {
     if (!pid || !confirm(`Clear all imported data for ${system}?`)) return;
     await supabase.from('tech_doc_rows').delete().eq('project_id', pid).eq('system_type', system);
     setSystemState(prev => ({ ...prev, [system]: { ...prev[system]!, rows: [] } }));
@@ -454,7 +478,7 @@ export default function TechnicalDocsPage() {
 
   // ── Column config ────────────────────────────────────────────────────────────
 
-  const openColConfig = (system: SystemType) => {
+  const openColConfig = (system: string) => {
     setEditingColCfg([...( systemState[system]?.colConfig ?? [])]);
     setModal({ type: 'columns', system });
   };
@@ -480,7 +504,7 @@ export default function TechnicalDocsPage() {
 
   // ── Export CSV ────────────────────────────────────────────────────────────────
 
-  const exportCSV = (system: SystemType) => {
+  const exportCSV = (system: string) => {
     const state = systemState[system];
     if (!state || state.rows.length === 0) return;
     const cols = state.colConfig.filter(c => c.visible).sort((a, b) => a.order - b.order);
@@ -527,7 +551,7 @@ export default function TechnicalDocsPage() {
           </div>
           <div className="flex items-center gap-1.5 text-xs text-slate-500">
             <Table2 className="w-3.5 h-3.5" />
-            {SYSTEM_TYPES.filter(s => (systemState[s]?.rows.length ?? 0) > 0).length} systems with data
+            {projectSystems.filter(system => (systemState[system.name]?.rows.length ?? 0) > 0).length} systems with data
           </div>
         </div>
       </div>
@@ -555,19 +579,21 @@ export default function TechnicalDocsPage() {
 
       {/* System tabs */}
       <div className="flex flex-wrap gap-1.5 bg-white rounded-xl border border-slate-200 shadow-sm px-4 py-3">
-        {SYSTEM_TYPES.map(s => {
-          const Icon = SYS_ICONS[s];
-          const count = systemState[s]?.rows.length ?? 0;
+        {projectSystems.length === 0 ? (
+          <p className="text-sm text-slate-500 py-1">No systems yet — import devices or create systems first.</p>
+        ) : projectSystems.map(system => {
+          const Icon = getCategoryStyle(system.category).icon;
+          const count = systemState[system.name]?.rows.length ?? 0;
           return (
-            <button key={s} onClick={() => setActiveSystem(s)}
+            <button key={system.name} onClick={() => setActiveSystem(system.name)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                activeSystem === s ? 'bg-cyan-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                activeSystem === system.name ? 'bg-cyan-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >
               <Icon className="w-3.5 h-3.5 flex-shrink-0" />
-              {s}
+              {system.name}
               {count > 0 && (
-                <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${activeSystem === s ? 'bg-cyan-500 text-white' : 'bg-slate-300 text-slate-700'}`}>
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${activeSystem === system.name ? 'bg-cyan-500 text-white' : 'bg-slate-300 text-slate-700'}`}>
                   {count}
                 </span>
               )}
@@ -576,12 +602,12 @@ export default function TechnicalDocsPage() {
         })}
       </div>
 
-      {/* System panel */}
+      {activeSystem && (
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         {/* Toolbar */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100 bg-slate-50">
           <div className="flex items-center gap-2">
-            {React.createElement(SYS_ICONS[activeSystem], { className: 'w-4 h-4 text-slate-600' })}
+            {React.createElement(getCategoryStyle(activeSystemMeta?.category ?? null).icon, { className: 'w-4 h-4 text-slate-600' })}
             <span className="text-sm font-semibold text-slate-800">{activeSystem}</span>
             {hasData && (
               <span className="text-xs text-slate-500">{current!.rows.length} rows · {visibleCols.length} columns shown</span>
@@ -696,6 +722,7 @@ export default function TechnicalDocsPage() {
           </div>
         )}
       </div>
+      )}
 
       {/* ── PDF Table Selector Modal ──────────────────────────────────────────── */}
       {modal?.type === 'pdf_select' && (

@@ -1,8 +1,9 @@
-import type { ImportReviewDraft, ImportReviewIssue, ImportSystemDraft } from '../integrations';
+import type { ImportReviewDraft, ImportReviewIssue } from '../integrations';
 import type { ImportEquipmentDraft } from '../integrations/models/ImportEquipmentDraft';
 import {
   getImportReviewBlockingIssues,
   getImportReviewCreateConfirmationIssues,
+  resolvedCategory,
   resolvedEquipmentCategory,
 } from '../integrations';
 
@@ -10,6 +11,10 @@ import { clampLineQuantity } from './devicePersistConstants';
 import { IMPORT_LINE_NOTE_TAG } from './deviceGrouping';
 import { buildPrefixCounters } from './deviceProjectEdits';
 import { getDevicePrefix } from './deviceLabel';
+import {
+  buildPersistSystemNameMap,
+  insertProjectSystemsFromSimproDraft,
+} from './projectSystemsDb';
 import { supabase } from './supabase';
 
 const DEVICE_INSERT_BATCH = 100;
@@ -27,41 +32,6 @@ export function getSimproImportBlockingIssues(draft: ImportReviewDraft): ImportR
 function nullIfEmpty(value: string | null | undefined): string | null {
   const text = value?.trim();
   return text || null;
-}
-
-/** Ensure each selected cost centre gets a distinct persisted system name. */
-function buildPersistSystemNameMap(systems: ImportSystemDraft[]): Map<string, string> {
-  const selected = systems.filter(system => system.selected);
-  const baseNameCounts = new Map<string, number>();
-
-  for (const system of selected) {
-    const base = system.name.trim() || 'Unnamed System';
-    baseNameCounts.set(base, (baseNameCounts.get(base) ?? 0) + 1);
-  }
-
-  const persistNames = new Map<string, string>();
-  const usedNames = new Set<string>();
-
-  for (const system of selected) {
-    let name = system.name.trim() || 'Unnamed System';
-
-    if ((baseNameCounts.get(name) ?? 0) > 1) {
-      const refSuffix = system.sourceSectionRef?.split(':').filter(Boolean).pop();
-      name = refSuffix ? `${name} — ${refSuffix}` : `${name} — ${system.draftId.slice(-6)}`;
-    }
-
-    let uniqueName = name;
-    let suffix = 2;
-    while (usedNames.has(uniqueName)) {
-      uniqueName = `${name} (${suffix})`;
-      suffix += 1;
-    }
-
-    usedNames.add(uniqueName);
-    persistNames.set(system.draftId, uniqueName);
-  }
-
-  return persistNames;
 }
 
 /** Tag each expanded row with its Import Review equipment draft id for stable grouped counts. */
@@ -129,12 +99,20 @@ function buildDeviceRows(
   draft: ImportReviewDraft,
   projectId: number,
   prefixCounters: Record<string, number>,
+  persistSystemNames: Map<string, string>,
+  systemIdByDraftId: Map<string, number>,
 ): Record<string, unknown>[] {
   const rows: Record<string, unknown>[] = [];
-  const persistSystemNames = buildPersistSystemNameMap(draft.systems);
 
   for (const system of draft.systems) {
     if (!system.selected) continue;
+
+    const systemCategory = resolvedCategory(system);
+    const systemName =
+      persistSystemNames.get(system.draftId) ??
+      nullIfEmpty(system.name) ??
+      'Unnamed System';
+    const projectSystemId = systemIdByDraftId.get(system.draftId) ?? null;
 
     for (const item of system.equipment) {
       if (!item.selected) continue;
@@ -148,7 +126,9 @@ function buildDeviceRows(
         prefixCounters[prefix] = (prefixCounters[prefix] ?? 0) + 1;
         rows.push({
           project_id: projectId,
-          system_type: persistSystemNames.get(system.draftId) ?? nullIfEmpty(system.name) ?? 'Unnamed System',
+          project_system_id: projectSystemId,
+          system_type: systemName,
+          system_category: systemCategory,
           device_type: deviceType,
           device_name: `${prefix}-${String(prefixCounters[prefix]).padStart(3, '0')}`,
           manufacturer: nullIfEmpty(item.manufacturer),
@@ -217,7 +197,18 @@ export async function persistSimproImportReviewDraft(
 
   const prefixCounters = buildPrefixCounters(existingDevices ?? []);
   const persistSystemNames = buildPersistSystemNameMap(draft.systems);
-  const deviceRows = buildDeviceRows(draft, project.id, prefixCounters);
+  const systemIdByDraftId = await insertProjectSystemsFromSimproDraft(
+    draft,
+    project.id,
+    persistSystemNames,
+  );
+  const deviceRows = buildDeviceRows(
+    draft,
+    project.id,
+    prefixCounters,
+    persistSystemNames,
+    systemIdByDraftId,
+  );
 
   const quantityAudit = buildPersistQuantityAudit(draft, deviceRows, persistSystemNames);
   if (import.meta.env.DEV) {

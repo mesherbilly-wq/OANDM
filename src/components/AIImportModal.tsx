@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import type { SystemType } from '../types';
 import { getDevicePrefix } from '../lib/deviceLabel';
+import { ensureProjectSystem } from '../lib/projectSystemsDb';
 
 interface ExtractedDevice {
   system_type: string;
@@ -156,13 +157,21 @@ export function AIImportModal({
       }
     }
 
+    const systemIdByName = new Map<string, number>();
+    for (const name of [...new Set(toImport.map(d => d.system_type.trim() || 'Unnamed System'))]) {
+      const systemId = await ensureProjectSystem(projectId, name, null, 'ai');
+      systemIdByName.set(name, systemId);
+    }
+
     const rows: object[] = [];
     for (const d of toImport) {
+      const systemName = d.system_type.trim() || 'Unnamed System';
       const prefix = getDevicePrefix(d.system_type, d.device_type);
       for (let i = 0; i < d.importQty; i++) {
         prefixCounters[prefix] = (prefixCounters[prefix] ?? 0) + 1;
         rows.push({
           project_id: projectId,
+          project_system_id: systemIdByName.get(systemName) ?? null,
           system_type: d.system_type,
           device_type: d.device_type,
           manufacturer: d.manufacturer,

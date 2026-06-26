@@ -1,37 +1,56 @@
 import React, { useMemo, useState } from 'react';
-import { Link, Navigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
 import {
-  AlertCircle, ArrowLeft, Building, ChevronDown, FolderOpen, Info, MapPin, Tag, User,
+  AlertCircle, ArrowLeft, Building, ChevronDown, FolderOpen, Loader2, MapPin, Tag, User,
 } from 'lucide-react';
 import {
-  resolvedSystemType,
-  selectedDeviceCount,
+  getImportReviewBlockingIssues,
+  getImportReviewCreateConfirmationIssues,
+  importSelectionSummary,
+  partitionImportReviewNotes,
+  resolvedEquipmentCategory,
+  resolvedCategory,
   type ImportReviewDraft,
 } from '../integrations';
 import { pickRawDescriptionHtml } from '../integrations/connectors/simpro/simproImportHelpers';
-import { getSimproImportSession } from '../lib/simproImportSession';
-import type { SystemType } from '../types';
+import {
+  clearSimproImportSession,
+  getSimproImportSession,
+  updateSimproImportSession,
+} from '../lib/simproImportSession';
+import { MAX_DEVICES_PER_LINE } from '../lib/devicePersistConstants';
+import { persistSimproImportReviewDraft } from '../lib/persistSimproImportDraft';
+import { SYSTEM_CATEGORIES } from '../lib/systems';
+import type { SystemCategory } from '../types';
 
-type ReviewTab = 'project' | 'systems' | 'issues' | 'debug';
+type ReviewTab = 'project' | 'systems' | 'notes' | 'debug';
 
-const SYSTEM_TYPE_BADGE: Record<SystemType, string> = {
-  'CCTV': 'bg-blue-100 text-blue-800 border-blue-200',
-  'Access Control': 'bg-emerald-100 text-emerald-800 border-emerald-200',
-  'Intruder': 'bg-red-100 text-red-800 border-red-200',
-  'Intercom': 'bg-amber-100 text-amber-800 border-amber-200',
-  'ANPR': 'bg-violet-100 text-violet-800 border-violet-200',
-  'Perimeter Detection': 'bg-orange-100 text-orange-800 border-orange-200',
-  'Networking': 'bg-slate-100 text-slate-700 border-slate-200',
-};
+type EditableEquipmentField =
+  | 'deviceType'
+  | 'modelName'
+  | 'manufacturer'
+  | 'modelNumber'
+  | 'location'
+  | 'notes'
+  | 'quantity'
+  | 'category';
 
 function displayValue(value: string | null | undefined): string {
   return value?.trim() ? value : '—';
 }
 
-function severityStyle(severity: ImportReviewDraft['issues'][number]['severity']): string {
-  if (severity === 'error') return 'border-red-200 bg-red-50 text-red-800';
-  if (severity === 'warning') return 'border-amber-200 bg-amber-50 text-amber-800';
-  return 'border-slate-200 bg-slate-50 text-slate-700';
+function normalizeQuantity(value: string): number {
+  const parsed = parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return 1;
+  return Math.min(parsed, MAX_DEVICES_PER_LINE);
+}
+
+function cellInputClass(disabled: boolean): string {
+  return `w-full min-w-[7rem] rounded-lg border px-2 py-1.5 text-sm ${
+    disabled
+      ? 'border-slate-100 bg-slate-50 text-slate-400 cursor-not-allowed'
+      : 'border-slate-200 bg-white text-slate-800 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500'
+  }`;
 }
 
 function ReadOnlyField({ label, value, icon: Icon }: {
@@ -66,40 +85,235 @@ function ReadOnlyMultilineField({ label, value }: {
   );
 }
 
-function SystemTypeBadge({ systemType, confidence }: { systemType: SystemType | null; confidence: number }) {
-  if (!systemType) {
-    return (
-      <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600">
-        System type unresolved
-      </span>
-    );
-  }
+function CategorySelect({
+  value,
+  onChange,
+  disabled,
+  allowDefault = false,
+  className = '',
+}: {
+  value: SystemCategory | null;
+  onChange: (value: SystemCategory | null) => void;
+  disabled?: boolean;
+  allowDefault?: boolean;
+  className?: string;
+}) {
+  return (
+    <select
+      value={value ?? ''}
+      disabled={disabled}
+      onChange={event => onChange(event.target.value ? (event.target.value as SystemCategory) : null)}
+      className={`${cellInputClass(Boolean(disabled))} ${className}`}
+    >
+      {allowDefault && <option value="">Use system default</option>}
+      {!allowDefault && !value && <option value="">Select category</option>}
+      {SYSTEM_CATEGORIES.map(category => (
+        <option key={category} value={category}>{category}</option>
+      ))}
+    </select>
+  );
+}
+
+function SelectionSummary({ draft }: { draft: ImportReviewDraft }) {
+  const summary = importSelectionSummary(draft);
+  return (
+    <p className="text-cyan-800/90 mt-0.5">
+      Job {displayValue(draft.project.jobNumber)} · Simpro ID {displayValue(draft.project.projectNumber)} ·{' '}
+      {summary.selectedSystems} of {summary.totalSystems} system{summary.totalSystems !== 1 ? 's' : ''} ·{' '}
+      {summary.selectedLines} of {summary.totalLines} equipment line{summary.totalLines !== 1 ? 's' : ''} ·{' '}
+      {summary.deviceUnits} device unit{summary.deviceUnits !== 1 ? 's' : ''}
+    </p>
+  );
+}
+
+function NoteSection({
+  title,
+  description,
+  issues,
+  emptyMessage,
+  tone,
+}: {
+  title: string;
+  description: string;
+  issues: ImportReviewDraft['issues'];
+  emptyMessage: string;
+  tone: 'info' | 'warning' | 'blocking';
+}) {
+  const toneClass =
+    tone === 'blocking'
+      ? 'border-red-200 bg-red-50 text-red-900'
+      : tone === 'warning'
+        ? 'border-amber-200 bg-amber-50 text-amber-900'
+        : 'border-slate-200 bg-slate-50 text-slate-700';
 
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium ${SYSTEM_TYPE_BADGE[systemType]}`}>
-      {systemType}
-      {confidence > 0 ? (
-        <span className="opacity-70">· {Math.round(confidence * 100)}%</span>
-      ) : null}
-    </span>
+    <section className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+      <div className="px-5 py-4 border-b border-slate-100 bg-slate-50">
+        <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
+        <p className="text-xs text-slate-500 mt-0.5">{description}</p>
+      </div>
+      <div className="p-4 space-y-2">
+        {issues.length === 0 ? (
+          <p className="text-sm text-slate-500">{emptyMessage}</p>
+        ) : (
+          issues.map(issue => (
+            <div
+              key={`${tone}-${issue.code}-${issue.message}-${issue.draftId ?? ''}`}
+              className={`rounded-xl border px-4 py-3 text-sm ${toneClass}`}
+            >
+              <p>{issue.message}</p>
+              {issue.draftId && (
+                <p className="mt-1 text-xs opacity-75 font-mono">ref: {issue.draftId}</p>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </section>
   );
 }
 
 export function ImportReviewPage() {
-  const session = useMemo(() => getSimproImportSession(), []);
+  const navigate = useNavigate();
+  const initialSession = useMemo(() => getSimproImportSession(), []);
+  const [session, setSession] = useState(initialSession);
   const [tab, setTab] = useState<ReviewTab>('project');
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   if (!session) {
     return <Navigate to="/create-project" replace />;
   }
 
   const { draft, rawJob } = session;
-  const deviceCount = selectedDeviceCount(draft);
+  const summary = importSelectionSummary(draft);
+  const noteSections = partitionImportReviewNotes(draft);
+  const blockingIssues = getImportReviewBlockingIssues(draft);
+  const confirmationIssues = getImportReviewCreateConfirmationIssues(draft);
   const rawJobRecord = rawJob && typeof rawJob === 'object' ? (rawJob as Record<string, unknown>) : null;
   const originalDescriptionHtml = rawJobRecord ? pickRawDescriptionHtml(rawJobRecord) : null;
+  const noteCount = noteSections.info.length + noteSections.warnings.length + blockingIssues.length;
+
+  const updateDraft = (updater: (current: ImportReviewDraft) => ImportReviewDraft) => {
+    updateSimproImportSession(current => {
+      const next = { ...current, draft: updater(current.draft) };
+      setSession(next);
+      return next;
+    });
+  };
+
+  const toggleSystemSelected = (systemDraftId: string, selected: boolean) => {
+    updateDraft(current => ({
+      ...current,
+      systems: current.systems.map(system =>
+        system.draftId === systemDraftId ? { ...system, selected } : system,
+      ),
+    }));
+  };
+
+  const updateSystemName = (systemDraftId: string, name: string) => {
+    updateDraft(current => ({
+      ...current,
+      systems: current.systems.map(system =>
+        system.draftId === systemDraftId ? { ...system, name: name.trim() || system.name } : system,
+      ),
+    }));
+  };
+
+  const updateSystemCategory = (systemDraftId: string, category: SystemCategory | null) => {
+    updateDraft(current => ({
+      ...current,
+      systems: current.systems.map(system =>
+        system.draftId === systemDraftId
+          ? {
+              ...system,
+              category: {
+                ...system.category,
+                confirmedCategory: category,
+                method: category ? 'user' : system.category.method,
+              },
+            }
+          : system,
+      ),
+    }));
+  };
+
+  const toggleEquipmentSelected = (systemDraftId: string, equipmentDraftId: string, selected: boolean) => {
+    updateDraft(current => ({
+      ...current,
+      systems: current.systems.map(system =>
+        system.draftId === systemDraftId
+          ? {
+              ...system,
+              equipment: system.equipment.map(item =>
+                item.draftId === equipmentDraftId ? { ...item, selected } : item,
+              ),
+            }
+          : system,
+      ),
+    }));
+  };
+
+  const updateEquipmentField = (
+    systemDraftId: string,
+    equipmentDraftId: string,
+    field: EditableEquipmentField,
+    value: string,
+  ) => {
+    updateDraft(current => ({
+      ...current,
+      systems: current.systems.map(system => {
+        if (system.draftId !== systemDraftId) return system;
+        return {
+          ...system,
+          equipment: system.equipment.map(item => {
+            if (item.draftId !== equipmentDraftId) return item;
+            if (field === 'quantity') {
+              return { ...item, quantity: normalizeQuantity(value) };
+            }
+            if (field === 'category') {
+              return { ...item, category: value ? (value as SystemCategory) : null };
+            }
+            return { ...item, [field]: value || null };
+          }),
+        };
+      }),
+    }));
+  };
+
+  const handleCreateProject = async () => {
+    setCreateError(null);
+
+    if (blockingIssues.length > 0) {
+      setTab('notes');
+      return;
+    }
+
+    if (confirmationIssues.length > 0) {
+      const summaryText = confirmationIssues.map(issue => issue.message).join('\n');
+      const proceed = window.confirm(
+        `Please review these items before creating the project:\n\n${summaryText}\n\nCreate the OANDM project anyway?`,
+      );
+      if (!proceed) return;
+    }
+
+    setCreating(true);
+    try {
+      const latestSession = getSimproImportSession();
+      if (!latestSession) {
+        throw new Error('Import session expired. Please run the Simpro import again.');
+      }
+      const { projectId } = await persistSimproImportReviewDraft(latestSession.draft);
+      clearSimproImportSession();
+      navigate(`/projects/${projectId}`);
+    } catch (error: unknown) {
+      setCreateError(error instanceof Error ? error.message : 'Failed to create project.');
+      setCreating(false);
+    }
+  };
 
   return (
-    <div className="max-w-6xl mx-auto">
+    <div className="max-w-7xl mx-auto">
       <div className="mb-8">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -110,7 +324,7 @@ export function ImportReviewPage() {
               <div>
                 <h1 className="text-2xl font-bold text-slate-900">Import Review</h1>
                 <p className="text-sm text-slate-500">
-                  Read-only preview from Simpro · nothing is saved to OANDM yet
+                  Edit equipment, adjust selections, then create the OANDM project
                 </p>
               </div>
             </div>
@@ -127,18 +341,14 @@ export function ImportReviewPage() {
 
       <div className="mb-5 rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm text-cyan-900">
         <p className="font-semibold">Simpro import draft (session only)</p>
-        <p className="text-cyan-800/90 mt-0.5">
-          Job {displayValue(draft.project.jobNumber)} · Simpro ID {displayValue(draft.project.projectNumber)} ·{' '}
-          {draft.systems.length} cost centre{draft.systems.length !== 1 ? 's' : ''} · {deviceCount} equipment line
-          {deviceCount !== 1 ? 's' : ''}
-        </p>
+        <SelectionSummary draft={draft} />
       </div>
 
       <div className="flex flex-wrap gap-1 bg-slate-100 p-1 rounded-xl w-fit mb-5">
         {([
           ['project', 'Project'],
           ['systems', 'Systems & Equipment'],
-          ['issues', `Issues (${draft.issues.length})`],
+          ['notes', `Import Notes (${noteCount})`],
           ['debug', 'Debug JSON'],
         ] as const).map(([id, label]) => (
           <button
@@ -181,68 +391,228 @@ export function ImportReviewPage() {
 
       {tab === 'systems' && (
         <div className="space-y-4">
+          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+            {summary.selectedSystems} of {summary.totalSystems} systems ·{' '}
+            {summary.selectedLines} of {summary.totalLines} equipment lines ·{' '}
+            {summary.deviceUnits} device units selected.
+            Edits and deselections are saved in this browser session only.
+          </div>
           {draft.systems.length === 0 ? (
             <p className="text-sm text-slate-500 rounded-xl border border-slate-200 bg-white px-4 py-6 text-center">
               No systems were normalised from this job.
             </p>
           ) : (
             draft.systems.map((system, index) => {
-              const systemType = resolvedSystemType(system);
+              const selectedInSystem = system.equipment.filter(item => item.selected).length;
+              const rowDisabled = !system.selected;
+
               return (
                 <details key={system.draftId} open={index === 0} className="bg-white border border-slate-200 rounded-2xl overflow-hidden group">
                   <summary className="px-5 py-4 border-b border-slate-100 bg-slate-50 flex flex-wrap items-center justify-between gap-3 cursor-pointer select-none list-none">
                     <div className="flex items-start gap-3 min-w-0">
-                      <ChevronDown className="w-4 h-4 text-slate-400 mt-0.5 flex-shrink-0 transition-transform group-open:rotate-180" />
-                      <div className="min-w-0">
-                        <h3 className="text-sm font-semibold text-slate-800">{system.name}</h3>
-                        {system.description && (
-                          <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">{system.description}</p>
-                        )}
-                        {system.sourceSectionRef && (
-                          <p className="text-[11px] text-slate-400 mt-1 font-mono">Ref {system.sourceSectionRef}</p>
-                        )}
-                      </div>
+                      <label
+                        className="flex items-start gap-3 min-w-0 cursor-pointer"
+                        onClick={event => event.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={system.selected}
+                          onChange={event => toggleSystemSelected(system.draftId, event.target.checked)}
+                          className="mt-1 h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <input
+                            type="text"
+                            value={system.name}
+                            disabled={!system.selected}
+                            onClick={event => event.stopPropagation()}
+                            onChange={event => updateSystemName(system.draftId, event.target.value)}
+                            className={`w-full rounded-lg border px-2 py-1 text-sm font-semibold ${
+                              system.selected
+                                ? 'border-slate-200 bg-white text-slate-800'
+                                : 'border-slate-100 bg-slate-50 text-slate-500'
+                            }`}
+                          />
+                          {system.description && (
+                            <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">{system.description}</p>
+                          )}
+                          {system.sourceSectionRef && (
+                            <p className="text-[11px] text-slate-400 mt-1 font-mono">Ref {system.sourceSectionRef}</p>
+                          )}
+                        </div>
+                      </label>
+                      <ChevronDown className="w-4 h-4 text-slate-400 mt-1 flex-shrink-0 transition-transform group-open:rotate-180" />
                     </div>
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                      <SystemTypeBadge systemType={systemType} confidence={system.inference.confidence} />
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                      <div className="min-w-[12rem]" onClick={event => event.stopPropagation()}>
+                        <CategorySelect
+                          value={resolvedCategory(system)}
+                          onChange={value => updateSystemCategory(system.draftId, value)}
+                          disabled={rowDisabled}
+                          className="text-xs"
+                        />
+                      </div>
                       <span className="inline-flex items-center gap-1">
                         <Tag className="w-3.5 h-3.5" />
-                        {system.equipment.length} line{system.equipment.length !== 1 ? 's' : ''}
+                        {selectedInSystem} of {system.equipment.length} line{system.equipment.length !== 1 ? 's' : ''} selected
                       </span>
                     </div>
                   </summary>
-                  {system.equipment.length === 0 ? (
+                  {!system.selected ? (
+                    <p className="px-5 py-4 text-sm text-slate-500">This cost centre is deselected and will not be imported.</p>
+                  ) : system.equipment.length === 0 ? (
                     <p className="px-5 py-4 text-sm text-slate-500">No equipment lines for this cost centre.</p>
                   ) : (
                     <div className="overflow-x-auto">
-                      <table className="w-full text-sm text-left">
+                      <table className="w-full text-sm text-left min-w-[1100px]">
                         <thead className="bg-white border-b border-slate-100 text-slate-500">
                           <tr>
-                            <th className="px-4 py-2.5 font-semibold">Description</th>
-                            <th className="px-4 py-2.5 font-semibold">Type</th>
-                            <th className="px-4 py-2.5 font-semibold">Manufacturer</th>
-                            <th className="px-4 py-2.5 font-semibold">Model / Part No</th>
-                            <th className="px-4 py-2.5 font-semibold">Qty</th>
-                            <th className="px-4 py-2.5 font-semibold">Item group</th>
-                            <th className="px-4 py-2.5 font-semibold">Source ref</th>
+                            <th className="px-3 py-2.5 font-semibold w-12">Import</th>
+                            <th className="px-3 py-2.5 font-semibold min-w-[9rem]">Category</th>
+                            <th className="px-3 py-2.5 font-semibold min-w-[10rem]">Description</th>
+                            <th className="px-3 py-2.5 font-semibold min-w-[9rem]">Device type</th>
+                            <th className="px-3 py-2.5 font-semibold min-w-[8rem]">Manufacturer</th>
+                            <th className="px-3 py-2.5 font-semibold min-w-[8rem]">Model / Part No</th>
+                            <th className="px-3 py-2.5 font-semibold w-20">Qty</th>
+                            <th className="px-3 py-2.5 font-semibold min-w-[8rem]">Location</th>
+                            <th className="px-3 py-2.5 font-semibold min-w-[8rem]">Notes</th>
+                            <th className="px-3 py-2.5 font-semibold min-w-[6rem]">Source ref</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {system.equipment.map(item => (
-                            <tr key={item.draftId} className="align-top">
-                              <td className="px-4 py-2.5 text-slate-800 max-w-xs whitespace-pre-wrap">
-                                {displayValue(item.modelName ?? item.deviceType)}
-                              </td>
-                              <td className="px-4 py-2.5 text-slate-700">{displayValue(item.deviceType)}</td>
-                              <td className="px-4 py-2.5 text-slate-700">{displayValue(item.manufacturer)}</td>
-                              <td className="px-4 py-2.5 text-slate-700 font-mono text-xs">
-                                {displayValue(item.modelNumber)}
-                              </td>
-                              <td className="px-4 py-2.5 text-slate-700">{item.quantity}</td>
-                              <td className="px-4 py-2.5 text-slate-500 text-xs">{displayValue(item.notes)}</td>
-                              <td className="px-4 py-2.5 text-slate-500 font-mono text-xs">{displayValue(item.sourceLineRef)}</td>
-                            </tr>
-                          ))}
+                          {system.equipment.map(item => {
+                            const lineDisabled = rowDisabled || !item.selected;
+                            const lineCategory = resolvedEquipmentCategory(system, item);
+                            const simproItemGroup =
+                              typeof item.metadata?.simproItemGroup === 'string'
+                                ? item.metadata.simproItemGroup
+                                : null;
+
+                            return (
+                              <tr
+                                key={item.draftId}
+                                className={`align-top ${!item.selected || rowDisabled ? 'bg-slate-50/80' : ''}`}
+                              >
+                                <td className="px-3 py-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={item.selected}
+                                    disabled={rowDisabled}
+                                    onChange={event =>
+                                      toggleEquipmentSelected(system.draftId, item.draftId, event.target.checked)
+                                    }
+                                    className="h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500 disabled:opacity-50"
+                                  />
+                                </td>
+                                <td className="px-3 py-2">
+                                  <CategorySelect
+                                    value={item.category}
+                                    onChange={value =>
+                                      updateEquipmentField(
+                                        system.draftId,
+                                        item.draftId,
+                                        'category',
+                                        value ?? '',
+                                      )
+                                    }
+                                    disabled={lineDisabled}
+                                    allowDefault
+                                  />
+                                  {!item.category && lineCategory ? (
+                                    <p className="mt-1 text-[11px] text-slate-400">Default: {lineCategory}</p>
+                                  ) : null}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <input
+                                    type="text"
+                                    value={item.modelName ?? ''}
+                                    disabled={lineDisabled}
+                                    onChange={event =>
+                                      updateEquipmentField(system.draftId, item.draftId, 'modelName', event.target.value)
+                                    }
+                                    className={cellInputClass(lineDisabled)}
+                                    placeholder="Description"
+                                  />
+                                </td>
+                                <td className="px-3 py-2">
+                                  <input
+                                    type="text"
+                                    value={item.deviceType ?? ''}
+                                    disabled={lineDisabled}
+                                    onChange={event =>
+                                      updateEquipmentField(system.draftId, item.draftId, 'deviceType', event.target.value)
+                                    }
+                                    className={cellInputClass(lineDisabled)}
+                                    placeholder="Device type"
+                                  />
+                                </td>
+                                <td className="px-3 py-2">
+                                  <input
+                                    type="text"
+                                    value={item.manufacturer ?? ''}
+                                    disabled={lineDisabled}
+                                    onChange={event =>
+                                      updateEquipmentField(system.draftId, item.draftId, 'manufacturer', event.target.value)
+                                    }
+                                    className={cellInputClass(lineDisabled)}
+                                    placeholder="Manufacturer"
+                                  />
+                                </td>
+                                <td className="px-3 py-2">
+                                  <input
+                                    type="text"
+                                    value={item.modelNumber ?? ''}
+                                    disabled={lineDisabled}
+                                    onChange={event =>
+                                      updateEquipmentField(system.draftId, item.draftId, 'modelNumber', event.target.value)
+                                    }
+                                    className={cellInputClass(lineDisabled)}
+                                    placeholder="Model / part no"
+                                  />
+                                </td>
+                                <td className="px-3 py-2">
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={MAX_DEVICES_PER_LINE}
+                                    value={item.quantity}
+                                    disabled={lineDisabled}
+                                    onChange={event =>
+                                      updateEquipmentField(system.draftId, item.draftId, 'quantity', event.target.value)
+                                    }
+                                    className={`${cellInputClass(lineDisabled)} w-20`}
+                                  />
+                                </td>
+                                <td className="px-3 py-2">
+                                  <input
+                                    type="text"
+                                    value={item.location ?? ''}
+                                    disabled={lineDisabled}
+                                    onChange={event =>
+                                      updateEquipmentField(system.draftId, item.draftId, 'location', event.target.value)
+                                    }
+                                    className={cellInputClass(lineDisabled)}
+                                    placeholder="Location"
+                                  />
+                                </td>
+                                <td className="px-3 py-2">
+                                  <input
+                                    type="text"
+                                    value={item.notes ?? ''}
+                                    disabled={lineDisabled}
+                                    onChange={event =>
+                                      updateEquipmentField(system.draftId, item.draftId, 'notes', event.target.value)
+                                    }
+                                    className={cellInputClass(lineDisabled)}
+                                    placeholder={simproItemGroup ? `Simpro: ${simproItemGroup}` : 'Notes'}
+                                  />
+                                </td>
+                                <td className="px-3 py-2 text-slate-500 font-mono text-xs">
+                                  {displayValue(item.sourceLineRef)}
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -254,27 +624,29 @@ export function ImportReviewPage() {
         </div>
       )}
 
-      {tab === 'issues' && (
-        <div className="space-y-3">
-          {draft.issues.length === 0 ? (
-            <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-              <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
-              No normalisation issues recorded for this draft.
-            </div>
-          ) : (
-            draft.issues.map(issue => (
-              <div
-                key={`${issue.code}-${issue.message}-${issue.draftId ?? ''}`}
-                className={`rounded-xl border px-4 py-3 text-sm ${severityStyle(issue.severity)}`}
-              >
-                <p className="font-semibold">{issue.code}</p>
-                <p className="mt-0.5">{issue.message}</p>
-                {issue.draftId && (
-                  <p className="mt-1 text-xs opacity-80 font-mono">ref: {issue.draftId}</p>
-                )}
-              </div>
-            ))
-          )}
+      {tab === 'notes' && (
+        <div className="space-y-4">
+          <NoteSection
+            title="Info"
+            description="Expected exclusions and normal import behaviour — labour, freight, contingency, and similar lines."
+            issues={noteSections.info}
+            emptyMessage="No informational notes for this import."
+            tone="info"
+          />
+          <NoteSection
+            title="Warnings"
+            description="Review before creating — missing manufacturer, model, or category on selected equipment."
+            issues={noteSections.warnings}
+            emptyMessage="No warnings for this import."
+            tone="warning"
+          />
+          <NoteSection
+            title="Blocking Issues"
+            description="These must be resolved before you can create the project."
+            issues={blockingIssues}
+            emptyMessage="Nothing is blocking project creation."
+            tone="blocking"
+          />
         </div>
       )}
 
@@ -311,23 +683,47 @@ export function ImportReviewPage() {
           </details>
           <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-            Debug data is kept in sessionStorage only for this browser tab session. Scope of Works in the review uses plain text; original HTML is preserved here only.
+            Debug data is kept in sessionStorage only for this browser tab session.
           </div>
         </div>
       )}
 
-      <div className="mt-8 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4">
-        <p className="text-sm text-slate-600">
-          Import draft is kept in this browser session only. Project creation arrives in the next phase.
-        </p>
-        <button
-          type="button"
-          disabled
-          title="Project creation is disabled until the next phase"
-          className="inline-flex items-center gap-2 rounded-xl bg-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-500 cursor-not-allowed"
-        >
-          Create Project (Phase 11)
-        </button>
+      <div className="mt-8 space-y-3">
+        {createError && (
+          <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            {createError}
+          </div>
+        )}
+        {blockingIssues.length > 0 && (
+          <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            Resolve {blockingIssues.length} blocking issue{blockingIssues.length !== 1 ? 's' : ''} in Import Notes before creating the project.
+          </div>
+        )}
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4">
+          <div className="text-sm text-slate-600 space-y-1">
+            <p>
+              {summary.selectedSystems} of {summary.totalSystems} systems ·{' '}
+              {summary.selectedLines} of {summary.totalLines} equipment lines ·{' '}
+              {summary.deviceUnits} device units will be created as pending review.
+            </p>
+            {confirmationIssues.length > 0 && blockingIssues.length === 0 && (
+              <p className="text-amber-700">
+                {confirmationIssues.length} item{confirmationIssues.length !== 1 ? 's' : ''} may need review before creating.
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={handleCreateProject}
+            disabled={creating || blockingIssues.length > 0}
+            className="inline-flex items-center gap-2 rounded-xl bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-cyan-700 disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+            {creating ? 'Creating project…' : 'Create Project'}
+          </button>
+        </div>
       </div>
     </div>
   );

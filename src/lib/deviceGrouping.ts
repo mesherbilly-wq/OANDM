@@ -36,7 +36,12 @@ function getDescription(device: Device): string | null {
 function buildGroupKey(device: Device): string {
   const importLineDraftId = extractImportLineDraftId(device.notes);
   if (importLineDraftId) {
-    return ['import-line', importLineDraftId, normalizeKey(device.system_type)].join('\0');
+    return [
+      'import-line',
+      importLineDraftId,
+      String(device.project_system_id ?? ''),
+      normalizeKey(device.system_type),
+    ].join('\0');
   }
 
   return [
