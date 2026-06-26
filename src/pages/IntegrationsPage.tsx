@@ -27,7 +27,8 @@ function SimproConfigShell() {
   return (
     <div className="mt-4 pt-4 border-t border-slate-100 space-y-4">
       <p className="text-xs text-slate-500">
-        Connection settings will be saved securely server-side in a future release. No credentials are stored yet.
+        One Simpro company connection per workspace (single base URL, company ID, and credentials).
+        Settings will be saved securely server-side in a future release. No credentials are stored yet.
       </p>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -41,7 +42,7 @@ function SimproConfigShell() {
           />
         </label>
         <label className="block">
-          <span className="text-xs font-medium text-slate-600 mb-1 block">Company ID</span>
+          <span className="text-xs font-medium text-slate-600 mb-1 block">Company ID (one per workspace)</span>
           <input type="text" disabled placeholder="e.g. 0" className={inputClass} />
         </label>
         <label className="block">
@@ -137,7 +138,9 @@ export function IntegrationsPage() {
           <h1 className="text-2xl font-bold text-slate-900">Integrations</h1>
         </div>
         <p className="text-slate-500 ml-[52px]">
-          Manage connections to external business systems. Credentials will be stored server-side only when enabled.
+          Manage connections to external business systems. OANDM currently supports one active Simpro company
+          connection per workspace — multi-company setup is not available yet. Credentials will be stored
+          server-side only when enabled.
         </p>
       </div>
 
