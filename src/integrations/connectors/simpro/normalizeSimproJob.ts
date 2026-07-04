@@ -20,6 +20,7 @@ import {
   pickSimproCostCentreCatalogLines,
   pickSimproCostCentreLocation,
   pickSimproCostCentreName,
+  pickSimproCostCentreProductDescription,
   pickSimproJobId,
   pickSimproJobNumber,
   pickString,
@@ -55,6 +56,7 @@ interface PendingSimproSystem {
   name: string;
   locationName: string | null;
   sourceSectionRefs: string[];
+  sourceCostCentreNames: string[];
   sourceCostCentreLabels: string[];
   inferenceTexts: string[];
   description: string | null;
@@ -160,8 +162,9 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
 
       const centreId = pickString(centreRecord.ID ?? centreRecord.Id ?? centreRecord.id);
       const costCentreName = pickSimproCostCentreName(centreRecord);
+      const costCentreProductDescription = pickSimproCostCentreProductDescription(centreRecord);
       const locationName = pickSimproCostCentreLocation(centreRecord, sectionRecord);
-      const systemName = locationName ?? costCentreName;
+      const systemName = costCentreName;
       const costCenterTemplateId = pickSimproCostCentreTemplateId(centreRecord);
       const sourceCostCentreLabel = formatSimproCostCentreSourceLabel(
         costCentreName,
@@ -169,7 +172,7 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
         centreId,
         costCenterTemplateId,
       );
-      const mergeKey = buildSimproSystemMergeKey(locationName, sectionId, centreId, costCentreName);
+      const mergeKey = buildSimproSystemMergeKey(sectionId, centreId, costCentreName);
       const sourceSectionRef = [sectionId, centreId].filter(Boolean).join(':') || null;
 
       const rawCatalogLines = pickSimproCostCentreCatalogLines(centreRecord);
@@ -189,11 +192,13 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
           deviceType: mapped.deviceType,
           manufacturer: mapped.manufacturer,
           modelNumber: mapped.modelNumber,
-          modelName: mapped.modelName,
+          modelName: mapped.modelName ?? costCentreProductDescription,
           quantity: mapped.quantity,
           location: locationName ?? sectionName,
           notes: mapped.notes,
           category: null,
+          productCategory: null,
+          warrantyYears: null,
           matched: false,
           matchedProductId: null,
           confidence: null,
@@ -204,6 +209,7 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
             simproSectionName: sectionName,
             simproCostCentreId: centreId,
             simproCostCentreName: costCentreName,
+            simproCostCentreProductDescription: costCentreProductDescription,
             simproLocationName: locationName,
             simproCostCentreLabel: sourceCostCentreLabel,
             simproItemGroup: line._itemGroup ?? itemGroup,
@@ -232,18 +238,23 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
           name: systemName,
           locationName,
           sourceSectionRefs: sourceSectionRef ? [sourceSectionRef] : [],
+          sourceCostCentreNames: [costCentreName],
           sourceCostCentreLabels: [sourceCostCentreLabel],
           inferenceTexts: [
             locationName,
             costCentreName,
+            costCentreProductDescription,
             pickString(centreRecord.Description),
             pickString(sectionRecord.Description),
           ],
-          description: cleanTextField(centreRecord.Description) ?? cleanTextField(sectionRecord.Description),
+          description: costCentreProductDescription ?? cleanTextField(centreRecord.Description) ?? cleanTextField(sectionRecord.Description),
           equipment: [],
         };
         pendingSystems.set(mergeKey, pending);
       } else {
+        if (!pending.sourceCostCentreNames.includes(costCentreName)) {
+          pending.sourceCostCentreNames.push(costCentreName);
+        }
         if (!pending.sourceCostCentreLabels.includes(sourceCostCentreLabel)) {
           pending.sourceCostCentreLabels.push(sourceCostCentreLabel);
         }
@@ -252,6 +263,7 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
         }
         pending.inferenceTexts.push(
           costCentreName,
+          costCentreProductDescription,
           pickString(centreRecord.Description),
         );
       }
@@ -286,6 +298,7 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
       selected: true,
       sourceSectionRef: pending.sourceSectionRefs.join(',') || null,
       sourceLocationName: pending.locationName,
+      sourceCostCentreName: pending.sourceCostCentreNames.join('; ') || null,
       sourceCostCentreLabel: pending.sourceCostCentreLabels.join('; '),
       category: {
         suggestedCategory: categoryInference.suggestedCategory,

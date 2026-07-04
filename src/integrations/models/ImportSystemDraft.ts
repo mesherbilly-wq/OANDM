@@ -22,8 +22,10 @@ export interface ImportSystemDraft {
   selected: boolean;
   /** Opaque trace back to a source section (Simpro cost centre id, sheet name, etc.). */
   sourceSectionRef: string | null;
-  /** Simpro location/section header used as the default O&M system name. */
+  /** Simpro location/section header (physical area), separate from cost centre name. */
   sourceLocationName: string | null;
+  /** Imported Simpro cost centre name — default for {@link name}, editable in review. */
+  sourceCostCentreName: string | null;
   /** Human-readable Simpro cost centre label(s), e.g. Equipment/Materials (#403768-38147). */
   sourceCostCentreLabel: string | null;
 }
@@ -39,6 +41,7 @@ export function createSystemDraft(
     description: null,
     sourceSectionRef: null,
     sourceLocationName: null,
+    sourceCostCentreName: null,
     sourceCostCentreLabel: null,
     ...partial,
     category: {

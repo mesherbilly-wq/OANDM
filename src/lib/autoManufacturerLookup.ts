@@ -5,7 +5,9 @@ import {
   type ManufacturerSuggestion,
 } from './manufacturerSuggestion';
 import type { ProductModelLike } from '../integrations/core/productMatching';
-import { normalizePart } from './equipmentMatchUtils';
+import type { ProductModel } from '../types';
+import { normalizePart, normalizeToken } from './equipmentMatchUtils';
+import { saveProductModelPairIfNew } from './productModelPairing';
 
 export const AUTO_MANUFACTURER_THRESHOLD = 0.8;
 
@@ -146,6 +148,61 @@ function logManufacturerLookup(entry: ManufacturerLookupLogEntry): void {
   console.info('[auto-manufacturer]', entry);
 }
 
+interface ProductPairingCandidate {
+  manufacturer: string;
+  modelNumber: string;
+  deviceType: string | null;
+}
+
+function productPairingKey(manufacturer: string, modelNumber: string): string {
+  return `${normalizeToken(manufacturer)}::${normalizePart(modelNumber)}`;
+}
+
+function pickPartNumberForProductDatabase(row: DeviceRowForManufacturerLookup): string | null {
+  return row.model_number?.trim() || row.part_number?.trim() || null;
+}
+
+/** Persist manufacturer + part number pairs to product_models for future imports. */
+export async function persistManufacturerPairingsToProductDatabase(
+  candidates: ProductPairingCandidate[],
+  existingProducts: ProductModel[],
+): Promise<number> {
+  const seen = new Set<string>();
+  let catalog = [...existingProducts];
+  let created = 0;
+
+  for (const candidate of candidates) {
+    const manufacturer = candidate.manufacturer.trim();
+    const modelNumber = candidate.modelNumber.trim();
+    if (!manufacturer || !modelNumber) continue;
+
+    const key = productPairingKey(manufacturer, modelNumber);
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const result = await saveProductModelPairIfNew(
+      manufacturer,
+      modelNumber,
+      candidate.deviceType,
+      catalog,
+    );
+    if ('error' in result) {
+      console.warn('[auto-manufacturer] Product Database save failed:', result.error);
+      continue;
+    }
+    if (result.created) {
+      created += 1;
+      catalog.push(result.product);
+    }
+  }
+
+  if (created > 0) {
+    console.info('[auto-manufacturer] Saved new Product Database pairings', { created });
+  }
+
+  return created;
+}
+
 async function lookupManufacturerForGroup(
   input: ManufacturerResolverInput,
   products: ProductModelLike[],
@@ -219,7 +276,8 @@ async function processManufacturerGroup(
   groupRows: DeviceRowForManufacturerLookup[],
   products: ProductModelLike[],
   useAi: boolean,
-  context?: string,
+  context: string | undefined,
+  pairingCandidates: ProductPairingCandidate[],
 ): Promise<void> {
   const representative = groupRows[0];
   const input = toManufacturerResolverInput(representative);
@@ -268,6 +326,17 @@ async function processManufacturerGroup(
       pending,
     });
   }
+
+  if (applied > 0) {
+    const modelNumber = pickPartNumberForProductDatabase(representative);
+    if (modelNumber) {
+      pairingCandidates.push({
+        manufacturer: suggestion.manufacturer,
+        modelNumber,
+        deviceType: representative.device_type ?? null,
+      });
+    }
+  }
 }
 
 const GROUP_LOOKUP_CONCURRENCY = 5;
@@ -284,6 +353,7 @@ export async function enrichDeviceRowsWithAutoManufacturer(
   const useAi = options?.useAi ?? true;
   const context = options?.context;
   const groups = new Map<string, DeviceRowForManufacturerLookup[]>();
+  const pairingCandidates: ProductPairingCandidate[] = [];
 
   for (const row of rows) {
     const key = buildManufacturerGroupKey(row);
@@ -298,8 +368,22 @@ export async function enrichDeviceRowsWithAutoManufacturer(
     const batch = groupEntries.slice(offset, offset + GROUP_LOOKUP_CONCURRENCY);
     await Promise.all(
       batch.map(([groupKey, groupRows]) =>
-        processManufacturerGroup(groupKey, groupRows, products, useAi, context),
+        processManufacturerGroup(
+          groupKey,
+          groupRows,
+          products,
+          useAi,
+          context,
+          pairingCandidates,
+        ),
       ),
+    );
+  }
+
+  if (pairingCandidates.length > 0) {
+    await persistManufacturerPairingsToProductDatabase(
+      pairingCandidates,
+      products as ProductModel[],
     );
   }
 }

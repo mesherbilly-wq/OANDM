@@ -1,7 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import {
-  AlertCircle, ArrowLeft, Building, ChevronDown, FolderOpen, Loader2, MapPin, Tag, User,
+  AlertCircle, ArrowLeft, Building, ChevronDown, FolderOpen, Loader2, MapPin, Sparkles, Tag, User,
 } from 'lucide-react';
 import {
   getImportReviewBlockingIssues,
@@ -20,6 +20,28 @@ import {
 } from '../lib/simproImportSession';
 import { MAX_DEVICES_PER_LINE } from '../lib/devicePersistConstants';
 import { persistSimproImportReviewDraft } from '../lib/persistSimproImportDraft';
+import { fetchAllProductModels } from '../lib/productDatabaseDb';
+import {
+  applyProductDatabaseSelection,
+  countProductDatabaseAutofillFields,
+  createProductEnrichmentContext,
+  dismissProductDatabaseSuggestion,
+  enrichEquipmentFromProductDatabase,
+  enrichImportReviewDraftFromProductDatabase,
+  formatProductLookupLabel,
+  getEquipmentMissingRequiredFields,
+  getProductDatabaseLookupStatus,
+  getProductDatabaseSuggestionIds,
+  hasProductDatabaseSuggestion,
+  isAmbiguousManufacturerLookup,
+  isImportReviewDraftEnrichedFromProductDatabase,
+  listIncompleteSelectedEquipment,
+  REQUIRED_EQUIPMENT_FIELD_LABELS,
+  summarizeProductDatabaseEnrichment,
+  type ProductEnrichmentContext,
+} from '../lib/importEquipmentValidation';
+import type { ImportEquipmentDraft } from '../integrations';
+import type { ProductLookupRecord } from '../lib/productLookupIndex';
 import { SYSTEM_CATEGORIES } from '../lib/systems';
 import type { SystemCategory } from '../types';
 
@@ -30,6 +52,8 @@ type EditableEquipmentField =
   | 'modelName'
   | 'manufacturer'
   | 'modelNumber'
+  | 'productCategory'
+  | 'warrantyYears'
   | 'location'
   | 'notes'
   | 'quantity'
@@ -45,11 +69,13 @@ function normalizeQuantity(value: string): number {
   return Math.min(parsed, MAX_DEVICES_PER_LINE);
 }
 
-function cellInputClass(disabled: boolean): string {
+function cellInputClass(disabled: boolean, isMissing = false): string {
   return `w-full min-w-[7rem] rounded-lg border px-2 py-1.5 text-sm ${
     disabled
       ? 'border-slate-100 bg-slate-50 text-slate-400 cursor-not-allowed'
-      : 'border-slate-200 bg-white text-slate-800 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500'
+      : isMissing
+        ? 'border-red-300 bg-red-50 text-red-900 focus:border-red-500 focus:ring-1 focus:ring-red-500'
+        : 'border-slate-200 bg-white text-slate-800 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500'
   }`;
 }
 
@@ -126,6 +152,79 @@ function SelectionSummary({ draft }: { draft: ImportReviewDraft }) {
   );
 }
 
+function ProductDatabaseMatchPicker({
+  item,
+  products,
+  disabled,
+  onApply,
+  onDismiss,
+}: {
+  item: ImportEquipmentDraft;
+  products: ProductLookupRecord[];
+  disabled: boolean;
+  onApply: (productId: number) => void;
+  onDismiss: () => void;
+}) {
+  const status = getProductDatabaseLookupStatus(item);
+  const matchIds = getProductDatabaseSuggestionIds(item);
+  const options = matchIds
+    .map(id => products.find(product => product.id === id))
+    .filter((product): product is ProductLookupRecord => !!product);
+
+  const [selectedId, setSelectedId] = React.useState(options[0]?.id ?? 0);
+
+  React.useEffect(() => {
+    if (options.some(option => option.id === selectedId)) return;
+    setSelectedId(options[0]?.id ?? 0);
+  }, [options, selectedId]);
+
+  if (options.length === 0 || disabled) return null;
+
+  const label =
+    status === 'suggested'
+      ? 'Closest Product Database match (part number is not an exact match):'
+      : 'Multiple exact Product Database matches — choose one:';
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-950">
+      <Sparkles className="w-4 h-4 flex-shrink-0" />
+      <span className="font-medium">{label}</span>
+      {options.length > 1 ? (
+        <select
+          value={selectedId}
+          disabled={disabled}
+          onChange={event => setSelectedId(Number(event.target.value))}
+          className="min-w-[14rem] flex-1 rounded-md border border-violet-200 bg-white px-2 py-1 text-xs"
+        >
+          {options.map(option => (
+            <option key={option.id} value={option.id}>
+              {formatProductLookupLabel(option)}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <span className="flex-1 text-violet-900">{formatProductLookupLabel(options[0])}</span>
+      )}
+      <button
+        type="button"
+        disabled={disabled || !selectedId}
+        onClick={() => onApply(selectedId)}
+        className="rounded-md bg-violet-700 px-2.5 py-1 font-semibold text-white hover:bg-violet-800 disabled:opacity-50"
+      >
+        Use this
+      </button>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onDismiss}
+        className="rounded-md border border-violet-300 bg-white px-2.5 py-1 font-semibold text-violet-900 hover:bg-violet-100"
+      >
+        Skip
+      </button>
+    </div>
+  );
+}
+
 function NoteSection({
   title,
   description,
@@ -180,6 +279,67 @@ export function ImportReviewPage() {
   const [tab, setTab] = useState<ReviewTab>('project');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const enrichmentContextRef = useRef<ProductEnrichmentContext | null>(null);
+  const [enrichingFromDatabase, setEnrichingFromDatabase] = useState(
+    () => !(initialSession && isImportReviewDraftEnrichedFromProductDatabase(initialSession.draft)),
+  );
+  const [productDatabaseStatus, setProductDatabaseStatus] = useState<{
+    error: string | null;
+    productCount: number;
+  }>({ error: null, productCount: 0 });
+
+  const runProductDatabaseEnrichment = async (options?: {
+    isCancelled?: () => boolean;
+    force?: boolean;
+  }) => {
+    const alreadyEnriched =
+      !options?.force &&
+      session != null &&
+      isImportReviewDraftEnrichedFromProductDatabase(session.draft);
+
+    if (!alreadyEnriched) {
+      setEnrichingFromDatabase(true);
+    }
+
+    const { products, error } = await fetchAllProductModels();
+    if (options?.isCancelled?.()) return;
+
+    enrichmentContextRef.current = products.length > 0 ? createProductEnrichmentContext(products) : null;
+    setProductDatabaseStatus({ error, productCount: products.length });
+
+    if (error || products.length === 0) {
+      setEnrichingFromDatabase(false);
+      return;
+    }
+
+    const current = getSimproImportSession();
+    if (
+      !options?.force &&
+      current &&
+      isImportReviewDraftEnrichedFromProductDatabase(current.draft)
+    ) {
+      setEnrichingFromDatabase(false);
+      return;
+    }
+
+    updateSimproImportSession(currentSession => ({
+      ...currentSession,
+      draft: enrichImportReviewDraftFromProductDatabase(currentSession.draft, products),
+    }));
+
+    const nextSession = getSimproImportSession();
+    if (options?.isCancelled?.()) return;
+    if (nextSession) setSession(nextSession);
+    setEnrichingFromDatabase(false);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    void runProductDatabaseEnrichment({ isCancelled: () => cancelled });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   if (!session) {
     return <Navigate to="/create-project" replace />;
@@ -190,6 +350,9 @@ export function ImportReviewPage() {
   const noteSections = partitionImportReviewNotes(draft);
   const blockingIssues = getImportReviewBlockingIssues(draft);
   const confirmationIssues = getImportReviewCreateConfirmationIssues(draft);
+  const incompleteEquipmentRows = listIncompleteSelectedEquipment(draft);
+  const productDatabaseAutofillCount = countProductDatabaseAutofillFields(draft);
+  const productDatabaseEnrichment = summarizeProductDatabaseEnrichment(draft);
   const rawJobRecord = rawJob && typeof rawJob === 'object' ? (rawJob as Record<string, unknown>) : null;
   const originalDescriptionHtml = rawJobRecord ? pickRawDescriptionHtml(rawJobRecord) : null;
   const noteCount = noteSections.info.length + noteSections.warnings.length + blockingIssues.length;
@@ -274,8 +437,59 @@ export function ImportReviewPage() {
             if (field === 'category') {
               return { ...item, category: value ? (value as SystemCategory) : null };
             }
-            return { ...item, [field]: value || null };
+            if (field === 'warrantyYears') {
+              const parsed = parseInt(value, 10);
+              return {
+                ...item,
+                warrantyYears: Number.isFinite(parsed) && parsed >= 0 ? parsed : null,
+              };
+            }
+            const updated = { ...item, [field]: value || null };
+            if (
+              (field === 'modelNumber' || field === 'manufacturer') &&
+              enrichmentContextRef.current
+            ) {
+              return enrichEquipmentFromProductDatabase(updated, enrichmentContextRef.current);
+            }
+            return updated;
           }),
+        };
+      }),
+    }));
+  };
+
+  const applyProductDatabaseMatch = (
+    systemDraftId: string,
+    equipmentDraftId: string,
+    productId: number,
+  ) => {
+    const product = enrichmentContextRef.current?.products.find(entry => entry.id === productId);
+    if (!product) return;
+
+    updateDraft(current => ({
+      ...current,
+      systems: current.systems.map(system => {
+        if (system.draftId !== systemDraftId) return system;
+        return {
+          ...system,
+          equipment: system.equipment.map(item =>
+            item.draftId === equipmentDraftId ? applyProductDatabaseSelection(item, product) : item,
+          ),
+        };
+      }),
+    }));
+  };
+
+  const skipProductDatabaseMatch = (systemDraftId: string, equipmentDraftId: string) => {
+    updateDraft(current => ({
+      ...current,
+      systems: current.systems.map(system => {
+        if (system.draftId !== systemDraftId) return system;
+        return {
+          ...system,
+          equipment: system.equipment.map(item =>
+            item.draftId === equipmentDraftId ? dismissProductDatabaseSuggestion(item) : item,
+          ),
         };
       }),
     }));
@@ -343,6 +557,77 @@ export function ImportReviewPage() {
         <p className="font-semibold">Simpro import draft (session only)</p>
         <SelectionSummary draft={draft} />
       </div>
+
+      {enrichingFromDatabase && (
+        <div className="mb-5 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          Looking up blank fields in the Product Database…
+        </div>
+      )}
+
+      {!enrichingFromDatabase && productDatabaseStatus.error && (
+        <div className="mb-5 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+          <span>
+            Could not load the Product Database ({productDatabaseStatus.error}). Manufacturer, Product Category,
+            and Warranty will not autofill until this is resolved.
+          </span>
+        </div>
+      )}
+
+      {!enrichingFromDatabase && !productDatabaseStatus.error && productDatabaseStatus.productCount === 0 && (
+        <div className="mb-5 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+          <span>
+            The Product Database is empty — import your product CSV first to autofill Manufacturer, Product
+            Category, and Warranty on blank Simpro lines.
+          </span>
+        </div>
+      )}
+
+      {!enrichingFromDatabase && !productDatabaseStatus.error && productDatabaseStatus.productCount > 0 && productDatabaseAutofillCount === 0 && (
+        <div className="mb-5 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+          <div>
+            <p>
+              Loaded {productDatabaseStatus.productCount.toLocaleString()} Product Database rows but no blank fields
+              were filled. {productDatabaseEnrichment.unmatchedLines} of {productDatabaseEnrichment.equipmentLines}{' '}
+              equipment lines had no Part Number match — check that Simpro Part Number matches{' '}
+              <strong>Manufacturers Part Number</strong> in your CSV.
+            </p>
+            <button
+              type="button"
+              onClick={() => void runProductDatabaseEnrichment({ force: true })}
+              className="mt-2 text-sm font-semibold text-amber-900 underline hover:no-underline"
+            >
+              Re-run Product Database lookup
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!enrichingFromDatabase && productDatabaseAutofillCount > 0 && (
+        <div className="mb-5 flex items-start gap-2 rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm text-violet-900">
+          <Sparkles className="w-5 h-5 flex-shrink-0 mt-0.5" />
+          <span>
+            Auto-filled {productDatabaseAutofillCount} field
+            {productDatabaseAutofillCount === 1 ? '' : 's'} from {productDatabaseEnrichment.matchedLines} exact Part
+            Number match{productDatabaseEnrichment.matchedLines === 1 ? '' : 'es'}. Closest matches are shown for your
+            review — nothing is filled until you choose Use this.
+          </span>
+        </div>
+      )}
+
+      {!enrichingFromDatabase && productDatabaseEnrichment.suggestedLines > 0 && (
+        <div className="mb-5 flex items-start gap-2 rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm text-violet-900">
+          <Sparkles className="w-5 h-5 flex-shrink-0 mt-0.5" />
+          <span>
+            {productDatabaseEnrichment.suggestedLines} line
+            {productDatabaseEnrichment.suggestedLines === 1 ? '' : 's'} have closest (non-exact) Product Database
+            matches — use <strong>Use this</strong> or <strong>Skip</strong> on the Systems tab.
+          </span>
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-1 bg-slate-100 p-1 rounded-xl w-fit mb-5">
         {([
@@ -421,6 +706,9 @@ export function ImportReviewPage() {
                           className="mt-1 h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
                         />
                         <div className="min-w-0 flex-1">
+                          <label className="block text-[11px] font-medium text-slate-500 mb-1">
+                            Cost centre name
+                          </label>
                           <input
                             type="text"
                             value={system.name}
@@ -433,15 +721,17 @@ export function ImportReviewPage() {
                                 : 'border-slate-100 bg-slate-50 text-slate-500'
                             }`}
                           />
-                          {system.sourceCostCentreLabel ? (
+                          {system.sourceCostCentreLabel &&
+                            system.sourceCostCentreLabel !== system.name &&
+                            !system.sourceCostCentreLabel.startsWith(`${system.name} (`) && (
                             <p className="text-xs text-slate-500 mt-1">
-                              Source cost centre{system.sourceCostCentreLabel.includes(';') ? 's' : ''}:{' '}
-                              {system.sourceCostCentreLabel}
+                              Simpro ref: {system.sourceCostCentreLabel}
                             </p>
-                          ) : system.description ? (
+                          )}
+                          {system.description ? (
                             <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">{system.description}</p>
                           ) : null}
-                          {system.sourceLocationName && system.sourceLocationName !== system.name && (
+                          {system.sourceLocationName && (
                             <p className="text-[11px] text-slate-400 mt-1">
                               Simpro location: {system.sourceLocationName}
                             </p>
@@ -474,15 +764,16 @@ export function ImportReviewPage() {
                     <p className="px-5 py-4 text-sm text-slate-500">No equipment lines for this system.</p>
                   ) : (
                     <div className="overflow-x-auto">
-                      <table className="w-full text-sm text-left min-w-[1100px]">
+                      <table className="w-full text-sm text-left min-w-[1400px]">
                         <thead className="bg-white border-b border-slate-100 text-slate-500">
                           <tr>
                             <th className="px-3 py-2.5 font-semibold w-12">Import</th>
-                            <th className="px-3 py-2.5 font-semibold min-w-[9rem]">Category</th>
-                            <th className="px-3 py-2.5 font-semibold min-w-[10rem]">Description</th>
-                            <th className="px-3 py-2.5 font-semibold min-w-[9rem]">Device type</th>
+                            <th className="px-3 py-2.5 font-semibold min-w-[9rem]">System category</th>
+                            <th className="px-3 py-2.5 font-semibold min-w-[10rem]">Product Description</th>
                             <th className="px-3 py-2.5 font-semibold min-w-[8rem]">Manufacturer</th>
-                            <th className="px-3 py-2.5 font-semibold min-w-[8rem]">Model / Part No</th>
+                            <th className="px-3 py-2.5 font-semibold min-w-[9rem]">Part Number</th>
+                            <th className="px-3 py-2.5 font-semibold min-w-[9rem]">Product Category</th>
+                            <th className="px-3 py-2.5 font-semibold w-20">Warranty</th>
                             <th className="px-3 py-2.5 font-semibold w-20">Qty</th>
                             <th className="px-3 py-2.5 font-semibold min-w-[8rem]">Location</th>
                             <th className="px-3 py-2.5 font-semibold min-w-[8rem]">Notes</th>
@@ -493,14 +784,19 @@ export function ImportReviewPage() {
                           {system.equipment.map(item => {
                             const lineDisabled = rowDisabled || !item.selected;
                             const lineCategory = resolvedEquipmentCategory(system, item);
+                            const missingRequired = getEquipmentMissingRequiredFields(item);
+                            const ambiguousManufacturer = isAmbiguousManufacturerLookup(item);
+                            const showProductPicker =
+                              (hasProductDatabaseSuggestion(item) || ambiguousManufacturer) &&
+                              getProductDatabaseSuggestionIds(item).length > 0;
                             const simproItemGroup =
                               typeof item.metadata?.simproItemGroup === 'string'
                                 ? item.metadata.simproItemGroup
                                 : null;
 
                             return (
+                              <React.Fragment key={item.draftId}>
                               <tr
-                                key={item.draftId}
                                 className={`align-top ${!item.selected || rowDisabled ? 'bg-slate-50/80' : ''}`}
                               >
                                 <td className="px-3 py-2">
@@ -540,20 +836,8 @@ export function ImportReviewPage() {
                                     onChange={event =>
                                       updateEquipmentField(system.draftId, item.draftId, 'modelName', event.target.value)
                                     }
-                                    className={cellInputClass(lineDisabled)}
-                                    placeholder="Description"
-                                  />
-                                </td>
-                                <td className="px-3 py-2">
-                                  <input
-                                    type="text"
-                                    value={item.deviceType ?? ''}
-                                    disabled={lineDisabled}
-                                    onChange={event =>
-                                      updateEquipmentField(system.draftId, item.draftId, 'deviceType', event.target.value)
-                                    }
-                                    className={cellInputClass(lineDisabled)}
-                                    placeholder="Device type"
+                                    className={cellInputClass(lineDisabled, missingRequired.includes('modelName'))}
+                                    placeholder="Product Description"
                                   />
                                 </td>
                                 <td className="px-3 py-2">
@@ -564,9 +848,14 @@ export function ImportReviewPage() {
                                     onChange={event =>
                                       updateEquipmentField(system.draftId, item.draftId, 'manufacturer', event.target.value)
                                     }
-                                    className={cellInputClass(lineDisabled)}
+                                    className={`${cellInputClass(lineDisabled, ambiguousManufacturer && !item.manufacturer?.trim())} ${
+                                      ambiguousManufacturer && !item.manufacturer?.trim() ? 'ring-1 ring-amber-300' : ''
+                                    }`}
                                     placeholder="Manufacturer"
                                   />
+                                  {ambiguousManufacturer && !item.manufacturer?.trim() && !showProductPicker ? (
+                                    <p className="mt-1 text-[11px] text-amber-700">Multiple exact matches — choose below.</p>
+                                  ) : null}
                                 </td>
                                 <td className="px-3 py-2">
                                   <input
@@ -576,8 +865,33 @@ export function ImportReviewPage() {
                                     onChange={event =>
                                       updateEquipmentField(system.draftId, item.draftId, 'modelNumber', event.target.value)
                                     }
+                                    className={cellInputClass(lineDisabled, missingRequired.includes('modelNumber'))}
+                                    placeholder="Part Number"
+                                  />
+                                </td>
+                                <td className="px-3 py-2">
+                                  <input
+                                    type="text"
+                                    value={item.productCategory ?? ''}
+                                    disabled={lineDisabled}
+                                    onChange={event =>
+                                      updateEquipmentField(system.draftId, item.draftId, 'productCategory', event.target.value)
+                                    }
                                     className={cellInputClass(lineDisabled)}
-                                    placeholder="Model / part no"
+                                    placeholder="Product Category"
+                                  />
+                                </td>
+                                <td className="px-3 py-2">
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    value={item.warrantyYears ?? ''}
+                                    disabled={lineDisabled}
+                                    onChange={event =>
+                                      updateEquipmentField(system.draftId, item.draftId, 'warrantyYears', event.target.value)
+                                    }
+                                    className={`${cellInputClass(lineDisabled)} w-20`}
+                                    placeholder="Yrs"
                                   />
                                 </td>
                                 <td className="px-3 py-2">
@@ -621,6 +935,24 @@ export function ImportReviewPage() {
                                   {displayValue(item.sourceLineRef)}
                                 </td>
                               </tr>
+                              {showProductPicker && enrichmentContextRef.current ? (
+                                <tr className={!item.selected || rowDisabled ? 'bg-slate-50/80' : ''}>
+                                  <td colSpan={11} className="px-3 pb-3 pt-0">
+                                    <ProductDatabaseMatchPicker
+                                      item={item}
+                                      products={enrichmentContextRef.current.products}
+                                      disabled={lineDisabled}
+                                      onApply={productId =>
+                                        applyProductDatabaseMatch(system.draftId, item.draftId, productId)
+                                      }
+                                      onDismiss={() =>
+                                        skipProductDatabaseMatch(system.draftId, item.draftId)
+                                      }
+                                    />
+                                  </td>
+                                </tr>
+                              ) : null}
+                              </React.Fragment>
                             );
                           })}
                         </tbody>
@@ -708,7 +1040,21 @@ export function ImportReviewPage() {
         {blockingIssues.length > 0 && (
           <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
             <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-            Resolve {blockingIssues.length} blocking issue{blockingIssues.length !== 1 ? 's' : ''} in Import Notes before creating the project.
+            <div>
+              <p>
+                Resolve {blockingIssues.length} blocking issue{blockingIssues.length !== 1 ? 's' : ''} in Import Notes before creating the project.
+              </p>
+              {incompleteEquipmentRows.length > 0 && (
+                <ul className="mt-2 list-disc pl-5 space-y-1 text-red-900/90">
+                  {incompleteEquipmentRows.slice(0, 8).map(row => (
+                    <li key={row.equipment.draftId}>
+                      {row.systemName}: &quot;{row.rowLabel}&quot; — missing{' '}
+                      {row.missingFields.map(field => REQUIRED_EQUIPMENT_FIELD_LABELS[field]).join(' and ')}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
         )}
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4">

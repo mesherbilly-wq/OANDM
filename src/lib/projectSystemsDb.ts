@@ -225,7 +225,10 @@ export function buildPersistSystemNameMap(systems: ImportSystemDraft[]): Map<str
   const baseNameCounts = new Map<string, number>();
 
   for (const system of selected) {
-    const base = system.name.trim() || 'Unnamed System';
+    const base =
+      system.name.trim() ||
+      system.sourceCostCentreName?.trim() ||
+      'Unnamed System';
     baseNameCounts.set(base, (baseNameCounts.get(base) ?? 0) + 1);
   }
 
@@ -233,7 +236,10 @@ export function buildPersistSystemNameMap(systems: ImportSystemDraft[]): Map<str
   const usedNames = new Set<string>();
 
   for (const system of selected) {
-    let name = system.name.trim() || 'Unnamed System';
+    let name =
+      system.name.trim() ||
+      system.sourceCostCentreName?.trim() ||
+      'Unnamed System';
 
     if ((baseNameCounts.get(name) ?? 0) > 1) {
       const refSuffix = system.sourceSectionRef?.split(':').filter(Boolean).pop();

@@ -27,8 +27,11 @@ export interface ImportEquipmentDraft {
   quantity: number;
   location: string | null;
   notes: string | null;
-  /** Per-line category override when a mixed section is split. */
+  /** Trade/system category override when a mixed section is split. */
   category: SystemCategory | null;
+  /** Product Database product category (e.g. CCTV Cameras). */
+  productCategory: string | null;
+  warrantyYears: number | null;
   matchedProductId: number | null;
   matched: boolean;
   /** Normalised 0–1 confidence from extraction or matching. */
@@ -51,6 +54,8 @@ export function createEquipmentDraft(
     quantity: 1,
     ...partial,
     category: partial.category ?? null,
+    productCategory: partial.productCategory ?? null,
+    warrantyYears: partial.warrantyYears ?? null,
     metadata: partial.metadata ?? {},
   };
 }

@@ -24,17 +24,13 @@ import {
 
 
 interface Props {
-
   context: ManufacturerResolverInput;
-
   productModels: ProductModel[];
-
+  /** When set, lookup UI is hidden — suggestions only apply to empty manufacturer fields. */
+  currentManufacturer?: string | null;
   pendingSuggestion?: PendingManufacturerSuggestion | null;
-
   onAccept: (manufacturer: string, suggestion: ManufacturerSuggestion) => Promise<void>;
-
   onManualEdit: (draft: string) => void;
-
 }
 
 
@@ -65,6 +61,8 @@ export function ManufacturerSuggestHelper({
 
   productModels,
 
+  currentManufacturer,
+
   pendingSuggestion,
 
   onAccept,
@@ -72,6 +70,8 @@ export function ManufacturerSuggestHelper({
   onManualEdit,
 
 }: Props) {
+
+  if (currentManufacturer?.trim()) return null;
 
   const [open, setOpen] = useState(false);
 

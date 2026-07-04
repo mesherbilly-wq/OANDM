@@ -10,6 +10,7 @@ import {
 
 import { clampLineQuantity } from './devicePersistConstants';
 import { IMPORT_LINE_NOTE_TAG } from './deviceGrouping';
+import { appendProductFieldNotes } from './deviceProductFields';
 import { buildPrefixCounters } from './deviceProjectEdits';
 import { equipmentHasDatasheet } from './datasheetMatching';
 import { getDevicePrefix } from './deviceLabel';
@@ -43,9 +44,9 @@ function nullIfEmpty(value: string | null | undefined): string | null {
 /** Tag each expanded row with its Import Review equipment draft id for stable grouped counts. */
 function buildPersistDeviceNotes(item: ImportEquipmentDraft): string {
   const lineTag = `${IMPORT_LINE_NOTE_TAG}${item.draftId}]`;
-  const userNotes = item.notes?.trim();
-  if (userNotes?.includes(lineTag)) return userNotes;
-  return userNotes ? `${userNotes} ${lineTag}` : lineTag;
+  const withProductFields = appendProductFieldNotes(item.notes, item.productCategory, item.warrantyYears);
+  if (withProductFields.includes(lineTag)) return withProductFields;
+  return withProductFields ? `${withProductFields} ${lineTag}` : lineTag;
 }
 
 export interface SimproPersistQuantityAudit {
@@ -127,6 +128,7 @@ function buildDeviceRows(
 
       const category = resolvedEquipmentCategory(system, item);
       const deviceType = nullIfEmpty(item.deviceType ?? item.modelName);
+      const productDescription = nullIfEmpty(item.modelName ?? item.deviceType);
       const prefix = getDevicePrefix(category ?? 'Other', deviceType ?? '');
       const quantity = clampLineQuantity(item.quantity);
       const hasDatasheet = equipmentHasDatasheet(
@@ -147,7 +149,7 @@ function buildDeviceRows(
           device_name: `${prefix}-${String(prefixCounters[prefix]).padStart(3, '0')}`,
           manufacturer: nullIfEmpty(item.manufacturer),
           model_number: nullIfEmpty(item.modelNumber),
-          model_name: nullIfEmpty(item.modelName),
+          model_name: productDescription,
           location: nullIfEmpty(item.location),
           notes: buildPersistDeviceNotes(item),
           matched: item.matched,

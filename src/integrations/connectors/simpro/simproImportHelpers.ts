@@ -552,11 +552,26 @@ export function isSimproCommercialLine(
   return COMMERCIAL_LINE_PATTERNS.some(pattern => pattern.test(filterText));
 }
 
-/** Template/account cost centre name — e.g. Equipment/Materials. */
+/** Cost centre name from Simpro — instance Name first, then template (e.g. Equipment/Materials). */
 export function pickSimproCostCentreName(centreRecord: Record<string, unknown>): string {
-  const templateName = pickNestedName(centreRecord.CostCenter ?? centreRecord.CostCentre);
   const instanceName = pickString(centreRecord.Name ?? centreRecord.name);
-  return templateName ?? instanceName ?? 'Cost Centre';
+  const templateName = pickNestedName(centreRecord.CostCenter ?? centreRecord.CostCentre);
+  return instanceName ?? templateName ?? 'Cost Centre';
+}
+
+/**
+ * Product description entered on the Simpro cost centre (not the catalogue line).
+ * Used as Import Review "Product Description" when line-level text is missing.
+ */
+export function pickSimproCostCentreProductDescription(
+  centreRecord: Record<string, unknown>,
+): string | null {
+  return (
+    cleanTextField(centreRecord.Description) ??
+    cleanTextField(centreRecord.description) ??
+    cleanTextField(centreRecord.ProductDescription) ??
+    cleanTextField(centreRecord['Product Description'])
+  );
 }
 
 function pickSimproCostCentreTemplateId(centreRecord: Record<string, unknown>): string | null {
@@ -615,15 +630,12 @@ export function formatSimproCostCentreSourceLabel(
   return reference ? `${costCentreName} (${reference})` : costCentreName;
 }
 
+/** One ImportSystemDraft per Simpro cost centre instance (not merged by location). */
 export function buildSimproSystemMergeKey(
-  locationName: string | null,
   sectionId: string | null,
   centreInstanceId: string | null,
   costCentreName: string,
 ): string {
-  if (locationName?.trim()) {
-    return `loc:${locationName.trim().toLowerCase()}`;
-  }
   return `cc:${sectionId ?? 'na'}:${centreInstanceId ?? costCentreName.trim().toLowerCase()}`;
 }
 
@@ -709,7 +721,7 @@ export function mapSimproCatalogLine(
   const { quantity: quantityRaw, source: quantitySource } = resolveSimproLineQuantity(line);
 
   const deviceType = name ?? description;
-  const modelName = description && description !== deviceType ? description : name && name !== deviceType ? name : null;
+  const modelName = description ?? name ?? null;
 
   if (!deviceType && !modelName) {
     issues.push({

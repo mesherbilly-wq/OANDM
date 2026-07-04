@@ -1,5 +1,6 @@
 import type { ProductModel } from '../types';
 import { normalizePart, normalizeToken } from './equipmentMatchUtils';
+import { invalidateProductModelsCache } from './productDatabaseDb';
 import { supabase } from './supabase';
 
 export function findExistingProductModel(
@@ -53,5 +54,6 @@ export async function saveProductModelPairIfNew(
     return { error: error.message };
   }
 
+  invalidateProductModelsCache();
   return { product: data as ProductModel, created: true };
 }

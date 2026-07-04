@@ -10,6 +10,8 @@ import {
 } from '../../lib/simproConnectionSession';
 import { normalizeSimproJob } from '../../integrations/connectors/simpro/normalizeSimproJob';
 import { setSimproImportSession } from '../../lib/simproImportSession';
+import { fetchAllProductModels } from '../../lib/productDatabaseDb';
+import { enrichImportReviewDraftFromProductDatabase } from '../../lib/importEquipmentValidation';
 import { parseSearchJobResults, toJobSearchRow, type SimproJobSearchRow } from './simproJobHelpers';
 
 const inputClass =
@@ -29,6 +31,7 @@ export function SimproImportFlow({ onBack }: { onBack: () => void }) {
   const [rawJobDetail, setRawJobDetail] = useState<unknown>(null);
   const [loadedJobId, setLoadedJobId] = useState<string | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const [openingReview, setOpeningReview] = useState(false);
 
   if (!isSimproConnectionConfigured() || !connection) {
     return (
@@ -149,19 +152,31 @@ export function SimproImportFlow({ onBack }: { onBack: () => void }) {
     }
   };
 
-  const openImportReview = () => {
+  const openImportReview = async () => {
     if (rawJobDetail == null) {
       setReviewError('Load the full job before opening Import Review.');
       return;
     }
 
+    setOpeningReview(true);
+    setReviewError(null);
+
     try {
       const draft = normalizeSimproJob(rawJobDetail, { jobId: loadedJobId ?? selectedMatchId });
-      setSimproImportSession({ draft, rawJob: rawJobDetail });
-      setReviewError(null);
+      const { products, error } = await fetchAllProductModels();
+      if (error) {
+        setReviewError(`Product Database could not be loaded (${error}). Import Review will open without autofill.`);
+      }
+
+      const enrichedDraft =
+        products.length > 0 ? enrichImportReviewDraftFromProductDatabase(draft, products) : draft;
+
+      setSimproImportSession({ draft: enrichedDraft, rawJob: rawJobDetail });
       navigate('/import-review');
     } catch (e: unknown) {
       setReviewError(e instanceof Error ? e.message : 'Failed to normalise Simpro job');
+    } finally {
+      setOpeningReview(false);
     }
   };
 
@@ -282,11 +297,11 @@ export function SimproImportFlow({ onBack }: { onBack: () => void }) {
           </button>
           <button
             type="button"
-            onClick={openImportReview}
-            disabled={rawJobDetail == null}
+            onClick={() => void openImportReview()}
+            disabled={rawJobDetail == null || openingReview}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50"
           >
-            <ExternalLink className="w-4 h-4" />
+            {openingReview ? <Loader2 className="w-4 h-4 animate-spin" /> : <ExternalLink className="w-4 h-4" />}
             Open Import Review
           </button>
           {selectedMatch && (

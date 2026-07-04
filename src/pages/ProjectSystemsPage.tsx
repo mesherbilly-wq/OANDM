@@ -27,6 +27,7 @@ import { ManufacturerSuggestHelper } from '../components/ManufacturerSuggestHelp
 import { useProject } from './ProjectLayout';
 import type { ManufacturerSuggestion } from '../lib/manufacturerSuggestion';
 import { saveProductModelPairIfNew } from '../lib/productModelPairing';
+import { formatWarrantyYears, getDeviceProductDescription, extractProductCategoryFromNotes, extractWarrantyYearsFromNotes } from '../lib/deviceProductFields';
 import {
   enrichDeviceWithAutoManufacturer,
   extractPendingManufacturerSuggestion,
@@ -48,6 +49,7 @@ function primaryLocation(devices: Device[]): string {
 }
 
 function getGroupPendingSuggestion(row: GroupedEquipment): PendingManufacturerSuggestion | null {
+  if (row.manufacturer?.trim()) return null;
   for (const device of row.devices) {
     const pending = extractPendingManufacturerSuggestion(device.notes);
     if (pending) return pending;
@@ -56,11 +58,12 @@ function getGroupPendingSuggestion(row: GroupedEquipment): PendingManufacturerSu
 }
 
 function getDevicePendingSuggestion(device: Device): PendingManufacturerSuggestion | null {
+  if (device.manufacturer?.trim()) return null;
   return extractPendingManufacturerSuggestion(device.notes);
 }
 
 type GroupedField = 'description' | 'manufacturer' | 'model' | 'quantity' | 'location';
-type IndividualField = 'type' | 'manufacturer' | 'model' | 'location';
+type IndividualField = 'description' | 'manufacturer' | 'model' | 'location';
 
 type EditingCell =
   | { mode: 'grouped'; rowKey: string; field: GroupedField; draft: string }
@@ -68,8 +71,8 @@ type EditingCell =
 
 type SortDir = 'asc' | 'desc';
 
-type GroupedSortKey = 'description' | 'manufacturer' | 'model' | 'quantity' | 'locations';
-type IndividualSortKey = 'label' | 'type' | 'manufacturerModel' | 'location' | 'status';
+type GroupedSortKey = 'description' | 'manufacturer' | 'model' | 'productCategory' | 'warranty' | 'quantity' | 'locations';
+type IndividualSortKey = 'label' | 'description' | 'manufacturer' | 'model' | 'productCategory' | 'warranty' | 'location' | 'status';
 
 function cycleSort<K extends string>(
   current: { key: K; dir: SortDir } | null,
@@ -160,8 +163,16 @@ export default function ProjectSystemsPage() {
           right = (b.manufacturer ?? '').toLowerCase();
           break;
         case 'model':
-          left = (a.model_number ?? '').toLowerCase();
-          right = (b.model_number ?? '').toLowerCase();
+          left = (a.part_number ?? a.model_number ?? '').toLowerCase();
+          right = (b.part_number ?? b.model_number ?? '').toLowerCase();
+          break;
+        case 'productCategory':
+          left = (a.product_category ?? '').toLowerCase();
+          right = (b.product_category ?? '').toLowerCase();
+          break;
+        case 'warranty':
+          left = a.warranty_years ?? -1;
+          right = b.warranty_years ?? -1;
           break;
         case 'quantity':
           left = a.quantity;
@@ -186,20 +197,32 @@ export default function ProjectSystemsPage() {
     if (!individualSort) return systemDevices;
     const factor = individualSort.dir === 'asc' ? 1 : -1;
     return [...systemDevices].sort((a, b) => {
-      let left: string;
-      let right: string;
+      let left: string | number;
+      let right: string | number;
       switch (individualSort.key) {
         case 'label':
           left = (a.device_name ?? '').toLowerCase();
           right = (b.device_name ?? '').toLowerCase();
           break;
-        case 'type':
-          left = (a.device_type ?? '').toLowerCase();
-          right = (b.device_type ?? '').toLowerCase();
+        case 'description':
+          left = getDeviceProductDescription(a)?.toLowerCase() ?? '';
+          right = getDeviceProductDescription(b)?.toLowerCase() ?? '';
           break;
-        case 'manufacturerModel':
-          left = [a.manufacturer, a.model_number].filter(Boolean).join(' · ').toLowerCase();
-          right = [b.manufacturer, b.model_number].filter(Boolean).join(' · ').toLowerCase();
+        case 'manufacturer':
+          left = (a.manufacturer ?? '').toLowerCase();
+          right = (b.manufacturer ?? '').toLowerCase();
+          break;
+        case 'model':
+          left = (a.model_number ?? '').toLowerCase();
+          right = (b.model_number ?? '').toLowerCase();
+          break;
+        case 'productCategory':
+          left = (extractProductCategoryFromNotes(a.notes) ?? '').toLowerCase();
+          right = (extractProductCategoryFromNotes(b.notes) ?? '').toLowerCase();
+          break;
+        case 'warranty':
+          left = extractWarrantyYearsFromNotes(a.notes) ?? -1;
+          right = extractWarrantyYearsFromNotes(b.notes) ?? -1;
           break;
         case 'location':
           left = (a.location ?? '').toLowerCase();
@@ -213,7 +236,10 @@ export default function ProjectSystemsPage() {
           left = '';
           right = '';
       }
-      return left.localeCompare(right) * factor;
+      if (typeof left === 'number' && typeof right === 'number') {
+        return (left - right) * factor;
+      }
+      return String(left).localeCompare(String(right)) * factor;
     });
   }, [systemDevices, individualSort]);
 
@@ -307,12 +333,15 @@ export default function ProjectSystemsPage() {
       status: 'active',
     };
 
-    await enrichDeviceWithAutoManufacturer(row, productModels, {
-      context: `systems-add:project-${projectId}`,
-    });
+    if (!row.manufacturer?.trim()) {
+      await enrichDeviceWithAutoManufacturer(row, productModels, {
+        context: `systems-add:project-${projectId}`,
+      });
+    }
 
     const { error } = await supabase.from('devices').insert(row);
     if (error) return error.message;
+    await refreshProductModels();
     setShowAdd(false);
     fetchDevices();
     return null;
@@ -451,7 +480,7 @@ export default function ProjectSystemsPage() {
       const updates: EquipmentGroupUpdates = {};
       switch (editingCell.field) {
         case 'description':
-          updates.device_type = trimmed || null;
+          updates.model_name = trimmed || null;
           break;
         case 'manufacturer':
           updates.manufacturer = trimmed || null;
@@ -503,10 +532,10 @@ export default function ProjectSystemsPage() {
       }
 
       const hadManufacturer = Boolean(device.manufacturer?.trim());
-      const updates: Partial<Pick<Device, 'device_type' | 'manufacturer' | 'model_number' | 'location'>> = {};
+      const updates: Partial<Pick<Device, 'model_name' | 'manufacturer' | 'model_number' | 'location'>> = {};
       switch (editingCell.field) {
-        case 'type':
-          updates.device_type = trimmed || null;
+        case 'description':
+          updates.model_name = trimmed || null;
           break;
         case 'manufacturer':
           updates.manufacturer = trimmed || null;
@@ -610,7 +639,7 @@ export default function ProjectSystemsPage() {
       editingCell?.mode === 'individual' &&
       editingCell.deviceId === device.id &&
       editingCell.field === field;
-    const wrapText = field === 'type';
+    const wrapText = field === 'description';
 
     if (isEditing) {
       return renderCellInput(editingCell);
@@ -824,11 +853,13 @@ export default function ProjectSystemsPage() {
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50">
                   {([
-                    ['description', 'Description', 'w-[11rem]'],
+                    ['description', 'Product Description', 'w-[11rem]'],
                     ['manufacturer', 'Manufacturer', 'w-[7rem]'],
-                    ['model', 'Model', 'w-[7rem]'],
+                    ['model', 'Part Number', 'w-[7rem]'],
+                    ['productCategory', 'Product Category', 'w-[8rem]'],
+                    ['warranty', 'Warranty', 'w-[5rem]'],
                     ['quantity', 'Quantity', 'w-[5rem]'],
-                    ['locations', 'Locations', 'w-[12rem]'],
+                    ['locations', 'Location', 'w-[12rem]'],
                   ] as const).map(([key, label, widthClass]) => (
                     <th key={key} className={`text-left px-4 py-3 ${widthClass}`}>
                       <button
@@ -847,7 +878,7 @@ export default function ProjectSystemsPage() {
                 {sortedEquipmentGroups.map(row => (
                   <tr key={getGroupRowKey(row)} className="hover:bg-slate-50 transition-colors">
                     <td className="px-4 py-3 text-slate-600 align-top w-[11rem] max-w-[11rem]">
-                      {renderGroupedCell(row, 'description', row.description ?? '')}
+                      {renderGroupedCell(row, 'description', row.product_description ?? row.description ?? '')}
                     </td>
                     <td className="px-4 py-3 text-slate-600">
                       <div className="flex items-start gap-1">
@@ -856,33 +887,37 @@ export default function ProjectSystemsPage() {
                           {(() => {
                             const pending = getGroupPendingSuggestion(row);
                             if (!pending) return null;
-                            const label = row.manufacturer?.trim() ? 'Review' : 'Suggested';
                             return (
                               <p className="text-xs text-amber-600 mt-0.5" title={pending.reason}>
-                                {label}: {pending.manufacturer} ({Math.round(pending.confidence * 100)}%)
+                                Suggested: {pending.manufacturer} ({Math.round(pending.confidence * 100)}%)
                               </p>
                             );
                           })()}
                         </div>
-                        {(!row.manufacturer?.trim() || getGroupPendingSuggestion(row)) && (
-                          <ManufacturerSuggestHelper
-                            context={{
-                              description: row.description,
-                              modelNumber: row.model_number,
-                              deviceType: row.description,
-                            }}
-                            productModels={productModels}
-                            pendingSuggestion={getGroupPendingSuggestion(row)}
-                            onAccept={(manufacturer, suggestion) =>
-                              applyGroupedManufacturerSuggestion(row, manufacturer, suggestion)
-                            }
-                            onManualEdit={draft => beginGroupedManufacturerEdit(row, draft)}
-                          />
-                        )}
+                        <ManufacturerSuggestHelper
+                          context={{
+                            description: row.description,
+                            modelNumber: row.model_number,
+                            deviceType: row.description,
+                          }}
+                          productModels={productModels}
+                          currentManufacturer={row.manufacturer}
+                          pendingSuggestion={getGroupPendingSuggestion(row)}
+                          onAccept={(manufacturer, suggestion) =>
+                            applyGroupedManufacturerSuggestion(row, manufacturer, suggestion)
+                          }
+                          onManualEdit={draft => beginGroupedManufacturerEdit(row, draft)}
+                        />
                       </div>
                     </td>
                     <td className="px-4 py-3 text-slate-600">
-                      {renderGroupedCell(row, 'model', row.model_number ?? '')}
+                      {renderGroupedCell(row, 'model', row.part_number ?? row.model_number ?? '')}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {row.product_category || '—'}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {formatWarrantyYears(row.warranty_years)}
                     </td>
                     <td className="px-4 py-3 font-semibold text-slate-900">
                       {renderGroupedCell(row, 'quantity', String(row.quantity))}
@@ -907,8 +942,11 @@ export default function ProjectSystemsPage() {
                 <tr className="border-b border-slate-100 bg-slate-50">
                   {([
                     ['label', 'Label', 'text-left px-5 py-3 w-32'],
-                    ['type', 'Type', 'text-left px-4 py-3'],
-                    ['manufacturerModel', 'Manufacturer / Model', 'text-left px-4 py-3'],
+                    ['description', 'Product Description', 'text-left px-4 py-3'],
+                    ['manufacturer', 'Manufacturer', 'text-left px-4 py-3'],
+                    ['model', 'Part Number', 'text-left px-4 py-3'],
+                    ['productCategory', 'Product Category', 'text-left px-4 py-3'],
+                    ['warranty', 'Warranty', 'text-left px-4 py-3 w-20'],
                     ['location', 'Location', 'text-left px-4 py-3'],
                     ['status', 'Status', 'text-left px-4 py-3'],
                   ] as const).map(([key, label, className]) => (
@@ -930,43 +968,47 @@ export default function ProjectSystemsPage() {
                 {sortedSystemDevices.map(d => (
                   <tr key={d.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-5 py-3 font-mono text-xs font-bold text-slate-700">{d.device_name ?? '—'}</td>
-                    <td className="px-4 py-3 text-slate-600 align-top w-[11rem] max-w-[11rem]">
-                      {renderIndividualCell(d, 'type', d.device_type ?? '')}
+                    <td className="px-4 py-3 text-slate-600 align-top max-w-[11rem]">
+                      {getDeviceProductDescription(d) || '—'}
                     </td>
                     <td className="px-4 py-3 text-slate-600">
-                      <div className="flex flex-col gap-1">
-                        <div className="flex items-start gap-1">
-                          <div className="flex-1 min-w-0">
-                            {renderIndividualCell(d, 'manufacturer', d.manufacturer ?? '')}
-                            {(() => {
-                              const pending = getDevicePendingSuggestion(d);
-                              if (!pending) return null;
-                              const label = d.manufacturer?.trim() ? 'Review' : 'Suggested';
-                              return (
-                                <p className="text-xs text-amber-600 mt-0.5" title={pending.reason}>
-                                  {label}: {pending.manufacturer} ({Math.round(pending.confidence * 100)}%)
-                                </p>
-                              );
-                            })()}
-                          </div>
-                          {(!d.manufacturer?.trim() || getDevicePendingSuggestion(d)) && (
-                            <ManufacturerSuggestHelper
-                              context={{
-                                description: d.device_type,
-                                modelNumber: d.model_number,
-                                deviceType: d.device_type,
-                              }}
-                              productModels={productModels}
-                              pendingSuggestion={getDevicePendingSuggestion(d)}
-                              onAccept={(manufacturer, suggestion) =>
-                                applyIndividualManufacturerSuggestion(d, manufacturer, suggestion)
-                              }
-                              onManualEdit={draft => beginIndividualManufacturerEdit(d, draft)}
-                            />
-                          )}
+                      <div className="flex items-start gap-1">
+                        <div className="flex-1 min-w-0">
+                          {renderIndividualCell(d, 'manufacturer', d.manufacturer ?? '')}
+                          {(() => {
+                            const pending = getDevicePendingSuggestion(d);
+                            if (!pending) return null;
+                            return (
+                              <p className="text-xs text-amber-600 mt-0.5" title={pending.reason}>
+                                Suggested: {pending.manufacturer} ({Math.round(pending.confidence * 100)}%)
+                              </p>
+                            );
+                          })()}
                         </div>
-                        {renderIndividualCell(d, 'model', d.model_number ?? '')}
+                        <ManufacturerSuggestHelper
+                          context={{
+                            description: getDeviceProductDescription(d),
+                            modelNumber: d.model_number,
+                            deviceType: d.device_type,
+                          }}
+                          productModels={productModels}
+                          currentManufacturer={d.manufacturer}
+                          pendingSuggestion={getDevicePendingSuggestion(d)}
+                          onAccept={(manufacturer, suggestion) =>
+                            applyIndividualManufacturerSuggestion(d, manufacturer, suggestion)
+                          }
+                          onManualEdit={draft => beginIndividualManufacturerEdit(d, draft)}
+                        />
                       </div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-600 font-mono text-xs">
+                      {renderIndividualCell(d, 'model', d.model_number ?? '')}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {extractProductCategoryFromNotes(d.notes) || '—'}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {formatWarrantyYears(extractWarrantyYearsFromNotes(d.notes))}
                     </td>
                     <td className="px-4 py-3 text-slate-500 max-w-[180px]">
                       {renderIndividualCell(d, 'location', d.location ?? '')}
