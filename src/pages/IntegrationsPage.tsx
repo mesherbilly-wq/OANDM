@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Building, Briefcase, Truck, FileText, FileSpreadsheet, ImageIcon, PenLine, Plug,
+  Building, Briefcase, Truck, FileText, FileSpreadsheet, ImageIcon, PenLine, Plug, Shield,
 } from 'lucide-react';
 import { createIntegrationCentre } from '../integrations';
 import {
@@ -10,9 +10,11 @@ import {
   type IntegrationSettingsGroupView,
 } from '../integrations/settings/integrationSettingsGroups';
 import { SimproConnectionSetup } from '../components/simpro/SimproConnectionSetup';
+import { SafetyCultureConnectionSetup } from '../components/safetyculture/SafetyCultureConnectionSetup';
 
 const GROUP_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   simpro: Building,
+  safetyculture: Shield,
   halopsa: Briefcase,
   bigchange: Truck,
   csv_excel: FileSpreadsheet,
@@ -24,14 +26,19 @@ const GROUP_ICONS: Record<string, React.ComponentType<{ className?: string }>> =
 function IntegrationSettingsCard({ group }: { group: IntegrationSettingsGroupView }) {
   const Icon = GROUP_ICONS[group.id] ?? Plug;
   const [simproSessionConnected, setSimproSessionConnected] = useState(false);
+  const [safetyCultureConnected, setSafetyCultureConnected] = useState(false);
   const statusLabel =
     group.id === 'simpro' && simproSessionConnected
       ? 'Connected'
-      : INTEGRATION_SETTINGS_STATUS_LABELS[group.settingsStatus];
+      : group.id === 'safetyculture' && safetyCultureConnected
+        ? 'Connected'
+        : INTEGRATION_SETTINGS_STATUS_LABELS[group.settingsStatus];
   const statusStyle =
     group.id === 'simpro' && simproSessionConnected
       ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
-      : INTEGRATION_SETTINGS_STATUS_STYLES[group.settingsStatus];
+      : group.id === 'safetyculture' && safetyCultureConnected
+        ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+        : INTEGRATION_SETTINGS_STATUS_STYLES[group.settingsStatus];
 
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
@@ -47,9 +54,11 @@ function IntegrationSettingsCard({ group }: { group: IntegrationSettingsGroupVie
             </span>
           </div>
           <p className="text-sm text-slate-500">{group.description}</p>
-          <p className="text-[11px] text-slate-400 mt-1 font-mono">
-            Connectors: {group.connectorIds.join(', ')}
-          </p>
+          {!group.standalone && (
+            <p className="text-[11px] text-slate-400 mt-1 font-mono">
+              Connectors: {group.connectorIds.join(', ')}
+            </p>
+          )}
         </div>
       </div>
 
@@ -57,7 +66,11 @@ function IntegrationSettingsCard({ group }: { group: IntegrationSettingsGroupVie
         <SimproConnectionSetup onSessionConnectedChange={setSimproSessionConnected} />
       )}
 
-      {!group.showSimproConfig && group.settingsStatus !== 'existing' && group.settingsStatus !== 'available' && (
+      {group.showSafetyCultureConfig && (
+        <SafetyCultureConnectionSetup onConnectionChange={setSafetyCultureConnected} />
+      )}
+
+      {!group.showSimproConfig && !group.showSafetyCultureConfig && group.settingsStatus !== 'existing' && group.settingsStatus !== 'available' && (
         <p className="mt-4 pt-4 border-t border-slate-100 text-xs text-slate-400">
           Configuration for this integration is planned. No connection settings are available yet.
         </p>
@@ -94,9 +107,8 @@ export function IntegrationsPage() {
           <h1 className="text-2xl font-bold text-slate-900">Integrations</h1>
         </div>
         <p className="text-slate-500 ml-[52px]">
-          Manage connections to external business systems. OANDM currently supports one active Simpro company
-          connection per workspace. Simpro import will use jobs (by job number), not quotes. Multi-company setup is
-          not available yet. Credentials will be stored server-side only when enabled.
+          Manage connections to external business systems. Simpro and SafetyCulture API tokens are configured here.
+          Link SafetyCulture templates to handover documents on Handover → Handover Config.
         </p>
       </div>
 

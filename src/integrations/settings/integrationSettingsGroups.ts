@@ -3,6 +3,7 @@ import type { ConnectorAvailability, ConnectorId } from '../types';
 
 export type IntegrationSettingsGroupId =
   | 'simpro'
+  | 'safetyculture'
   | 'halopsa'
   | 'bigchange'
   | 'csv_excel'
@@ -25,15 +26,28 @@ export interface IntegrationSettingsGroupView {
   registryAvailability: ConnectorAvailability;
   settingsStatus: IntegrationSettingsStatus;
   showSimproConfig: boolean;
+  showSafetyCultureConfig: boolean;
+  standalone?: boolean;
 }
+
+const STANDALONE_GROUP_COPY: Partial<Record<IntegrationSettingsGroupId, { label: string; description: string }>> = {
+  safetyculture: {
+    label: 'SafetyCulture',
+    description:
+      'Connect your SafetyCulture API token for handover and commissioning inspections. Link templates to documents on Handover Config.',
+  },
+};
 
 const GROUP_DEFINITIONS: {
   id: IntegrationSettingsGroupId;
   connectorIds: ConnectorId[];
   label?: string;
   showSimproConfig?: boolean;
+  showSafetyCultureConfig?: boolean;
+  standalone?: boolean;
 }[] = [
   { id: 'simpro', connectorIds: ['simpro'], showSimproConfig: true },
+  { id: 'safetyculture', connectorIds: [], showSafetyCultureConfig: true, standalone: true },
   { id: 'halopsa', connectorIds: ['halopsa'] },
   { id: 'bigchange', connectorIds: ['bigchange'] },
   { id: 'csv_excel', connectorIds: ['csv', 'excel'], label: 'CSV / Excel' },
@@ -46,7 +60,7 @@ function resolveSettingsStatus(
   groupId: IntegrationSettingsGroupId,
   availability: ConnectorAvailability,
 ): IntegrationSettingsStatus {
-  if (groupId === 'simpro') return 'not_connected';
+  if (groupId === 'simpro' || groupId === 'safetyculture') return 'not_connected';
   if (groupId === 'ai_documents' || groupId === 'ai_drawings') return 'existing';
   if (groupId === 'manual' && availability === 'available') return 'available';
   if (groupId === 'halopsa' || groupId === 'bigchange' || groupId === 'csv_excel') return 'coming_soon';
@@ -64,6 +78,21 @@ export function buildIntegrationSettingsGroups(
   const byId = new Map(connectors.map(c => [c.id, c]));
 
   return GROUP_DEFINITIONS.map(def => {
+    if (def.standalone) {
+      const copy = STANDALONE_GROUP_COPY[def.id];
+      return {
+        id: def.id,
+        label: def.label ?? copy?.label ?? def.id,
+        description: copy?.description ?? '',
+        connectorIds: def.connectorIds,
+        registryAvailability: 'available' as ConnectorAvailability,
+        settingsStatus: resolveSettingsStatus(def.id, 'available'),
+        showSimproConfig: false,
+        showSafetyCultureConfig: !!def.showSafetyCultureConfig,
+        standalone: true,
+      };
+    }
+
     const matched = def.connectorIds
       .map(id => byId.get(id))
       .filter((c): c is AnyIntegrationConnector => !!c);
@@ -89,6 +118,7 @@ export function buildIntegrationSettingsGroups(
       registryAvailability,
       settingsStatus: resolveSettingsStatus(def.id, primary.availability),
       showSimproConfig: !!def.showSimproConfig,
+      showSafetyCultureConfig: !!def.showSafetyCultureConfig,
     };
   });
 }

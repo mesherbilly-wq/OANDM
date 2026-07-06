@@ -8,6 +8,38 @@ const corsHeaders = {
 };
 
 const SC_BASE = "https://api.safetyculture.io";
+const SC_AUDIT_TITLE_ITEM_ID = "f3245d40-ea77-11e1-aff1-0800200c9a66";
+
+/** Standard SafetyCulture title-page item IDs (information section). */
+const SC_STANDARD_HEADER_ITEM_IDS = new Set([
+  SC_AUDIT_TITLE_ITEM_ID,
+  "f3245d41-ea77-11e1-aff1-0800200c9a66", // Client / Site
+  "f3245d42-ea77-11e1-aff1-0800200c9a66", // Conducted on
+  "f3245d43-ea77-11e1-aff1-0800200c9a66", // Prepared by
+  "f3245d44-ea77-11e1-aff1-0800200c9a66", // Location
+  "f3245d45-ea77-11e1-aff1-0800200c9a66", // Personnel
+  "f3245d46-ea77-11e1-aff1-0800200c9a66", // Document No.
+]);
+
+function isHeaderItemId(itemId: string): boolean {
+  return SC_STANDARD_HEADER_ITEM_IDS.has(itemId);
+}
+
+function normalizeIntegrationItemType(raw: string | undefined): string {
+  const up = String(raw ?? "TEXT").toUpperCase().trim();
+  if (up.startsWith("ITEM_TYPE_")) return up;
+  const map: Record<string, string> = {
+    TEXT: "ITEM_TYPE_TEXT",
+    TEXTSINGLE: "ITEM_TYPE_TEXT",
+    NUMBER: "ITEM_TYPE_NUMBER",
+    DATETIME: "ITEM_TYPE_DATETIME",
+    CHECKBOX: "ITEM_TYPE_CHECKBOX",
+    QUESTION: "ITEM_TYPE_QUESTION",
+    PARAGRAPH: "ITEM_TYPE_PARAGRAPH",
+    LOCATION: "ITEM_TYPE_LOCATION",
+  };
+  return map[up] ?? `ITEM_TYPE_${up}`;
+}
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -16,12 +48,376 @@ function json(body: unknown, status = 200) {
   });
 }
 
+/** Strip wrappers users paste from SC UI or curl examples. */
+function normalizeSafetyCultureToken(raw: string): string {
+  let token = raw.trim();
+  if (
+    (token.startsWith('"') && token.endsWith('"')) ||
+    (token.startsWith("'") && token.endsWith("'"))
+  ) {
+    token = token.slice(1, -1).trim();
+  }
+  if (token.toLowerCase().startsWith("bearer ")) {
+    token = token.slice(7).trim();
+  }
+  return token;
+}
+
+function scAuthHeaders(token: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+}
+
 function scErr(r: Response, text: string) {
+  if (r.status === 401) {
+    return (
+      "SafetyCulture API 401: token rejected. Disconnect, then paste a fresh API token from " +
+      "SafetyCulture → My Profile → Settings → API tokens (new tokens start with scapi_). " +
+      `Details: ${text.substring(0, 200)}`
+    );
+  }
   return `SafetyCulture API ${r.status}: ${text.substring(0, 400)}`;
+}
+
+interface NormalizedTemplate {
+  id: string;
+  template_id: string;
+  name: string;
+  owner_name: string;
+  modified_at: string;
+}
+
+function mapTemplateRow(t: Record<string, unknown>): NormalizedTemplate | null {
+  const id = String(t.id ?? t.template_id ?? "").trim();
+  if (!id) return null;
+  return {
+    id,
+    template_id: id,
+    name: String(t.name ?? t.title ?? "Unnamed Template"),
+    owner_name: String(t.owner_name ?? t.owner?.name ?? ""),
+    modified_at: String(t.modified_at ?? t.updated_at ?? t.revision_key ?? ""),
+  };
+}
+
+function extractTemplateArray(data: Record<string, unknown>): Record<string, unknown>[] {
+  const candidates = [
+    data.templates,
+    data.data,
+    data.results,
+    (data.data as Record<string, unknown> | undefined)?.templates,
+    (data.data as Record<string, unknown> | undefined)?.items,
+  ];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate as Record<string, unknown>[];
+  }
+  return [];
+}
+
+async function fetchTemplatesFromV1(token: string): Promise<{ ok: boolean; status: number; templates: NormalizedTemplate[]; error?: string }> {
+  const headers = scAuthHeaders(token);
+  const templates: NormalizedTemplate[] = [];
+  let pageToken: string | null = null;
+  let lastStatus = 0;
+
+  for (let page = 0; page < 20; page += 1) {
+    const params = new URLSearchParams({ page_size: "100" });
+    if (pageToken) params.set("page_token", pageToken);
+    const url = `${SC_BASE}/templates/v1/templates?${params}`;
+    const r = await fetch(url, { headers }).catch(() => null);
+    if (!r) return { ok: false, status: 0, templates, error: "Network error connecting to SafetyCulture" };
+    lastStatus = r.status;
+    if (!r.ok) {
+      const errText = await r.text().catch(() => `HTTP ${r.status}`);
+      return { ok: false, status: r.status, templates, error: scErr(r, errText) };
+    }
+
+    const data = await r.json().catch(() => ({} as Record<string, unknown>));
+    for (const row of extractTemplateArray(data)) {
+      const mapped = mapTemplateRow(row);
+      if (mapped && !(row.archived === true)) templates.push(mapped);
+    }
+
+    const next =
+      (data.next_page_token as string | undefined) ??
+      (data.nextPageToken as string | undefined) ??
+      ((data.metadata as Record<string, unknown> | undefined)?.next_page_token as string | undefined) ??
+      null;
+    if (!next || next === pageToken) break;
+    pageToken = next;
+  }
+
+  return { ok: true, status: lastStatus, templates };
+}
+
+async function fetchTemplatesFromFeed(token: string): Promise<{ ok: boolean; status: number; templates: NormalizedTemplate[]; error?: string }> {
+  const r = await fetch(`${SC_BASE}/feed/templates`, { headers: scAuthHeaders(token) }).catch(() => null);
+  if (!r) return { ok: false, status: 0, templates: [], error: "Network error connecting to SafetyCulture" };
+  if (!r.ok) {
+    const errText = await r.text().catch(() => `HTTP ${r.status}`);
+    return { ok: false, status: r.status, templates: [], error: scErr(r, errText) };
+  }
+  const data = await r.json().catch(() => ({} as Record<string, unknown>));
+  const templates = extractTemplateArray(data)
+    .filter(t => t.archived !== true)
+    .map(mapTemplateRow)
+    .filter((t): t is NormalizedTemplate => t != null);
+  return { ok: true, status: r.status, templates };
+}
+
+async function listSafetyCultureTemplates(token: string): Promise<{ templates: NormalizedTemplate[]; source: string; error?: string }> {
+  const v1 = await fetchTemplatesFromV1(token);
+  if (v1.ok && v1.templates.length > 0) {
+    return { templates: v1.templates, source: "templates/v1/templates" };
+  }
+
+  const feed = await fetchTemplatesFromFeed(token);
+  if (feed.ok && feed.templates.length > 0) {
+    return { templates: feed.templates, source: "feed/templates" };
+  }
+
+  if (v1.ok) return { templates: v1.templates, source: "templates/v1/templates" };
+  if (feed.ok) return { templates: feed.templates, source: "feed/templates" };
+
+  return {
+    templates: [],
+    source: "none",
+    error: v1.error ?? feed.error ?? "Could not list SafetyCulture templates.",
+  };
+}
+
+async function verifySafetyCultureConnection(token: string): Promise<{ ok: boolean; error?: string; source?: string }> {
+  const listed = await listSafetyCultureTemplates(token);
+  if (listed.templates.length > 0) {
+    return { ok: true, source: listed.source };
+  }
+  if (listed.error) return { ok: false, error: listed.error };
+
+  // Empty library is still a valid token — probe template list endpoint directly.
+  const r = await fetch(`${SC_BASE}/templates/v1/templates?page_size=1`, { headers: scAuthHeaders(token) }).catch(() => null);
+  if (r?.ok) return { ok: true, source: "templates/v1/templates" };
+  if (r && !r.ok) {
+    const errText = await r.text().catch(() => `HTTP ${r.status}`);
+    return { ok: false, error: scErr(r, errText) };
+  }
+  return { ok: false, error: "Network error connecting to SafetyCulture" };
 }
 
 function log(action: string, detail: string) {
   console.log(`[SC-proxy][${action}] ${detail}`);
+}
+
+function inspectionIdVariants(inspectionId: string): { auditId: string; inspIds: string[]; auditIds: string[] } {
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const inspIds = new Set<string>([inspectionId]);
+  const auditIds = new Set<string>();
+  let auditId = inspectionId;
+
+  if (inspectionId.startsWith("insp_")) {
+    const core = inspectionId.slice(5);
+    auditId = `audit_${core}`;
+    auditIds.add(auditId);
+    inspIds.add(auditId);
+    if (UUID_RE.test(core)) inspIds.add(core);
+  } else if (inspectionId.startsWith("audit_")) {
+    const core = inspectionId.slice(6);
+    auditIds.add(inspectionId);
+    inspIds.add(`insp_${core}`);
+    auditId = inspectionId;
+    if (UUID_RE.test(core)) inspIds.add(core);
+  } else if (UUID_RE.test(inspectionId)) {
+    auditId = `audit_${inspectionId}`;
+    auditIds.add(auditId);
+    auditIds.add(inspectionId);
+    inspIds.add(`insp_${inspectionId}`);
+  } else {
+    auditIds.add(inspectionId);
+  }
+
+  return { auditId, inspIds: [...inspIds], auditIds: [...auditIds] };
+}
+
+async function fetchTemplateItems(
+  templateId: string,
+  headers: Record<string, string>,
+): Promise<any[]> {
+  try {
+    const r = await fetch(`${SC_BASE}/templates/v1/templates/${templateId}`, { headers });
+    if (!r.ok) return [];
+    const raw = await r.json().catch(() => ({}));
+    return flattenTemplateItems(
+      raw.items ?? raw.template?.items ?? raw.header_items ?? raw.data?.items ?? [],
+    );
+  } catch {
+    return [];
+  }
+}
+
+function templateItemIds(templateItems: any[]): Set<string> {
+  const ids = new Set<string>();
+  for (const item of templateItems) {
+    const id = item.item_id ?? item.id;
+    if (id) ids.add(String(id));
+  }
+  return ids;
+}
+
+function filterItemsToTemplate(items: any[], validIds: Set<string>): any[] {
+  return items.filter(item => item.item_id && validIds.has(String(item.item_id)));
+}
+
+function flattenTemplateItems(arr: any[]): any[] {
+  const out: any[] = [];
+  for (const item of arr ?? []) {
+    out.push(item);
+    if (Array.isArray(item.children)) out.push(...flattenTemplateItems(item.children));
+    if (Array.isArray(item.items)) out.push(...flattenTemplateItems(item.items));
+  }
+  return out;
+}
+
+async function discoverAuditTitleItemIds(
+  templateId: string,
+  explicitItemId: string | undefined,
+  headers: Record<string, string>,
+  templateItems?: any[],
+): Promise<string[]> {
+  const items = templateItems ?? await fetchTemplateItems(templateId, headers);
+  const validIds = templateItemIds(items);
+  const ids = new Set<string>();
+
+  if (explicitItemId?.trim() && validIds.has(explicitItemId.trim())) {
+    ids.add(explicitItemId.trim());
+  }
+  if (validIds.has(SC_AUDIT_TITLE_ITEM_ID)) ids.add(SC_AUDIT_TITLE_ITEM_ID);
+
+  for (const item of items) {
+    const id = item.item_id ?? item.id;
+    const label = String(item.label ?? item.name ?? "").toLowerCase();
+    if (
+      id && validIds.has(String(id)) && (
+        /audit\s*title/.test(label)
+        || /inspection\s*title/.test(label)
+        || label === "title"
+      )
+    ) {
+      ids.add(String(id));
+    }
+  }
+
+  return [...ids];
+}
+
+async function applyAuditListName(
+  inspectionId: string,
+  name: string,
+  headers: Record<string, string>,
+): Promise<string | null> {
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+  const { auditIds } = inspectionIdVariants(inspectionId);
+
+  const bodies = [
+    { audit_data: { name: trimmed } },
+    { name: trimmed },
+    { audit_name: trimmed },
+    { audit_data: { name: trimmed }, name: trimmed, audit_name: trimmed },
+  ];
+
+  for (const auditId of auditIds) {
+    for (const body of bodies) {
+      const r = await fetch(`${SC_BASE}/audits/${auditId}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(body),
+      }).catch(() => null);
+      if (r?.ok) {
+        log("applyAuditListName", `legacy PUT ${auditId} keys=${Object.keys(body).join(",")}`);
+        return `legacy_name:${auditId}`;
+      }
+    }
+  }
+  return null;
+}
+
+async function applyInspectionDisplayName(
+  inspectionId: string | null | undefined,
+  name: string,
+  titleItemIds: string[],
+  headers: Record<string, string>,
+): Promise<string | null> {
+  if (!inspectionId || !name.trim()) return null;
+  const trimmed = name.trim();
+  const { auditId, inspIds, auditIds } = inspectionIdVariants(inspectionId);
+  const itemIds = new Set(titleItemIds);
+
+  for (const aid of auditIds) {
+    try {
+      const getR = await fetch(`${SC_BASE}/audits/${aid}`, { headers });
+      if (getR.ok) {
+        const audit = await getR.json().catch(() => ({}));
+        for (const item of audit.header_items ?? []) {
+          const id = item.item_id ?? item.id;
+          const label = String(item.label ?? "").toLowerCase();
+          if (id && (/audit\s*title/.test(label) || /inspection\s*title/.test(label))) {
+            itemIds.add(String(id));
+          }
+        }
+        break;
+      }
+    } catch { /* ignore */ }
+  }
+
+  let lastOk: string | null = null;
+
+  for (const itemId of itemIds) {
+    for (const inspId of inspIds) {
+      const putR = await fetch(`${SC_BASE}/inspections/integration/v1/inspections/${inspId}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          items: [{
+            item_id: itemId,
+            item_type: "ITEM_TYPE_TEXT",
+            text_item: { value: trimmed },
+          }],
+        }),
+      }).catch(() => null);
+      if (putR?.ok) {
+        lastOk = `integration:${inspId}`;
+        log("applyInspectionDisplayName", `integration PUT ${inspId} item=${itemId}`);
+      } else if (putR) {
+        const err = await putR.text().catch(() => `HTTP ${putR.status}`);
+        log("applyInspectionDisplayName", `integration PUT failed ${inspId} item=${itemId}: ${err.substring(0, 200)}`);
+      }
+    }
+
+    for (const legacyType of ["textsingle", "text"]) {
+      for (const aid of auditIds) {
+        const legacyR = await fetch(`${SC_BASE}/audits/${aid}`, {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({
+            header_items: [{ item_id: itemId, type: legacyType, responses: { text: trimmed } }],
+          }),
+        }).catch(() => null);
+        if (legacyR?.ok) {
+          lastOk = `legacy:${aid}:${legacyType}`;
+          log("applyInspectionDisplayName", `legacy PUT ${aid} type=${legacyType} item=${itemId}`);
+          break;
+        }
+      }
+    }
+  }
+
+  if (!lastOk) {
+    const listName = await applyAuditListName(inspectionId, trimmed, headers);
+    if (listName) lastOk = listName;
+  }
+
+  return lastOk;
 }
 
 Deno.serve(async (req: Request) => {
@@ -40,9 +436,10 @@ Deno.serve(async (req: Request) => {
   // ── save_token ────────────────────────────────────────────────────────────────
   if (action === "save_token") {
     const { token } = body;
-    if (!token?.trim()) return json({ error: "token required" });
+    const normalized = normalizeSafetyCultureToken(String(token ?? ""));
+    if (!normalized) return json({ error: "token required" });
     const { error } = await db.from("integration_settings")
-      .upsert({ key: "safetyculture_api_token", value: token.trim(), updated_at: new Date().toISOString() }, { onConflict: "key" });
+      .upsert({ key: "safetyculture_api_token", value: normalized, updated_at: new Date().toISOString() }, { onConflict: "key" });
     if (error) return json({ error: error.message });
     return json({ ok: true });
   }
@@ -61,8 +458,8 @@ Deno.serve(async (req: Request) => {
     .single();
 
   if (!tokenRow?.value) return json({ error: "SafetyCulture API token not configured" });
-  const scToken = tokenRow.value as string;
-  const authHeaders = { Authorization: `Bearer ${scToken}`, "Content-Type": "application/json" };
+  const scToken = normalizeSafetyCultureToken(tokenRow.value as string);
+  const authHeaders = scAuthHeaders(scToken);
 
   // ── diagnose_template ────────────────────────────────────────────────────────
   // Returns raw API responses from every relevant endpoint so the UI can show
@@ -168,35 +565,18 @@ Deno.serve(async (req: Request) => {
 
   // ── test_connection ───────────────────────────────────────────────────────────
   if (action === "test_connection") {
-    const r = await fetch(`${SC_BASE}/feed/templates`, { headers: authHeaders }).catch(() => null);
-    if (!r) return json({ error: "Network error connecting to SafetyCulture" });
-    if (!r.ok) {
-      const errText = await r.text().catch(() => `HTTP ${r.status}`);
-      return json({ error: scErr(r, errText) });
-    }
-    return json({ ok: true });
+    const verified = await verifySafetyCultureConnection(scToken);
+    if (!verified.ok) return json({ error: verified.error ?? "Connection failed" });
+    return json({ ok: true, source: verified.source ?? "templates/v1/templates" });
   }
 
   // ── list_templates ────────────────────────────────────────────────────────────
   if (action === "list_templates") {
-    const r = await fetch(`${SC_BASE}/feed/templates`, { headers: authHeaders }).catch(() => null);
-    if (!r) return json({ error: "Network error connecting to SafetyCulture", templates: [] });
-    if (!r.ok) {
-      const errText = await r.text().catch(() => `HTTP ${r.status}`);
-      return json({ error: scErr(r, errText), templates: [] });
+    const listed = await listSafetyCultureTemplates(scToken);
+    if (listed.error && listed.templates.length === 0) {
+      return json({ error: listed.error, templates: [] });
     }
-    const data = await r.json();
-    const raw: any[] = data.data ?? data.templates ?? data.results ?? [];
-    const templates = raw
-      .filter(t => !t.archived)
-      .map(t => ({
-        id: t.id ?? t.template_id,
-        template_id: t.id ?? t.template_id,
-        name: t.name ?? t.title ?? "Unnamed Template",
-        owner_name: t.owner_name ?? "",
-        modified_at: t.modified_at ?? t.updated_at ?? "",
-      }));
-    return json({ templates });
+    return json({ templates: listed.templates, source: listed.source });
   }
 
   // ── get_template_definition ───────────────────────────────────────────────────
@@ -383,88 +763,202 @@ Deno.serve(async (req: Request) => {
   }
 
   // ── create_inspection ─────────────────────────────────────────────────────────
-  // Creates a pre-filled inspection in SafetyCulture using the legacy /audits
-  // endpoint which has proven support for prefilling via `responses.text`.
-  // Falls back to the integration endpoint without items if the legacy one fails.
   if (action === "create_inspection") {
-    const { template_id, items: rawItems, name } = body;
+    const { template_id, items: rawItems, name, audit_title_item_id } = body;
     if (!template_id) return json({ error: "template_id required" });
 
-    const items: any[] = Array.isArray(rawItems) ? [...rawItems] : [];
+    const templateItems = await fetchTemplateItems(template_id, authHeaders);
+    const validItemIds = templateItemIds(templateItems);
+    const items: any[] = filterItemsToTemplate(
+      Array.isArray(rawItems) ? [...rawItems] : [],
+      validItemIds,
+    );
+    const inspectionName = typeof name === "string" ? name.trim() : "";
+    const titleItemIds = await discoverAuditTitleItemIds(
+      template_id,
+      audit_title_item_id,
+      authHeaders,
+      templateItems,
+    );
+    const primaryTitleItemId = titleItemIds[0] ?? (
+      validItemIds.has(SC_AUDIT_TITLE_ITEM_ID) ? SC_AUDIT_TITLE_ITEM_ID : null
+    );
+    const createErrors: string[] = [];
 
-    // Build items in the legacy /audits format: { item_id, type, responses }
-    // The caller sends { item_id, item_type: "TEXT", text_item: { value } }
-    // We convert to { item_id, type: "textsingle", responses: { text: value } }
+    const finalizeSuccess = async (inspection_id: string | null, raw: unknown, via: string) => {
+      const rename_via = inspectionName
+        ? await applyInspectionDisplayName(inspection_id, inspectionName, titleItemIds, authHeaders)
+        : null;
+      return json({
+        ok: true,
+        inspection_id,
+        raw,
+        created_via: via,
+        rename_via,
+        ...(createErrors.length > 0 ? { create_errors: createErrors } : {}),
+      });
+    };
+
+    const toLegacyItem = (item: any) => {
+      if (item.text_item?.value) {
+        return {
+          item_id: item.item_id,
+          type: "textsingle",
+          responses: { text: item.text_item.value },
+        };
+      }
+      if (item.datetime_item?.value) {
+        return {
+          item_id: item.item_id,
+          type: "datetime",
+          responses: { datetime: item.datetime_item.value },
+        };
+      }
+      return null;
+    };
+
     const legacyItems = items
-      .filter(i => i.text_item?.value || i.datetime_item?.value)
-      .map(i => {
-        if (i.text_item?.value) {
-          return {
-            item_id: i.item_id,
-            type: "textsingle",
-            responses: { text: i.text_item.value },
-          };
+      .map(toLegacyItem)
+      .filter(Boolean) as Array<{ item_id: string; type: string; responses: Record<string, string> }>;
+
+    const titleLegacyItems: typeof legacyItems = inspectionName && primaryTitleItemId
+      && !titleItemIds.some(id => legacyItems.some(li => li.item_id === id))
+      ? [
+        { item_id: primaryTitleItemId, type: "textsingle", responses: { text: inspectionName } },
+        { item_id: primaryTitleItemId, type: "text", responses: { text: inspectionName } },
+      ]
+      : [];
+
+    const mergedLegacy = [
+      ...titleLegacyItems,
+      ...legacyItems.filter(li => !titleLegacyItems.some(t => t.item_id === li.item_id && t.type === li.type)),
+    ];
+    const headerItems = mergedLegacy.filter(li => isHeaderItemId(li.item_id));
+    const bodyItems = mergedLegacy.filter(li => !isHeaderItemId(li.item_id));
+
+    const toIntegrationItems = () => {
+      const integrationItems: any[] = [];
+      for (const item of items) {
+        if (item.text_item?.value) {
+          integrationItems.push({
+            item_id: item.item_id,
+            item_type: normalizeIntegrationItemType(item.item_type),
+            text_item: { value: item.text_item.value },
+          });
+        } else if (item.datetime_item?.value) {
+          integrationItems.push({
+            item_id: item.item_id,
+            item_type: normalizeIntegrationItemType(item.item_type ?? "DATETIME"),
+            datetime_item: { value: item.datetime_item.value },
+          });
         }
-        if (i.datetime_item?.value) {
-          return {
-            item_id: i.item_id,
-            type: "datetime",
-            responses: { datetime: i.datetime_item.value },
-          };
+      }
+      if (inspectionName && primaryTitleItemId && !titleItemIds.some(id => integrationItems.some(item => item.item_id === id))) {
+        integrationItems.unshift({
+          item_id: primaryTitleItemId,
+          item_type: "ITEM_TYPE_TEXT",
+          text_item: { value: inspectionName },
+        });
+      }
+      return integrationItems;
+    };
+
+    const withAuditName = (reqBody: Record<string, unknown>) => {
+      if (inspectionName) {
+        reqBody.audit_name = inspectionName;
+        reqBody.name = inspectionName;
+      }
+      return reqBody;
+    };
+
+    log(
+      "create_inspection",
+      `template=${template_id}, prefill_items=${mergedLegacy.length}, header=${headerItems.length}, body=${bodyItems.length}, name=${inspectionName || "(none)"}, title_items=${titleItemIds.join(",")}`,
+    );
+
+    // Strategy 1: Integration API (preferred — supports item prefill reliably)
+    {
+      const integrationItems = toIntegrationItems();
+      if (integrationItems.length > 0) {
+        const r = await fetch(`${SC_BASE}/inspections/integration/v1/inspections`, {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({ template_id, items: integrationItems }),
+        }).catch(() => null);
+
+        if (r?.ok) {
+          const data = await r.json().catch(() => ({}));
+          const inspection_id = data.inspection_identity?.inspection_id ?? data.inspection_id ?? null;
+          log("create_inspection", `created via integration: inspection_id=${inspection_id}`);
+          return await finalizeSuccess(inspection_id, data, "integration");
         }
-        return null;
-      })
-      .filter(Boolean);
 
-    log("create_inspection", `template=${template_id}, prefill_items=${legacyItems.length}, name=${name ?? "(none)"}`);
+        const errText = r ? await r.text().catch(() => `HTTP ${r.status}`) : "network error";
+        createErrors.push(`integration (${r?.status}): ${errText.substring(0, 300)}`);
+        log("create_inspection", `integration failed (${r?.status}): ${errText.substring(0, 300)}`);
+      }
+    }
 
-    // Strategy 1: Legacy /audits endpoint with prefilled header_items + items
-    // SC docs say header_items = title page fields, items = body fields.
-    // Since we don't know which are header vs body, we send in both arrays.
-    if (legacyItems.length > 0) {
-      const reqBody: any = {
-        template_id,
-        header_items: legacyItems,
-        items: legacyItems,
-      };
-
+    // Strategy 2: Legacy /audits with prefilled header_items
+    if (headerItems.length > 0) {
       const r = await fetch(`${SC_BASE}/audits`, {
         method: "POST",
         headers: authHeaders,
-        body: JSON.stringify(reqBody),
+        body: JSON.stringify(withAuditName({
+          template_id,
+          header_items: headerItems,
+          items: bodyItems,
+        })),
       }).catch(() => null);
 
       if (r?.ok) {
         const data = await r.json().catch(() => ({}));
         const inspection_id = data.audit_id ?? data.inspection_id ?? null;
         log("create_inspection", `created via /audits: audit_id=${inspection_id}`);
-        return json({ ok: true, inspection_id, raw: data });
+        return await finalizeSuccess(inspection_id, data, "audits");
       }
 
       const errText = r ? await r.text().catch(() => `HTTP ${r.status}`) : "network error";
+      createErrors.push(`audits (${r?.status}): ${errText.substring(0, 300)}`);
       log("create_inspection", `/audits failed (${r?.status}): ${errText.substring(0, 300)}`);
 
-      // If /audits fails with items, try with only header_items
       const r2 = await fetch(`${SC_BASE}/audits`, {
         method: "POST",
         headers: authHeaders,
-        body: JSON.stringify({ template_id, header_items: legacyItems }),
+        body: JSON.stringify(withAuditName({ template_id, header_items: headerItems })),
       }).catch(() => null);
 
       if (r2?.ok) {
         const data = await r2.json().catch(() => ({}));
         const inspection_id = data.audit_id ?? data.inspection_id ?? null;
-        log("create_inspection", `created via /audits (header_items only): audit_id=${inspection_id}`);
-        return json({ ok: true, inspection_id, raw: data });
+        log("create_inspection", `created via /audits (header only): audit_id=${inspection_id}`);
+        return await finalizeSuccess(inspection_id, data, "audits_header_only");
       }
-
-      const errText2 = r2 ? await r2.text().catch(() => `HTTP ${r2.status}`) : "network error";
-      log("create_inspection", `/audits header_items-only failed (${r2?.status}): ${errText2.substring(0, 300)}`);
     }
 
-    // Strategy 2: Legacy /audits without prefill (just create the inspection)
-    {
+    // Strategy 3: Legacy /audits with audit_name only (list title when template has no Audit Title field)
+    if (inspectionName) {
       const r = await fetch(`${SC_BASE}/audits`, {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify(withAuditName({ template_id })),
+      }).catch(() => null);
+
+      if (r?.ok) {
+        const data = await r.json().catch(() => ({}));
+        const inspection_id = data.audit_id ?? data.inspection_id ?? null;
+        log("create_inspection", `created via /audits (name only): audit_id=${inspection_id}`);
+        return await finalizeSuccess(inspection_id, data, "audits_name_only");
+      }
+
+      const errText = r ? await r.text().catch(() => `HTTP ${r.status}`) : "network error";
+      createErrors.push(`audits_name_only (${r?.status}): ${errText.substring(0, 300)}`);
+      log("create_inspection", `/audits name-only failed (${r?.status}): ${errText.substring(0, 300)}`);
+    }
+
+    // Strategy 4: Bare create then rename
+    {
+      const r = await fetch(`${SC_BASE}/inspections/integration/v1/inspections`, {
         method: "POST",
         headers: authHeaders,
         body: JSON.stringify({ template_id }),
@@ -472,36 +966,30 @@ Deno.serve(async (req: Request) => {
 
       if (r?.ok) {
         const data = await r.json().catch(() => ({}));
-        const inspection_id = data.audit_id ?? data.inspection_id ?? null;
-        log("create_inspection", `created via /audits (no prefill): audit_id=${inspection_id}`);
-        return json({ ok: true, inspection_id, raw: data });
+        const inspection_id = data.inspection_identity?.inspection_id ?? data.inspection_id ?? null;
+        log("create_inspection", `created via integration bare: inspection_id=${inspection_id}`);
+        return await finalizeSuccess(inspection_id, data, "integration_bare");
       }
 
       const errText = r ? await r.text().catch(() => `HTTP ${r.status}`) : "network error";
-      log("create_inspection", `/audits bare failed (${r?.status}): ${errText.substring(0, 200)}`);
-    }
+      log("create_inspection", `integration bare failed (${r?.status}): ${errText.substring(0, 200)}`);
 
-    // Strategy 3: Integration endpoint as final fallback
-    {
-      const reqBody: any = { template_id };
-      if (name) reqBody.audit_name = name;
-
-      const r = await fetch(`${SC_BASE}/inspections/integration/v1/inspections`, {
+      const r2 = await fetch(`${SC_BASE}/audits`, {
         method: "POST",
         headers: authHeaders,
-        body: JSON.stringify(reqBody),
+        body: JSON.stringify({ template_id }),
       }).catch(() => null);
 
-      if (r?.ok) {
-        const data = await r.json().catch(() => ({}));
-        const inspection_id = data.inspection_identity?.inspection_id ?? data.inspection_id ?? null;
-        log("create_inspection", `created via integration endpoint: inspection_id=${inspection_id}`);
-        return json({ ok: true, inspection_id, raw: data });
+      if (r2?.ok) {
+        const data = await r2.json().catch(() => ({}));
+        const inspection_id = data.audit_id ?? data.inspection_id ?? null;
+        log("create_inspection", `created via /audits bare: audit_id=${inspection_id}`);
+        return await finalizeSuccess(inspection_id, data, "audits_bare");
       }
 
-      const errText = r ? await r.text().catch(() => `HTTP ${r.status}`) : "network error";
-      log("create_inspection", `integration endpoint failed: ${errText.substring(0, 200)}`);
-      return json({ error: scErr(r!, errText) });
+      const errText2 = r2 ? await r2.text().catch(() => `HTTP ${r2.status}`) : "network error";
+      log("create_inspection", `/audits bare failed (${r2?.status}): ${errText2.substring(0, 200)}`);
+      return json({ error: scErr(r2 ?? r!, errText2 || errText), create_errors: createErrors });
     }
   }
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useProject } from './ProjectLayout';
 import { supabase } from '../lib/supabase';
+import { appendInspectionTitleItem } from '../components/safetyculture/safetyCultureFields';
 import { CommissioningRecord, SYSTEM_TYPES } from '../types';
 import type { Device, SCTemplateMapping } from '../types';
 import {
@@ -273,20 +274,24 @@ export default function CommissioningPage() {
     try {
       const mapping = savedMappings[selectedTemplateId];
       const items: any[] = [];
-      if (mapping) {
-        const fm = mapping.field_mappings;
-        const addText = (key: string, value: string | null | undefined) => {
-          if (fm[key] && value) items.push({ item_id: fm[key], item_type: 'TEXT', text_item: { value } });
-        };
-        addText('job_number', project.job_number);
-        addText('project_name', project.project_name);
-        addText('client_name', project.client_name);
-        addText('site_name', project.site_name);
-        addText('site_address', project.site_address);
-        addText('project_manager', project.project_manager);
-      }
+      const fm = mapping?.field_mappings ?? {};
+      const addText = (key: string, value: string | null | undefined) => {
+        if (fm[key] && value) items.push({ item_id: fm[key], item_type: 'TEXT', text_item: { value } });
+      };
+      addText('job_number', project.job_number);
+      addText('project_name', project.project_name);
+      addText('client_name', project.client_name);
+      addText('site_name', project.site_name);
+      addText('site_address', project.site_address);
+      addText('project_manager', project.project_manager);
       const inspName = buildInspectionName();
-      const d = await invoke('create_inspection', { template_id: selectedTemplateId, items, name: inspName });
+      appendInspectionTitleItem(items, inspName, fm);
+      const d = await invoke('create_inspection', {
+        template_id: selectedTemplateId,
+        items,
+        name: inspName,
+        audit_title_item_id: fm.inspection_title || undefined,
+      });
       await supabase.from('project_handover_docs').upsert({
         project_id: pid, document_type: docType, title: `${activeTab} Commissioning`,
         status: 'in_progress', sc_inspection_id: d.inspection_id,

@@ -70,6 +70,7 @@ export interface Project {
   main_contractor: string | null;
   project_number: string | null;
   engineer: string | null;
+  handover_project_wide_type_key?: string | null;
 }
 
 export interface SCTemplateItem {
@@ -186,6 +187,7 @@ export interface ProjectSystemRecord {
   display_order: number;
   created_at: string;
   updated_at: string;
+  handover_document_type_key?: string | null;
 }
 
 export interface Device {

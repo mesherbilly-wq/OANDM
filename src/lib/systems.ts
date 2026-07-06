@@ -38,6 +38,7 @@ export interface ProjectSystem {
   slug: string;
   category: SystemCategory | null;
   deviceCount: number;
+  handoverDocumentTypeKey?: string | null;
 }
 
 export interface CategoryStyle {
@@ -238,6 +239,7 @@ function deriveProjectSystemsFromTable(
       id: row.id,
       name: row.system_name,
       category: resolveSystemRecordCategory(row),
+      handoverDocumentTypeKey: row.handover_document_type_key ?? null,
       deviceCount: devices.filter(device =>
         deviceBelongsToSystem(device, { id: row.id, name: row.system_name }),
       ).length,

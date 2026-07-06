@@ -87,7 +87,7 @@ function App() {
             <Route path="technical"       element={<TechnicalDocsPage />} />
             <Route path="commissioning"   element={<CommissioningPage />} />
             <Route path="handover"        element={<HandoverPage />} />
-            <Route path="safetyculture"   element={<Navigate to="../handover" replace />} />
+            <Route path="safetyculture"   element={<Navigate to="/integrations" replace />} />
             <Route path="datasheets"      element={<ProjectDatasheetsPage />} />
             <Route path="as-fitted"       element={<AsBuiltDrawingsPage />} />
             <Route path="om-builder"      element={<ProjectOMExportPage />} />

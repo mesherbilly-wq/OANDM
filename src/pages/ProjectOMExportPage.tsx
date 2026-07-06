@@ -9,6 +9,7 @@ import {
 } from '../lib/documentProjectSystems';
 import { fetchProjectSystems } from '../lib/projectSystemsDb';
 import { findDatasheetForDeviceFields } from '../lib/datasheetMatching';
+import { FALLBACK_DOCUMENT_DEFINITIONS, titleForLegacyDocumentId } from '../lib/handoverDocumentConfig';
 import { matchEquipmentInputToProduct } from '../integrations/core/productMatching';
 import { useProject } from './ProjectLayout';
 import type { Device, CommissioningRecord, HandoverDocument, Datasheet, ProjectSystemRecord } from '../types';
@@ -111,18 +112,15 @@ const SYS_ICONS: Partial<Record<SystemType, React.ElementType>> = {
 };
 
 // All upload sections that belong to the Handover pack
-const HANDOVER_SECTION_LABELS: Record<string, string> = {
-  handover_cctv:            'CCTV Handover Certificate',
-  handover_ac:              'Access Control Handover Certificate',
-  handover_intruder:        'Intruder Alarm Completion Certificate',
-  handover_intruder_record: 'Record of System Checks',
-  handover_training:        'Training Record',
-  handover_acceptance:      'System Acceptance Certificate',
-  nsi_certificate:          'NSI Certificate',
-  rams:                     'RAMS',
-  handover:                 'Handover Certificate',
-};
-const HANDOVER_SECTIONS = new Set(Object.keys(HANDOVER_SECTION_LABELS));
+const HANDOVER_SECTION_LABELS: Record<string, string> = Object.fromEntries(
+  FALLBACK_DOCUMENT_DEFINITIONS.map(def => [def.document_id, def.title]),
+);
+
+function handoverSectionLabel(section: string): string {
+  return HANDOVER_SECTION_LABELS[section] ?? titleForLegacyDocumentId(section);
+}
+
+const HANDOVER_SECTIONS = new Set([...Object.keys(HANDOVER_SECTION_LABELS), 'handover']);
 
 // ─── Markdown renderer (minimal) ─────────────────────────────────────────────
 
@@ -2345,7 +2343,7 @@ function HandoverPackSection({ uploads, onRemove, handoverDocs, scHandoverDocs, 
             seenSections.add(upload.section);
             grouped.push({
               section: upload.section,
-              label: HANDOVER_SECTION_LABELS[upload.section] ?? upload.section,
+              label: handoverSectionLabel(upload.section),
               items: groupUploads.filter(item => item.section === upload.section),
             });
           }
@@ -2451,7 +2449,7 @@ function PrintHandoverDocs({ uploads, pageImages }: {
   for (const u of uploads) {
     if (!seen.has(u.section)) {
       seen.add(u.section);
-      grouped.push({ label: HANDOVER_SECTION_LABELS[u.section] ?? u.section, items: uploads.filter(x => x.section === u.section) });
+      grouped.push({ label: handoverSectionLabel(u.section), items: uploads.filter(x => x.section === u.section) });
     }
   }
   return (
