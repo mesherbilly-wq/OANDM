@@ -255,5 +255,30 @@ export async function persistSimproImportReviewDraft(
     }
   }
 
+  const asFittedRows: Record<string, unknown>[] = [];
+  for (const system of draft.systems) {
+    if (!system.selected) continue;
+    const projectSystemId = systemIdByDraftId.get(system.draftId) ?? null;
+    for (const item of system.equipment) {
+      if (!item.selected) continue;
+      asFittedRows.push({
+        project_id: project.id,
+        project_system_id: projectSystemId,
+        source_quote_line_id: item.sourceLineRef,
+        quoted_description: item.modelName || item.deviceType,
+        quoted_quantity: item.quantity,
+        installed_description: item.modelName || item.deviceType,
+        actual_installed_quantity: null,
+        reconciliation_status: 'awaiting_verification',
+      });
+    }
+  }
+  if (asFittedRows.length > 0) {
+    const { error: asFittedError } = await supabase.from('as_fitted_items').insert(asFittedRows);
+    if (asFittedError && !/does not exist|schema cache/i.test(asFittedError.message)) {
+      throw new Error(`Project created but as-fitted quote lines failed to save: ${asFittedError.message}`);
+    }
+  }
+
   return { projectId: project.id as number };
 }

@@ -1,0 +1,1520 @@
+{
+  "schemaVersion": "0.2.0",
+  "status": "DRAFT — NOT VALIDATED FOR NSI COMPLIANCE",
+  "title": "Intruder alarm O&M master form",
+  "jurisdiction": "UK; project-specific applicability must be confirmed",
+  "purpose": "Implementation specification for Cursor; not an official NSI form or certificate",
+  "sections": [
+    {
+      "id": "project",
+      "title": "Project and work type",
+      "showWhen": null,
+      "repeatable": false,
+      "fields": [
+        {
+          "id": "project_reference",
+          "label": "Project reference",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "site_name",
+          "label": "Site name",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "site_address",
+          "label": "Site address",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "customer_name",
+          "label": "Customer organisation",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "customer_representative",
+          "label": "Customer representative",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "work_types",
+          "label": "Work types",
+          "type": "multiselect",
+          "required": true,
+          "options": [
+            "new_installation",
+            "takeover",
+            "upgrade",
+            "extension"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "scope",
+          "label": "Agreed scope of work",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "engineer_name",
+          "label": "Engineer name",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "company",
+          "label": "Installing / maintaining company",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "attendance_date",
+          "label": "Attendance date",
+          "type": "date",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "system_reference",
+          "label": "Unique system reference",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "system_features",
+          "label": "System features",
+          "type": "multiselect",
+          "required": true,
+          "options": [
+            "wired",
+            "wireless",
+            "hold_up",
+            "arc_monitoring",
+            "police_response",
+            "remote_access",
+            "interfaces"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "contract_reference",
+          "label": "Contract / agreed proposal reference",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "proposal_revision",
+          "label": "Agreed proposal revision",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        }
+      ]
+    },
+    {
+      "id": "basis",
+      "title": "Design and standards basis",
+      "showWhen": null,
+      "repeatable": false,
+      "fields": [
+        {
+          "id": "system_description",
+          "label": "System description and protected areas",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "risk_assessment_reference",
+          "label": "Risk assessment reference",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "design_responsible_person",
+          "label": "Person responsible for design",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "standards_register",
+          "label": "Applicable documents, editions, amendments and clauses",
+          "type": "document_reference_list",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "design_grade",
+          "label": "Design / target system grade",
+          "type": "select",
+          "required": true,
+          "options": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "unknown"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "existing_stated_grade",
+          "label": "Existing stated grade",
+          "type": "select",
+          "required": false,
+          "options": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "unknown",
+            "not_applicable"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "verified_grade",
+          "label": "Technically verified system grade",
+          "type": "select",
+          "required": true,
+          "options": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "not_verified"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "grade_evidence",
+          "label": "Evidence supporting grade determination",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "environmental_basis",
+          "label": "Environmental classifications and equipment suitability",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "insurer_requirements",
+          "label": "Insurer / customer requirements and source references",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "police_requirements",
+          "label": "Applicable police policy and response arrangements",
+          "type": "textarea",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "as_fitted_reference",
+          "label": "As-fitted record reference and revision",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        }
+      ]
+    },
+    {
+      "id": "takeover",
+      "title": "Takeover survey",
+      "showWhen": {
+        "anyWorkType": [
+          "takeover"
+        ]
+      },
+      "repeatable": false,
+      "fields": [
+        {
+          "id": "previous_provider",
+          "label": "Previous installer / maintainer",
+          "type": "text",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "previous_provider_status",
+          "label": "Previous provider information status",
+          "type": "select",
+          "required": true,
+          "options": [
+            "known",
+            "unknown"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "available_records",
+          "label": "Available records",
+          "type": "multiselect",
+          "required": true,
+          "options": [
+            "certificate",
+            "drawings",
+            "zone_list",
+            "manuals",
+            "service_history",
+            "configuration_record",
+            "none"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "record_gaps",
+          "label": "Missing records and action needed",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "existing_certificate",
+          "label": "Existing certificate reference and evidence",
+          "type": "file",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "condition_summary",
+          "label": "Inherited system condition",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "engineering_access",
+          "label": "Engineering access availability",
+          "type": "select",
+          "required": true,
+          "options": [
+            "available",
+            "unavailable",
+            "partially_available"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "supportability",
+          "label": "Equipment compatibility and supportability assessment",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "inaccessible_items",
+          "label": "Inaccessible / unverified equipment and reasons",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "inherited_faults",
+          "label": "Inherited fault references",
+          "type": "issue_links",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "takeover_scope",
+          "label": "Extent of takeover and retained responsibilities",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        }
+      ]
+    },
+    {
+      "id": "change",
+      "title": "Upgrade / extension scope",
+      "showWhen": {
+        "anyWorkType": [
+          "upgrade",
+          "extension"
+        ]
+      },
+      "repeatable": false,
+      "fields": [
+        {
+          "id": "change_reason",
+          "label": "Reason for change",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "before_record",
+          "label": "Pre-work system record reference",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "retained_equipment",
+          "label": "Retained equipment references",
+          "type": "asset_links",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "removed_equipment",
+          "label": "Removed equipment references",
+          "type": "asset_links",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "new_equipment",
+          "label": "Added / replacement equipment references",
+          "type": "asset_links",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "compatibility_assessment",
+          "label": "Compatibility evidence for retained and new equipment",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "impact_assessment",
+          "label": "Impact on grade, power, signalling, operation and confirmation",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "regression_scope",
+          "label": "Affected existing equipment / interfaces to be retested",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "change_authorisation",
+          "label": "Scope authorisation reference",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "revised_drawings",
+          "label": "Revised drawings",
+          "type": "file",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        }
+      ]
+    },
+    {
+      "id": "equipment",
+      "title": "Equipment and zone schedule",
+      "showWhen": null,
+      "repeatable": true,
+      "fields": [
+        {
+          "id": "asset_id",
+          "label": "Unique asset ID",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "asset_action",
+          "label": "Work action",
+          "type": "select",
+          "required": true,
+          "options": [
+            "existing_retained",
+            "new",
+            "replaced",
+            "removed"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "device_type",
+          "label": "Device type",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "manufacturer",
+          "label": "Manufacturer",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "model",
+          "label": "Model",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "serial_number",
+          "label": "Serial number",
+          "type": "text",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "location",
+          "label": "Physical location",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "panel_reference",
+          "label": "Associated panel / expander",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "zone_address",
+          "label": "Zone / bus address",
+          "type": "text",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "partition",
+          "label": "Area / partition",
+          "type": "text",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "device_grade",
+          "label": "Declared device grade / evidence",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "environmental_class",
+          "label": "Environmental class / suitability",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "firmware",
+          "label": "Firmware version where applicable",
+          "type": "text",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "connection_type",
+          "label": "Connection type",
+          "type": "select",
+          "required": true,
+          "options": [
+            "wired",
+            "wireless",
+            "other"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "zone_function",
+          "label": "Programmed function / response",
+          "type": "text",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "photo",
+          "label": "Device / location photograph",
+          "type": "file",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        }
+      ]
+    },
+    {
+      "id": "power",
+      "title": "Power supply and battery record",
+      "showWhen": null,
+      "repeatable": true,
+      "fields": [
+        {
+          "id": "psu_id",
+          "label": "Power supply ID",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "psu_location",
+          "label": "Location",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "psu_model",
+          "label": "Manufacturer / model",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "supply_type",
+          "label": "Power supply type / evidence",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "battery_model",
+          "label": "Battery type / model",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "battery_quantity",
+          "label": "Battery quantity",
+          "type": "integer",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "battery_capacity_ah",
+          "label": "Individual battery rated capacity (Ah)",
+          "type": "decimal",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "battery_configuration",
+          "label": "Battery connection arrangement",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "battery_date",
+          "label": "Battery installation / date code",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "standby_current_a",
+          "label": "Measured standby current (A)",
+          "type": "decimal",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "alarm_current_a",
+          "label": "Measured alarm current (A)",
+          "type": "decimal",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "charging_voltage_v",
+          "label": "Measured charging voltage (V)",
+          "type": "decimal",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "battery_voltage_v",
+          "label": "Measured battery voltage (V) and test condition",
+          "type": "measurement",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "required_standby_hours",
+          "label": "Required standby duration (hours)",
+          "type": "decimal",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "calculation_reference",
+          "label": "Approved calculation method, assumptions and source reference",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "calculation_attachment",
+          "label": "Standby capacity calculation",
+          "type": "file",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "capacity_result",
+          "label": "Capacity assessment",
+          "type": "test_result",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "mains_failure_result",
+          "label": "Mains failure / restoration test",
+          "type": "test_result",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "battery_fault_result",
+          "label": "Battery / power fault test",
+          "type": "test_result",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "electrical_evidence",
+          "label": "Applicable electrical installation evidence / reference",
+          "type": "file",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        }
+      ]
+    },
+    {
+      "id": "tests",
+      "title": "Commissioning and verification tests",
+      "showWhen": null,
+      "repeatable": true,
+      "fields": [
+        {
+          "id": "test_id",
+          "label": "Test ID",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "asset_or_system_reference",
+          "label": "Asset / system / area reference",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "test_category",
+          "label": "Test category",
+          "type": "select",
+          "required": true,
+          "options": [
+            "inspection",
+            "detection",
+            "tamper",
+            "setting_unsetting",
+            "entry_exit",
+            "part_setting",
+            "warning_device",
+            "fault",
+            "hold_up",
+            "wireless",
+            "interface",
+            "alarm_confirmation",
+            "regression",
+            "other"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "procedure_reference",
+          "label": "Approved test procedure and revision",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "expected_result",
+          "label": "Expected result / acceptance criterion",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "actual_result",
+          "label": "Actual observation / measurement",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "test_outcome",
+          "label": "Outcome",
+          "type": "test_result",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "na_reason",
+          "label": "Not applicable reason",
+          "type": "textarea",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "not_tested_reason",
+          "label": "Not tested reason",
+          "type": "textarea",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "instrument",
+          "label": "Instrument ID and calibration / verification reference",
+          "type": "text",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "evidence",
+          "label": "Test evidence",
+          "type": "file",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "issue_reference",
+          "label": "Failure / outstanding issue reference",
+          "type": "issue_links",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "tested_by",
+          "label": "Tested by",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "tested_at",
+          "label": "Test date and time",
+          "type": "datetime",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        }
+      ]
+    },
+    {
+      "id": "signalling",
+      "title": "ARC and signalling verification",
+      "showWhen": {
+        "feature": "arc_monitoring"
+      },
+      "repeatable": false,
+      "fields": [
+        {
+          "id": "arc_name",
+          "label": "Alarm Receiving Centre",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "account_reference",
+          "label": "Monitoring account reference",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "transmitter",
+          "label": "Signalling equipment asset reference",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "ats_category",
+          "label": "Specified alarm transmission system category",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "path_arrangements",
+          "label": "Transmission paths and provider details",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "confirmation_arrangements",
+          "label": "Alarm confirmation arrangements",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "signal_tests",
+          "label": "Required signals, sent/received times, ARC acknowledgement and results",
+          "type": "signal_test_list",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "path_failure_tests",
+          "label": "Path failure / restoration test records",
+          "type": "test_links",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "arc_operator_reference",
+          "label": "ARC acknowledgement / operator reference",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "monitoring_status",
+          "label": "Monitoring status",
+          "type": "select",
+          "required": true,
+          "options": [
+            "live_verified",
+            "pending_activation",
+            "test_mode",
+            "faulted",
+            "not_verified"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "police_response_status",
+          "label": "Police response status",
+          "type": "select",
+          "required": true,
+          "options": [
+            "not_applicable",
+            "pending",
+            "confirmed_documented",
+            "suspended",
+            "unknown"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "response_evidence",
+          "label": "Police response reference / evidence",
+          "type": "file",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "pending_actions",
+          "label": "Outstanding activation actions and owner",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "test_mode_clearance",
+          "label": "Evidence system removed from test and final service state",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        }
+      ]
+    },
+    {
+      "id": "issues",
+      "title": "Variations, defects and remedial work",
+      "showWhen": null,
+      "repeatable": true,
+      "fields": [
+        {
+          "id": "issue_id",
+          "label": "Unique issue ID",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "issue_kind",
+          "label": "Issue type",
+          "type": "select",
+          "required": true,
+          "options": [
+            "design_change",
+            "standards_departure",
+            "defect",
+            "incomplete_work",
+            "unverified_item"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "description",
+          "label": "Description and location",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "source_requirement",
+          "label": "Relevant design / standards reference",
+          "type": "text",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "operational_effect",
+          "label": "Effect on protection / operation / compliance claim",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "action",
+          "label": "Required action",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "owner",
+          "label": "Responsible person",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "target_date",
+          "label": "Target completion date",
+          "type": "date",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "temporary_arrangements",
+          "label": "Temporary arrangements",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "customer_notified_at",
+          "label": "Customer notified date",
+          "type": "datetime",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "customer_acknowledgement",
+          "label": "Customer acknowledgement",
+          "type": "signature",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "technical_disposition",
+          "label": "Technical reviewer decision and reasons",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "status",
+          "label": "Issue status",
+          "type": "select",
+          "required": true,
+          "options": [
+            "open",
+            "in_progress",
+            "resolved_awaiting_retest",
+            "closed"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "retest_reference",
+          "label": "Retest / closure evidence",
+          "type": "test_links",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "closed_by",
+          "label": "Closed by",
+          "type": "text",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "closed_at",
+          "label": "Closure date",
+          "type": "datetime",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        }
+      ]
+    },
+    {
+      "id": "transfer",
+      "title": "Maintenance / monitoring transfer",
+      "showWhen": {
+        "anyWorkType": [
+          "takeover"
+        ]
+      },
+      "repeatable": false,
+      "fields": [
+        {
+          "id": "transfer_required",
+          "label": "Provider transfer required",
+          "type": "boolean",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "outgoing_provider",
+          "label": "Outgoing provider",
+          "type": "text",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "incoming_provider",
+          "label": "Incoming provider",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "responsibility_boundary",
+          "label": "Responsibilities and effective dates",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "transfer_datetime",
+          "label": "Transfer date / time",
+          "type": "datetime",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "service_interruption",
+          "label": "Actual / planned service interruption and arrangements",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "records_received",
+          "label": "Records received and missing records",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "access_transfer_confirmed",
+          "label": "Secure access transfer completed",
+          "type": "boolean",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "remote_access_review",
+          "label": "Previous and new remote access responsibilities / actions",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "verification_tests",
+          "label": "Transfer verification test references",
+          "type": "test_links",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "customer_notification",
+          "label": "Customer notification evidence",
+          "type": "file",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        }
+      ]
+    },
+    {
+      "id": "training",
+      "title": "Customer training and handover",
+      "showWhen": null,
+      "repeatable": true,
+      "fields": [
+        {
+          "id": "trainee_name",
+          "label": "Trainee name",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "trainee_role",
+          "label": "Role",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "trainer",
+          "label": "Trainer",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "training_date",
+          "label": "Training date",
+          "type": "datetime",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "topics",
+          "label": "Applicable topics and completion results",
+          "type": "training_topic_list",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "instructions_reference",
+          "label": "Operating instruction reference / revision",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "logbook_reference",
+          "label": "System logbook reference",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "false_alarm_guidance",
+          "label": "False-alarm guidance supplied / reference",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "support_contacts",
+          "label": "Service and emergency contact details supplied",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "credentials_receipt",
+          "label": "Credentials / keys / tokens securely handed over",
+          "type": "select",
+          "required": true,
+          "options": [
+            "completed",
+            "outstanding",
+            "not_applicable"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "limitations_explained",
+          "label": "Limitations and outstanding items explained",
+          "type": "boolean",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "customer_signature",
+          "label": "Customer training acknowledgement",
+          "type": "signature",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "engineer_signature",
+          "label": "Engineer training declaration",
+          "type": "signature",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        }
+      ]
+    },
+    {
+      "id": "release",
+      "title": "Acceptance and O&M release",
+      "showWhen": null,
+      "repeatable": false,
+      "fields": [
+        {
+          "id": "operational_status",
+          "label": "System operational status",
+          "type": "select",
+          "required": true,
+          "options": [
+            "operational_within_recorded_scope",
+            "operational_with_limitations",
+            "not_operational",
+            "not_verified"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "test_scope_summary",
+          "label": "What was tested, retained and not verified",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "outstanding_issue_ids",
+          "label": "Outstanding issue references",
+          "type": "issue_links",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "document_manifest",
+          "label": "Pack documents, references, revisions and availability",
+          "type": "document_manifest",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "maintenance_provider",
+          "label": "Maintenance provider",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "maintenance_reference",
+          "label": "Maintenance agreement / arrangements reference",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "first_service_due",
+          "label": "First service due date",
+          "type": "date",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "warranty_details",
+          "label": "Warranty details / limitations",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "certificate_status",
+          "label": "Official certificate status",
+          "type": "select",
+          "required": true,
+          "options": [
+            "issued",
+            "pending",
+            "applicability_awaiting_review"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "certificate_number",
+          "label": "Official certificate number",
+          "type": "text",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "certificate_attachment",
+          "label": "Official issued certificate",
+          "type": "file",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "engineer_declaration",
+          "label": "Engineer completion declaration",
+          "type": "signature",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "customer_acceptance",
+          "label": "Customer acceptance",
+          "type": "signature",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "acceptance_exception",
+          "label": "Reason customer signature unavailable and follow-up",
+          "type": "textarea",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "technical_reviewer",
+          "label": "Technical reviewer",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "review_decision",
+          "label": "Technical review decision",
+          "type": "select",
+          "required": true,
+          "options": [
+            "return_for_correction",
+            "interim_pack",
+            "approved_for_final_release"
+          ],
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "review_notes",
+          "label": "Review reasons / limitations",
+          "type": "textarea",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "release_revision",
+          "label": "Pack revision",
+          "type": "text",
+          "required": true,
+          "requirementStatus": "proposed_pending_technical_validation"
+        },
+        {
+          "id": "released_at",
+          "label": "Release date",
+          "type": "datetime",
+          "required": false,
+          "requirementStatus": "proposed_pending_technical_validation"
+        }
+      ]
+    }
+  ],
+  "valueTypes": {
+    "test_result": [
+      "pass",
+      "fail",
+      "not_applicable",
+      "not_tested"
+    ],
+    "signature": "Signer identity, role, explicit declaration text, timestamp, authenticated session and signed record revision; uploaded signature image alone is insufficient as an audit record",
+    "measurement": "Numeric value, unit, measurement conditions and instrument reference",
+    "signal_test_list": "Signal name, trigger, expected result, sent/received times, ARC acknowledgement, outcome and linked issue",
+    "training_topic_list": "Topic, applicability, demonstrated/explained/practised status, notes; seed setting, unsetting, part setting, reset, faults, omissions, hold-up, false alarms, logbook, support",
+    "document_manifest": "Document ID, title, revision, date, attachment ID, availability status and omission reason"
+  },
+  "implementationNotes": [
+    "IDs in repeatable sections are scoped to their row UUID.",
+    "Required fields apply only to active sections; conditional validation rules in accompanying specification override blanket required flags.",
+    "Unknown / not verified is valid capture, never automatic evidence of compliance.",
+    "Technical test procedures, limits and applicability must come from an approved versioned standards profile; this schema deliberately supplies no invented limits.",
+    "Transfer section must also be enabled whenever providers change in any work route.",
+    "No live passwords, PINs, installer codes or signalling secrets in forms or generated general O&M packs."
+  ],
+  "integration": {
+    "provider": "simpro",
+    "mode": "read_only_import",
+    "specification": "simpro-import-and-as-fitted-specification.md",
+    "identityKey": [
+      "connectionId",
+      "companyId",
+      "resourceType",
+      "resourceId"
+    ],
+    "prefillTargets": [
+      "project.project_reference",
+      "project.site_name",
+      "project.site_address",
+      "project.customer_name",
+      "project.customer_representative",
+      "project.scope",
+      "project.contract_reference",
+      "project.proposal_revision"
+    ],
+    "mappingStatus": "logical mappings; verify API fields and tenant configuration",
+    "baselineImmutable": true,
+    "installedQuantityDefault": null,
+    "refreshPolicy": "three_way_compare_preserve_local_edits",
+    "releasedRevisionPolicy": "immutable_create_new_draft",
+    "excludedCustomerData": [
+      "prices",
+      "margins",
+      "labour_rates",
+      "supplier_costs",
+      "internal_notes",
+      "credentials"
+    ],
+    "asFittedItemFields": [
+      "id",
+      "sourceSnapshotId",
+      "sourceQuoteLineId",
+      "sourcePrebuildParentId",
+      "quotedDescription",
+      "quotedQuantity",
+      "installedDescription",
+      "actualInstalledQuantity",
+      "unit",
+      "reconciliationStatus",
+      "assetIds",
+      "changeReason",
+      "issueIds",
+      "verifiedBy",
+      "verifiedAt"
+    ],
+    "reconciliationStatuses": [
+      "awaiting_verification",
+      "installed_as_quoted",
+      "modified",
+      "omitted",
+      "added_on_site",
+      "existing_retained"
+    ]
+  }
+}

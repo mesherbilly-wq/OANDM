@@ -165,12 +165,6 @@ function inline(t: string): string {
     .replace(/`(.+?)`/g, '<code class="font-mono text-xs bg-slate-100 px-1 rounded">$1</code>');
 }
 
-function scInspectionUrl(id: string): string {
-  if (id.startsWith('audit_')) return `https://app.safetyculture.com/inspection/${id}`;
-  if (id.startsWith('insp_')) return `https://app.safetyculture.com/inspection/audit_${id.slice(5)}`;
-  return `https://app.safetyculture.com/inspection/audit_${id.replace(/-/g, '')}`;
-}
-
 function systemsWithTechImport(
   documentSystems: ReturnType<typeof deriveProjectSystems>,
   techDocState: Partial<Record<string, { rows: { length: number }[] }>>,
@@ -2307,7 +2301,7 @@ function HandoverPackSection({ uploads, onRemove, handoverDocs, scHandoverDocs, 
           <h3 className="font-semibold text-slate-800">Handover Documents</h3>
           <p className="text-sm text-slate-500 mt-1">
             No handover documents uploaded yet. Go to the{' '}
-            <strong>Handover</strong> section to upload signed PDFs or create inspections via SafetyCulture.
+            <strong>Handover</strong> section to email a browser form or upload a signed PDF.
           </p>
         </div>
         {handoverDocs.length > 0 && (
@@ -2408,25 +2402,20 @@ function HandoverPackSection({ uploads, onRemove, handoverDocs, scHandoverDocs, 
 
             {groupScDocs.length > 0 && (
               <div className="border-t border-slate-200 px-6 py-4 space-y-3">
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">SafetyCulture Documents</p>
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Signed forms</p>
                 {groupScDocs.map(doc => (
                   <div key={`${label}-${doc.document_type}`} className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3">
                     <CheckCircle className="w-4 h-4 text-blue-600 flex-shrink-0" />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-blue-900">{doc.title}</p>
                       <p className="text-xs text-blue-600 mt-0.5">
-                        {doc.status === 'imported' ? 'Imported from SafetyCulture' : doc.status === 'uploaded' ? 'PDF uploaded' : 'Completed'}
+                        {doc.status === 'completed' ? 'Signed web form' : doc.status === 'uploaded' ? 'PDF uploaded' : 'Completed'}
                         {doc.sc_result && <span className="ml-2 font-medium">{doc.sc_result === 'pass' ? 'PASS' : 'FAIL'}</span>}
                       </p>
                     </div>
                     {doc.file_url && (
                       <a href={doc.file_url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-700 hover:underline flex items-center gap-1 flex-shrink-0">
                         <ExternalLink className="w-3 h-3" />View PDF
-                      </a>
-                    )}
-                    {doc.sc_inspection_id && (
-                      <a href={scInspectionUrl(doc.sc_inspection_id)} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-700 hover:underline flex items-center gap-1 flex-shrink-0">
-                        <ExternalLink className="w-3 h-3" />SC
                       </a>
                     )}
                   </div>

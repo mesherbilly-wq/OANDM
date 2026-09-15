@@ -10,6 +10,7 @@ import {
   Upload, FileText, X, Plus, ExternalLink, Pencil, Check, Loader2,
   ImageIcon, Hash, RefreshCw, AlertCircle, FileType,
 } from 'lucide-react';
+import { AsFittedItemsPanel } from '../components/AsFittedItemsPanel';
 
 const DRAWING_TYPES = [
   'General Arrangement',
@@ -237,6 +238,8 @@ export default function AsBuiltDrawingsPage() {
           <Plus className="w-4 h-4" />Add Drawing
         </button>
       </div>
+
+      <AsFittedItemsPanel projectId={pid} />
 
       {/* Drop zone */}
       <div

@@ -14,7 +14,6 @@ import {
   fetchHandoverDocumentTypes,
   handoverDocumentIcon,
   inferHandoverDocumentTypeKey,
-  mergeScFieldMappings,
   applyHandoverTypeSelectionsToSystems,
   PROJECT_WIDE_DOCUMENT_TYPE_KEY,
   resolveProjectWideHandoverTypeKey,
@@ -24,22 +23,17 @@ import {
   type HandoverDocumentDefinition,
   type HandoverDocumentType,
 } from '../lib/handoverDocumentConfig';
+import { createHandoverFormInvite } from '../lib/handoverFormsApi';
+import { formTemplateKeyForDefinition, getHandoverFormTemplate } from '../lib/handoverFormTemplates';
 import { getCategoryStyle, type ProjectSystem } from '../lib/systems';
 import HandoverConfigPage from './HandoverConfigPage';
-import { appendInspectionTitleItem } from '../components/safetyculture/safetyCultureFields';
-import type { Device, SCTemplateMapping } from '../types';
+import type { Device } from '../types';
 import {
   Upload, X, ExternalLink, CheckCircle, FileText, Loader2,
-  Award, Plus, Link2, Download, Shield,
-  RefreshCw, AlertCircle, Trash2,
+  Award, Plus, Mail, Copy,
+  AlertCircle, Trash2,
   FolderPlus, SlidersHorizontal,
 } from 'lucide-react';
-
-function scInspectionUrl(id: string): string {
-  if (id.startsWith('audit_')) return `https://app.safetyculture.com/inspection/${id}`;
-  if (id.startsWith('insp_')) return `https://app.safetyculture.com/inspection/audit_${id.slice(5)}`;
-  return `https://app.safetyculture.com/inspection/audit_${id.replace(/-/g, '')}`;
-}
 
 // ── Document status ───────────────────────────────────────────────────────────
 
@@ -99,7 +93,6 @@ export default function HandoverPage() {
   const [docs, setDocs] = useState<HandoverDoc[]>([]);
   const [legacyUploads, setLegacyUploads] = useState<LegacyUpload[]>([]);
   const [otherDocs, setOtherDocs] = useState<OtherDoc[]>([]);
-  const [devices, setDevices] = useState<Device[]>([]);
   const [projectSystems, setProjectSystems] = useState<ProjectSystem[]>([]);
   const [documentTypes, setDocumentTypes] = useState<HandoverDocumentType[]>([]);
   const [documentDefinitions, setDocumentDefinitions] = useState<HandoverDocumentDefinition[]>([]);
@@ -108,17 +101,15 @@ export default function HandoverPage() {
   const [activeSystemKey, setActiveSystemKey] = useState<string>(PROJECT_WIDE_SYSTEM_KEY);
   const [loading, setLoading] = useState(true);
   const [savingDocType, setSavingDocType] = useState(false);
-  const [scConnected, setScConnected] = useState(false);
-  const [templates, setTemplates] = useState<any[]>([]);
-  const [savedMappings, setSavedMappings] = useState<Record<string, SCTemplateMapping>>({});
 
   // Modal states
   const [activeDoc, setActiveDoc] = useState<HandoverDocumentDefinition | null>(null);
-  const [modalMode, setModalMode] = useState<'create' | 'link' | null>(null);
-  const [selectedTemplateId, setSelectedTemplateId] = useState('');
-  const [linkInspectionId, setLinkInspectionId] = useState('');
+  const [modalMode, setModalMode] = useState<'email' | null>(null);
+  const [recipientEmail, setRecipientEmail] = useState('');
+  const [recipientName, setRecipientName] = useState('');
+  const [formLink, setFormLink] = useState<string | null>(null);
+  const [mailtoHref, setMailtoHref] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
-  const [importingDoc, setImportingDoc] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadDocRef = useRef('');
@@ -135,53 +126,28 @@ export default function HandoverPage() {
   const [otherSaving, setOtherSaving] = useState(false);
   const otherFileRef = useRef<HTMLInputElement>(null);
 
-  const invoke = async (action: string, extra: Record<string, unknown> = {}) => {
-    const { data, error } = await supabase.functions.invoke('safetyculture-proxy', { body: { action, ...extra } });
-    if (error) throw new Error(error.message);
-    if (data?.error) throw new Error(data.error);
-    return data;
-  };
-
   const load = useCallback(async () => {
     if (!pid) return;
-    const [{ data: docRows }, { data: uploadRows }, { data: otherRows }, { data: devRows }, { data: tokRow }, { data: maps }, typeRows, defRows] = await Promise.all([
+    const [{ data: docRows }, { data: uploadRows }, { data: otherRows }, { data: devRows }, typeRows, defRows] = await Promise.all([
       supabase.from('project_handover_docs').select('*').eq('project_id', pid),
       supabase.from('om_pack_uploads').select('*').eq('project_id', pid).or('section.like.handover_%,section.eq.nsi_certificate,section.eq.rams'),
       supabase.from('handover_other_docs').select('*').eq('project_id', pid).order('created_at'),
       supabase.from('devices').select('*').eq('project_id', pid),
-      supabase.from('integration_settings').select('value').eq('key', 'safetyculture_api_token').maybeSingle(),
-      supabase.from('sc_template_mappings').select('*'),
       fetchHandoverDocumentTypes(),
       fetchHandoverDocumentDefinitions(),
     ]);
     setDocs((docRows ?? []) as HandoverDoc[]);
     setLegacyUploads((uploadRows ?? []) as LegacyUpload[]);
     setOtherDocs((otherRows ?? []) as OtherDoc[]);
-    setDevices(devRows ?? []);
-    const systems = await loadDocumentProjectSystems(pid, devRows ?? []);
+    const systems = await loadDocumentProjectSystems(pid, (devRows ?? []) as Device[]);
     applyHandoverTypeSelectionsToSystems(pid, systems);
     setProjectSystems(systems);
     setDocumentTypes(typeRows.filter(type => type.is_active));
     setDocumentDefinitions(defRows);
-    setScConnected(!!tokRow?.value);
-    const byTmpl: Record<string, SCTemplateMapping> = {};
-    for (const m of maps ?? []) byTmpl[m.template_id] = m;
-    setSavedMappings(byTmpl);
     setLoading(false);
   }, [pid]);
 
   useEffect(() => { load(); }, [load]);
-
-  useEffect(() => {
-    if (activeTab !== 'documents' || !pid) return;
-    void fetchHandoverDocumentDefinitions().then(setDocumentDefinitions);
-  }, [activeTab, pid]);
-
-  useEffect(() => {
-    if (scConnected) {
-      invoke('list_templates').then(d => setTemplates(d.templates ?? [])).catch(() => {});
-    }
-  }, [scConnected]);
 
   // Determine which systems are installed (legacy helper — doc visibility uses project systems tabs)
   const activeDocumentSystem = resolveActiveDocumentSystem(projectSystems, activeSystemKey);
@@ -284,135 +250,74 @@ export default function HandoverPage() {
     [documentDefinitions],
   );
 
-  const buildInspectionName = (docTitle: string) => {
-    const name = project.project_name || project.job_number || 'Project';
-    return `${name} - ${docTitle}`;
-  };
-
-  const templateNameForId = useCallback((templateId: string | null | undefined): string | null => {
-    if (!templateId) return null;
-    const tmpl = templates.find(t => (t.template_id ?? t.id) === templateId);
-    return tmpl?.name ?? savedMappings[templateId]?.template_name ?? templateId;
-  }, [templates, savedMappings]);
-
-  const openCreateFromScModal = (definition: HandoverDocumentDefinition) => {
+  const openEmailFormModal = (definition: HandoverDocumentDefinition) => {
     setActiveDoc(definition);
-    setModalMode('create');
-    setSelectedTemplateId(definition.sc_template_id ?? '');
+    setModalMode('email');
+    setRecipientEmail('');
+    setRecipientName('');
+    setFormLink(null);
+    setMailtoHref(null);
   };
 
-  const configuredTemplateId = activeDoc?.sc_template_id ?? selectedTemplateId;
-  const configuredTemplateName = templateNameForId(configuredTemplateId);
-  const hasConfiguredTemplate = Boolean(activeDoc?.sc_template_id?.trim());
-
-  // ── Create from SafetyCulture ──────────────────────────────────────────────
-  const createFromSC = async () => {
-    if (!activeDoc || !selectedTemplateId || !pid) return;
+  const sendHandoverForm = async () => {
+    if (!activeDoc || !pid) return;
+    const templateKey = formTemplateKeyForDefinition(activeDoc);
+    if (!templateKey) {
+      alert('Link a web form to this document on the Handover Config tab first.');
+      setActiveTab('config');
+      return;
+    }
     setActionLoading(true);
     try {
-      const templateMapping = savedMappings[selectedTemplateId];
-      const fieldMap = mergeScFieldMappings(templateMapping?.field_mappings, activeDoc.field_mappings);
-      const items: any[] = [];
-      const addText = (key: string, value: string | null | undefined) => {
-        if (fieldMap[key] && value) items.push({ item_id: fieldMap[key], item_type: 'TEXT', text_item: { value } });
-      };
-      addText('job_number', project.job_number);
-      addText('project_name', project.project_name);
-      addText('client_name', project.client_name);
-      addText('site_name', project.site_name);
-      addText('site_address', project.site_address);
-      addText('project_manager', project.project_manager);
-
-      const inspName = buildInspectionName(activeDoc.title);
-      appendInspectionTitleItem(items, inspName, fieldMap);
-      const d = await invoke('create_inspection', {
-        template_id: selectedTemplateId,
-        items,
-        name: inspName,
-        audit_title_item_id: fieldMap.inspection_title || undefined,
+      const invite = await createHandoverFormInvite({
+        project_id: pid,
+        document_id: activeDoc.document_id,
+        document_title: activeDoc.title,
+        form_template_key: templateKey,
+        recipient_email: recipientEmail.trim() || undefined,
+        recipient_name: recipientName.trim() || undefined,
+        system_type: activeSystemFields.system_type,
+        project_system_id: activeSystemFields.project_system_id,
+        prefill: {
+          job_number: project.job_number ?? '',
+          project_name: project.project_name ?? '',
+          client_name: project.client_name ?? '',
+          site_name: project.site_name ?? '',
+          site_address: project.site_address ?? '',
+          project_manager: project.project_manager ?? '',
+          quote_number: project.quote_number ?? '',
+          engineer: project.engineer ?? '',
+          document_title: activeDoc.title,
+        },
       });
-      const inspId = d.inspection_id;
 
       await supabase.from('project_handover_docs').upsert({
         project_id: pid,
         document_type: activeDoc.document_id,
         title: activeDoc.title,
         status: 'in_progress',
-        sc_inspection_id: inspId,
-        sc_template_id: selectedTemplateId,
-        sc_inspection_name: inspName,
+        sc_inspection_id: invite.token,
+        sc_template_id: templateKey,
+        sc_inspection_name: invite.fill_url,
         ...activeSystemFields,
       }, { onConflict: 'project_id,document_type,system_type' });
 
-      setModalMode(null);
-      setActiveDoc(null);
-      await load();
-    } catch (e: any) {
-      alert('Failed to create inspection: ' + e.message);
-    } finally { setActionLoading(false); }
-  };
-
-  // ── Link existing inspection ───────────────────────────────────────────────
-  const linkExisting = async () => {
-    if (!activeDoc || !linkInspectionId.trim() || !pid) return;
-    setActionLoading(true);
-    try {
-      const inspName = buildInspectionName(activeDoc.title);
-      await supabase.from('project_handover_docs').upsert({
-        project_id: pid,
-        document_type: activeDoc.document_id,
-        title: activeDoc.title,
-        status: 'in_progress',
-        sc_inspection_id: linkInspectionId.trim(),
-        sc_inspection_name: inspName,
-        ...activeSystemFields,
-      }, { onConflict: 'project_id,document_type,system_type' });
-      setModalMode(null);
-      setActiveDoc(null);
-      await load();
-    } catch (e: any) {
-      alert('Failed to link: ' + e.message);
-    } finally { setActionLoading(false); }
-  };
-
-  // ── Import results ─────────────────────────────────────────────────────────
-  const importResults = async (docType: string) => {
-    const doc = getDocRecord(docType);
-    if (!doc?.sc_inspection_id || !pid) return;
-    setImportingDoc(docType);
-    try {
-      const d = await invoke('get_inspection', { inspection_id: doc.sc_inspection_id });
-      const isComplete = d.status === 'completed' || !!d.date_completed;
-      const status: DocStatus = isComplete ? 'imported' : 'in_progress';
-
-      // Build the update payload
-      const update: Record<string, unknown> = {
-        status,
-        sc_result: d.result ?? null,
-        sc_score_pct: d.score_pct ?? null,
-        sc_engineer_name: d.engineer_name ?? null,
-        sc_completion_date: d.date_completed ?? null,
-        sc_imported_at: isComplete ? new Date().toISOString() : null,
-      };
-
-      // If completed and no PDF yet, export and attach it
-      if (isComplete && !doc.file_url) {
-        try {
-          const pdf = await invoke('export_pdf', { inspection_id: doc.sc_inspection_id, project_id: pid, path_prefix: 'handover' });
-          if (pdf.pdf_url) {
-            update.file_url = pdf.pdf_url;
-            update.file_name = pdf.file_name;
-          }
-        } catch {
-          // PDF export failure is non-fatal — still mark as imported
-        }
+      setFormLink(invite.fill_url);
+      setMailtoHref(invite.mailto_href);
+      if (invite.mailto_href && recipientEmail.trim()) {
+        window.location.href = invite.mailto_href;
       }
-
-      await supabase.from('project_handover_docs').update(update).eq('id', doc.id);
       await load();
-    } catch (e: any) {
-      alert('Import failed: ' + e.message);
-    } finally { setImportingDoc(null); }
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Could not create the form link.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const copyFormLink = async () => {
+    if (!formLink) return;
+    await navigator.clipboard.writeText(formLink);
   };
 
   // ── Upload PDF ─────────────────────────────────────────────────────────────
@@ -480,7 +385,7 @@ export default function HandoverPage() {
   };
 
   const removeScInspection = async (docId: string, inspName: string | null) => {
-    if (!confirm(`Unlink inspection "${inspName ?? 'this inspection'}"? This will not delete it from SafetyCulture.`)) return;
+    if (!confirm(`Cancel the outstanding form for "${inspName ?? 'this document'}"?`)) return;
     await supabase.from('project_handover_docs').update({
       status: 'not_started',
       sc_inspection_id: null,
@@ -664,7 +569,7 @@ export default function HandoverPage() {
       <div className="flex items-center justify-between bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
         <div>
           <h2 className="font-semibold text-slate-900">Handover Documents</h2>
-          <p className="text-sm text-slate-500 mt-0.5">Create inspections from SafetyCulture, upload signed PDFs, or import results</p>
+          <p className="text-sm text-slate-500 mt-0.5">Email a browser form, collect a signature, or upload a signed PDF</p>
         </div>
         <span className={`text-sm font-semibold px-3 py-1 rounded-full ${completedDocs === totalDocs ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
           {completedDocs}/{totalDocs} complete
@@ -702,20 +607,21 @@ export default function HandoverPage() {
                 </div>
 
                 <div className="px-5 py-4 space-y-3">
-                  {record?.sc_inspection_id && (
+                  {record?.sc_inspection_id && status !== 'completed' && status !== 'uploaded' && (
                     <div className="bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 space-y-1">
                       <div className="flex items-center gap-2">
-                        <Shield className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
-                        <span className="text-xs font-medium text-slate-700 truncate flex-1 min-w-0">{record.sc_inspection_name ?? record.sc_inspection_id}</span>
-                        <a href={scInspectionUrl(record.sc_inspection_id)} target="_blank" rel="noopener noreferrer" className="text-xs text-cyan-600 hover:underline flex items-center gap-0.5 flex-shrink-0">
-                          Open <ExternalLink className="w-3 h-3" />
-                        </a>
-                        <button onClick={() => removeScInspection(doc.document_id, record.sc_inspection_name)} className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors flex-shrink-0" title="Unlink inspection">
+                        <Mail className="w-3.5 h-3.5 text-cyan-600 flex-shrink-0" />
+                        <span className="text-xs font-medium text-slate-700 truncate flex-1 min-w-0">Form sent — waiting for signature</span>
+                        {record.sc_inspection_name?.startsWith('http') && (
+                          <a href={record.sc_inspection_name} target="_blank" rel="noopener noreferrer" className="text-xs text-cyan-600 hover:underline flex items-center gap-0.5 flex-shrink-0">
+                            Open <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
+                        <button onClick={() => removeScInspection(doc.document_id, record.sc_inspection_name)} className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors flex-shrink-0" title="Cancel form">
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                      {record.sc_engineer_name && <p className="text-xs text-slate-500">Engineer: {record.sc_engineer_name}</p>}
-                      {record.sc_result && <p className="text-xs text-slate-500">Result: <span className={record.sc_result === 'pass' ? 'text-emerald-600 font-medium' : 'text-red-600 font-medium'}>{record.sc_result}</span></p>}
+                      {record.sc_engineer_name && <p className="text-xs text-slate-500">Signed by: {record.sc_engineer_name}</p>}
                     </div>
                   )}
 
@@ -729,24 +635,9 @@ export default function HandoverPage() {
                   )}
 
                   <div className="flex flex-wrap gap-2">
-                    {scConnected && (
-                      <>
-                        <button onClick={() => openCreateFromScModal(doc)} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-cyan-600 text-white hover:bg-cyan-700 transition-colors">
-                          <Plus className="w-3.5 h-3.5" />{record?.sc_inspection_id ? 'Replace Inspection' : 'Create from SafetyCulture'}
-                        </button>
-                        {!record?.sc_inspection_id && (
-                          <button onClick={() => { setActiveDoc(doc); setModalMode('link'); setLinkInspectionId(''); }} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">
-                            <Link2 className="w-3.5 h-3.5" />Link Existing
-                          </button>
-                        )}
-                      </>
-                    )}
-                    {record?.sc_inspection_id && status !== 'imported' && (
-                      <button onClick={() => importResults(doc.document_id)} disabled={importingDoc === doc.document_id} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50">
-                        {importingDoc === doc.document_id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-                        Import Results
-                      </button>
-                    )}
+                    <button onClick={() => openEmailFormModal(doc)} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-cyan-600 text-white hover:bg-cyan-700 transition-colors">
+                      <Mail className="w-3.5 h-3.5" />{record?.sc_inspection_id && status === 'in_progress' ? 'Resend form' : 'Email form'}
+                    </button>
                     <button onClick={() => triggerUpload(doc.document_id)} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">
                       <Upload className="w-3.5 h-3.5" />Upload PDF
                     </button>
@@ -1025,98 +916,50 @@ export default function HandoverPage() {
         </div>
       )}
 
-      {/* ── Create from SC Modal ─────────────────────────────────────────────── */}
-      {modalMode === 'create' && activeDoc && (
+      {modalMode === 'email' && activeDoc && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
             <div className="flex items-center justify-between px-6 py-5 border-b border-slate-200">
               <div>
-                <h3 className="text-base font-semibold text-slate-900">Create from SafetyCulture</h3>
+                <h3 className="text-base font-semibold text-slate-900">Email form</h3>
                 <p className="text-xs text-slate-500 mt-0.5">{activeDoc.title}</p>
               </div>
               <button onClick={() => { setModalMode(null); setActiveDoc(null); }} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
             <div className="p-6 space-y-4">
-              {hasConfiguredTemplate ? (
-                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 space-y-1">
-                  <p className="text-xs font-semibold text-emerald-800">Linked template</p>
-                  <p className="text-sm font-medium text-slate-900">{configuredTemplateName}</p>
-                  <p className="text-[11px] text-slate-500 font-mono">{activeDoc.sc_template_id}</p>
-                  <p className="text-[11px] text-emerald-700 pt-1">
-                    Set in Handover Config. Change the template there if needed.
-                  </p>
-                </div>
-              ) : (
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-3">
-                  <div className="flex items-start gap-2">
-                    <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <p className="text-sm font-semibold text-amber-900">Template needs configuring</p>
-                      <p className="text-xs text-amber-800 mt-1">
-                        Link a SafetyCulture template to <strong>{activeDoc.title}</strong> on the Handover Config tab
-                        before creating an inspection.
-                      </p>
-                    </div>
+              <p className="text-sm text-slate-600">
+                {getHandoverFormTemplate(formTemplateKeyForDefinition(activeDoc)).name}. Project details are filled in automatically. When they sign, the PDF is saved here.
+              </p>
+              <div>
+                <label className="text-xs font-medium text-slate-700 mb-1.5 block">Recipient name</label>
+                <input value={recipientName} onChange={e => setRecipientName(e.target.value)} placeholder="Customer or engineer" className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-slate-700 mb-1.5 block">Recipient email</label>
+                <input type="email" value={recipientEmail} onChange={e => setRecipientEmail(e.target.value)} placeholder="name@client.co.uk" className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+              </div>
+              {formLink && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 space-y-2">
+                  <p className="text-xs font-semibold text-emerald-800">Form link ready</p>
+                  <p className="text-[11px] font-mono text-slate-700 break-all">{formLink}</p>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => void copyFormLink()} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-emerald-300 text-emerald-800 bg-white">
+                      <Copy className="w-3.5 h-3.5" />Copy link
+                    </button>
+                    {mailtoHref && (
+                      <a href={mailtoHref} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-cyan-600 text-white">
+                        <Mail className="w-3.5 h-3.5" />Open email
+                      </a>
+                    )}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => { setModalMode(null); setActiveDoc(null); setActiveTab('config'); }}
-                    className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 transition-colors"
-                  >
-                    <SlidersHorizontal className="w-3.5 h-3.5" />
-                    Open Handover Config
-                  </button>
                 </div>
               )}
-              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-1">
-                <p className="text-xs font-medium text-slate-700">Inspection will be named:</p>
-                <p className="text-sm font-mono text-cyan-700">{buildInspectionName(activeDoc.title)}</p>
-              </div>
-              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
-                <p className="text-xs font-medium text-slate-700 mb-1">Auto-populated fields:</p>
-                <div className="text-xs text-slate-500 space-y-0.5">
-                  {project.job_number && <p>Job Number: {project.job_number}</p>}
-                  {project.project_name && <p>Project: {project.project_name}</p>}
-                  {project.client_name && <p>Client: {project.client_name}</p>}
-                  {project.site_name && <p>Site: {project.site_name}</p>}
-                  {project.site_address && <p>Address: {project.site_address}</p>}
-                </div>
-              </div>
             </div>
             <div className="flex gap-3 px-6 py-4 border-t border-slate-200 bg-slate-50 rounded-b-2xl">
-              <button onClick={() => { setModalMode(null); setActiveDoc(null); }} className="flex-1 px-4 py-2.5 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors">Cancel</button>
-              <button onClick={createFromSC} disabled={!hasConfiguredTemplate || !selectedTemplateId || actionLoading} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 transition-colors disabled:opacity-40">
-                {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                Create Inspection
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Link Existing Modal ───────────────────────────────────────────────── */}
-      {modalMode === 'link' && activeDoc && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
-            <div className="flex items-center justify-between px-6 py-5 border-b border-slate-200">
-              <div>
-                <h3 className="text-base font-semibold text-slate-900">Link Existing Inspection</h3>
-                <p className="text-xs text-slate-500 mt-0.5">{activeDoc.title}</p>
-              </div>
-              <button onClick={() => { setModalMode(null); setActiveDoc(null); }} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
-            </div>
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="text-xs font-medium text-slate-700 mb-1.5 block">SafetyCulture Inspection ID</label>
-                <input value={linkInspectionId} onChange={e => setLinkInspectionId(e.target.value)} placeholder="e.g. audit_abc123..." className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2.5 font-mono focus:outline-none focus:ring-2 focus:ring-cyan-500" />
-                <p className="text-xs text-slate-400 mt-1">Find this in the SafetyCulture inspection URL or details.</p>
-              </div>
-            </div>
-            <div className="flex gap-3 px-6 py-4 border-t border-slate-200 bg-slate-50 rounded-b-2xl">
-              <button onClick={() => { setModalMode(null); setActiveDoc(null); }} className="flex-1 px-4 py-2.5 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors">Cancel</button>
-              <button onClick={linkExisting} disabled={!linkInspectionId.trim() || actionLoading} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 transition-colors disabled:opacity-40">
-                {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}
-                Link Inspection
+              <button onClick={() => { setModalMode(null); setActiveDoc(null); }} className="flex-1 px-4 py-2.5 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors">Close</button>
+              <button onClick={() => void sendHandoverForm()} disabled={actionLoading} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 transition-colors disabled:opacity-40">
+                {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
+                {formLink ? 'Create another link' : 'Create and email'}
               </button>
             </div>
           </div>

@@ -24,6 +24,7 @@ import { AIProjectBuilderPage } from './pages/AIProjectBuilderPage';
 import { IntegrationsPage } from './pages/IntegrationsPage';
 import { ImportReviewPage } from './pages/ImportReviewPage';
 import AsBuiltDrawingsPage from './pages/AsBuiltDrawingsPage';
+import PublicHandoverFormPage from './pages/PublicHandoverFormPage';
 
 function App() {
   const [session, setSession] = useState<Session | null>(null);
@@ -55,6 +56,19 @@ function App() {
     setCompanyName('');
   };
 
+  const isPublicFormPath = typeof window !== 'undefined' && window.location.pathname.startsWith('/f/');
+
+  if (isPublicFormPath) {
+    return (
+      <BrowserRouter>
+        <Routes>
+          <Route path="/f/:token" element={<PublicHandoverFormPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    );
+  }
+
   if (sessionLoading) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
@@ -70,6 +84,7 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/f/:token" element={<PublicHandoverFormPage />} />
         <Route path="/" element={<Layout companyName={companyName} userEmail={session.user.email ?? ''} onSignOut={handleSignOut} />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard"   element={<DashboardPage />} />
@@ -87,7 +102,7 @@ function App() {
             <Route path="technical"       element={<TechnicalDocsPage />} />
             <Route path="commissioning"   element={<CommissioningPage />} />
             <Route path="handover"        element={<HandoverPage />} />
-            <Route path="safetyculture"   element={<Navigate to="/integrations" replace />} />
+            <Route path="safetyculture"   element={<Navigate to="../handover" replace />} />
             <Route path="datasheets"      element={<ProjectDatasheetsPage />} />
             <Route path="as-fitted"       element={<AsBuiltDrawingsPage />} />
             <Route path="om-builder"      element={<ProjectOMExportPage />} />

@@ -214,7 +214,7 @@ export default function ProjectInfoPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
           <div className="lg:col-span-2">
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Job Number <span className="text-xs text-slate-400 font-normal ml-1">— used in SafetyCulture inspection names</span>
+              Job Number
             </label>
             <input
               type="text"

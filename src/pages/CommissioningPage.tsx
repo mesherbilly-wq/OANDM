@@ -1,19 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useProject } from './ProjectLayout';
 import { supabase } from '../lib/supabase';
-import { appendInspectionTitleItem } from '../components/safetyculture/safetyCultureFields';
 import { CommissioningRecord, SYSTEM_TYPES } from '../types';
-import type { Device, SCTemplateMapping } from '../types';
+import type { Device } from '../types';
 import {
   Plus, CheckCircle, XCircle, Circle, Save, Loader2,
-  Shield, Download, Link2, ExternalLink, Upload, X,
 } from 'lucide-react';
-
-function scInspectionUrl(id: string): string {
-  if (id.startsWith('audit_')) return `https://app.safetyculture.com/inspection/${id}`;
-  if (id.startsWith('insp_')) return `https://app.safetyculture.com/inspection/audit_${id.slice(5)}`;
-  return `https://app.safetyculture.com/inspection/audit_${id.replace(/-/g, '')}`;
-}
 
 const DEFAULT_TEMPLATES: Record<string, { sections: string[]; items: Array<{ section: string; test_description: string; expected_result: string }> }> = {
   CCTV: {
@@ -121,22 +113,6 @@ const DEFAULT_TEMPLATES: Record<string, { sections: string[]; items: Array<{ sec
   },
 };
 
-type DocStatus = 'not_started' | 'in_progress' | 'completed' | 'imported' | 'uploaded';
-
-interface HandoverDoc {
-  id: number;
-  document_type: string;
-  title: string;
-  status: DocStatus;
-  sc_inspection_id: string | null;
-  sc_inspection_name: string | null;
-  sc_result: string | null;
-  sc_engineer_name: string | null;
-  sc_completion_date: string | null;
-  file_url: string | null;
-  file_name: string | null;
-}
-
 export default function CommissioningPage() {
   const { project } = useProject();
   const pid = project?.id;
@@ -147,26 +123,7 @@ export default function CommissioningPage() {
   const [engineerName, setEngineerName] = useState('');
   const [testDate, setTestDate] = useState(new Date().toISOString().split('T')[0]);
   const [signOffDialog, setSignOffDialog] = useState(false);
-
-  // SC integration state
-  const [scConnected, setScConnected] = useState(false);
-  const [templates, setTemplates] = useState<any[]>([]);
-  const [savedMappings, setSavedMappings] = useState<Record<string, SCTemplateMapping>>({});
-  const [scDoc, setScDoc] = useState<HandoverDoc | null>(null);
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [selectedTemplateId, setSelectedTemplateId] = useState('');
-  const [actionLoading, setActionLoading] = useState(false);
-  const [importingDoc, setImportingDoc] = useState(false);
   const [devices, setDevices] = useState<Device[]>([]);
-
-  const docType = `commissioning_${activeTab.toLowerCase().replace(/\s+/g, '_')}`;
-
-  const invoke = async (action: string, extra: Record<string, unknown> = {}) => {
-    const { data, error } = await supabase.functions.invoke('safetyculture-proxy', { body: { action, ...extra } });
-    if (error) throw new Error(error.message);
-    if (data?.error) throw new Error(data.error);
-    return data;
-  };
 
   const fetchRecords = useCallback(async () => {
     if (!pid) return;
@@ -181,38 +138,16 @@ export default function CommissioningPage() {
     setLoading(false);
   }, [pid, activeTab]);
 
-  const fetchScDoc = useCallback(async () => {
-    if (!pid) return;
-    const { data } = await supabase
-      .from('project_handover_docs')
-      .select('*')
-      .eq('project_id', pid)
-      .eq('document_type', docType)
-      .maybeSingle();
-    setScDoc(data as HandoverDoc | null);
-  }, [pid, docType]);
-
   useEffect(() => {
     if (pid) {
       fetchRecords();
-      fetchScDoc();
     }
-  }, [pid, activeTab, fetchRecords, fetchScDoc]);
+  }, [pid, activeTab, fetchRecords]);
 
   useEffect(() => {
-    Promise.all([
-      supabase.from('integration_settings').select('value').eq('key', 'safetyculture_api_token').maybeSingle(),
-      supabase.from('sc_template_mappings').select('*'),
-      supabase.from('devices').select('*').eq('project_id', pid!),
-    ]).then(([{ data: tok }, { data: maps }, { data: devs }]) => {
-      setScConnected(!!tok?.value);
-      const byTmpl: Record<string, SCTemplateMapping> = {};
-      for (const m of maps ?? []) byTmpl[m.template_id] = m;
-      setSavedMappings(byTmpl);
+    if (!pid) return;
+    supabase.from('devices').select('*').eq('project_id', pid).then(({ data: devs }) => {
       setDevices(devs ?? []);
-      if (tok?.value) {
-        invoke('list_templates').then(d => setTemplates(d.templates ?? [])).catch(() => {});
-      }
     });
   }, [pid]);
 
@@ -262,62 +197,6 @@ export default function CommissioningPage() {
     await fetchRecords();
   };
 
-  // SC actions
-  const buildInspectionName = () => {
-    const name = project.project_name || project.job_number || 'Project';
-    return `${name} - ${activeTab} Commissioning`;
-  };
-
-  const createFromSC = async () => {
-    if (!selectedTemplateId || !pid) return;
-    setActionLoading(true);
-    try {
-      const mapping = savedMappings[selectedTemplateId];
-      const items: any[] = [];
-      const fm = mapping?.field_mappings ?? {};
-      const addText = (key: string, value: string | null | undefined) => {
-        if (fm[key] && value) items.push({ item_id: fm[key], item_type: 'TEXT', text_item: { value } });
-      };
-      addText('job_number', project.job_number);
-      addText('project_name', project.project_name);
-      addText('client_name', project.client_name);
-      addText('site_name', project.site_name);
-      addText('site_address', project.site_address);
-      addText('project_manager', project.project_manager);
-      const inspName = buildInspectionName();
-      appendInspectionTitleItem(items, inspName, fm);
-      const d = await invoke('create_inspection', {
-        template_id: selectedTemplateId,
-        items,
-        name: inspName,
-        audit_title_item_id: fm.inspection_title || undefined,
-      });
-      await supabase.from('project_handover_docs').upsert({
-        project_id: pid, document_type: docType, title: `${activeTab} Commissioning`,
-        status: 'in_progress', sc_inspection_id: d.inspection_id,
-        sc_template_id: selectedTemplateId, sc_inspection_name: inspName,
-      }, { onConflict: 'project_id,document_type' });
-      setShowCreateModal(false);
-      await fetchScDoc();
-    } catch (e: any) { alert('Failed: ' + e.message); }
-    finally { setActionLoading(false); }
-  };
-
-  const importScResults = async () => {
-    if (!scDoc?.sc_inspection_id || !pid) return;
-    setImportingDoc(true);
-    try {
-      const d = await invoke('get_inspection', { inspection_id: scDoc.sc_inspection_id });
-      const status: DocStatus = d.status === 'completed' || d.date_completed ? 'imported' : 'in_progress';
-      await supabase.from('project_handover_docs').update({
-        status, sc_result: d.result ?? null, sc_engineer_name: d.engineer_name ?? null,
-        sc_completion_date: d.date_completed ?? null, sc_imported_at: status === 'imported' ? new Date().toISOString() : null,
-      }).eq('id', scDoc.id);
-      await fetchScDoc();
-    } catch (e: any) { alert('Import failed: ' + e.message); }
-    finally { setImportingDoc(false); }
-  };
-
   const passCount = records.filter(r => r.pass === true).length;
   const failCount = records.filter(r => r.pass === false).length;
   const totalCount = records.length;
@@ -353,53 +232,6 @@ export default function CommissioningPage() {
 
       {visibleTabs.length > 0 && (
         <>
-          {/* SafetyCulture integration card */}
-          {scConnected && (
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="flex items-center gap-3 px-5 py-3 bg-slate-50 border-b border-slate-100">
-                <Shield className="w-4 h-4 text-emerald-600" />
-                <span className="text-xs font-semibold text-slate-700">SafetyCulture Inspection</span>
-                {scDoc && (
-                  <span className={`ml-auto text-xs font-medium px-2 py-0.5 rounded-full border ${
-                    scDoc.status === 'imported' ? 'bg-blue-50 text-blue-700 border-blue-200' :
-                    scDoc.status === 'in_progress' ? 'bg-amber-50 text-amber-700 border-amber-200' :
-                    'bg-slate-100 text-slate-500 border-slate-200'
-                  }`}>
-                    {scDoc.status === 'imported' ? 'Imported' : scDoc.status === 'in_progress' ? 'In Progress' : scDoc.status}
-                  </span>
-                )}
-              </div>
-              <div className="px-5 py-3">
-                {scDoc?.sc_inspection_id ? (
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <span className="text-sm text-slate-700 font-medium">{scDoc.sc_inspection_name}</span>
-                    <a href={scInspectionUrl(scDoc.sc_inspection_id)} target="_blank" rel="noopener noreferrer" className="text-xs text-cyan-600 hover:underline flex items-center gap-0.5">
-                      Open <ExternalLink className="w-3 h-3" />
-                    </a>
-                    {scDoc.status !== 'imported' && (
-                      <button onClick={importScResults} disabled={importingDoc} className="ml-auto inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50">
-                        {importingDoc ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-                        Import Results
-                      </button>
-                    )}
-                    {scDoc.sc_result && (
-                      <span className={`text-xs font-medium ${scDoc.sc_result === 'pass' ? 'text-emerald-600' : 'text-red-600'}`}>
-                        Result: {scDoc.sc_result}
-                      </span>
-                    )}
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => { setShowCreateModal(true); setSelectedTemplateId(''); }} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-cyan-600 text-white hover:bg-cyan-700 transition-colors">
-                      <Plus className="w-3.5 h-3.5" />Create from SafetyCulture
-                    </button>
-                    <span className="text-xs text-slate-400">Create an inspection to track commissioning via SafetyCulture</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
           {/* Checklist controls */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
             <div className="flex items-center gap-4 flex-wrap">
@@ -499,44 +331,6 @@ export default function CommissioningPage() {
             <div className="flex gap-3">
               <button onClick={() => setSignOffDialog(false)} className="flex-1 px-4 py-2.5 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 transition-colors">Cancel</button>
               <button onClick={handleSignOff} className="flex-1 px-4 py-2.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors">Confirm</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Create from SC modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
-            <div className="flex items-center justify-between px-6 py-5 border-b border-slate-200">
-              <div>
-                <h3 className="text-base font-semibold text-slate-900">Create Commissioning Inspection</h3>
-                <p className="text-xs text-slate-500 mt-0.5">{activeTab}</p>
-              </div>
-              <button onClick={() => setShowCreateModal(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
-            </div>
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="text-xs font-medium text-slate-700 mb-1.5 block">Select Template</label>
-                <select value={selectedTemplateId} onChange={e => setSelectedTemplateId(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-cyan-500">
-                  <option value="">Choose a template...</option>
-                  {templates.map(t => {
-                    const tid = t.template_id ?? t.id;
-                    return <option key={tid} value={tid}>{t.name}{savedMappings[tid] ? ' (mapped)' : ''}</option>;
-                  })}
-                </select>
-              </div>
-              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
-                <p className="text-xs font-medium text-slate-700">Inspection name:</p>
-                <p className="text-sm font-mono text-cyan-700 mt-0.5">{buildInspectionName()}</p>
-              </div>
-            </div>
-            <div className="flex gap-3 px-6 py-4 border-t border-slate-200 bg-slate-50 rounded-b-2xl">
-              <button onClick={() => setShowCreateModal(false)} className="flex-1 px-4 py-2.5 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors">Cancel</button>
-              <button onClick={createFromSC} disabled={!selectedTemplateId || actionLoading} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 transition-colors disabled:opacity-40">
-                {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                Create
-              </button>
             </div>
           </div>
         </div>

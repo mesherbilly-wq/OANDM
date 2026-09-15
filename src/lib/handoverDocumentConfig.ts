@@ -123,7 +123,7 @@ export const FALLBACK_DOCUMENT_DEFINITIONS: HandoverDocumentDefinition[] = [
   fallbackDefinition('ac_controller_configuration', 'access_control', 'Controller Configuration', 'Access controller configuration record', 'file', { display_order: 30 }),
   fallbackDefinition('ac_reader_test_sheet', 'access_control', 'Reader Test Sheet', 'Reader and door hardware test results', 'clipboard', { sc_enabled: true, display_order: 40 }),
   fallbackDefinition('ac_customer_training', 'access_control', 'Customer Training Record', 'Signed training record for customer staff', 'graduation', { sc_enabled: true, display_order: 50 }),
-  fallbackDefinition('handover_intruder', 'intruder_alarm', 'Intruder Alarm Completion Certificate', 'Intruder alarm completion and commissioning certificate', 'shield_alert', { sc_enabled: true, required: true, display_order: 10 }),
+  fallbackDefinition('handover_intruder', 'intruder_alarm', 'Intruder Alarm Completion Certificate', 'Intruder alarm completion and commissioning certificate', 'shield_alert', { sc_enabled: true, required: true, display_order: 10, sc_template_id: 'intruder_alarm_master' }),
   fallbackDefinition('handover_intruder_record', 'intruder_alarm', 'Intruder Record of System Checks', 'Engineer record of intruder system checks', 'clipboard', { sc_enabled: true, display_order: 20 }),
   fallbackDefinition('intruder_zone_list', 'intruder_alarm', 'Zone List', 'Configured alarm zones and descriptions', 'file', { display_order: 30 }),
   fallbackDefinition('intruder_bell_strobe_test', 'intruder_alarm', 'Bell/Strobe Test', 'Audible and visual alarm device test record', 'clipboard', { display_order: 40 }),
