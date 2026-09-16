@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useProject } from './ProjectLayout';
 import { supabase } from '../lib/supabase';
+import { canAccessHandoverConfig } from '../lib/appRoles';
+import { useUserAccess } from '../lib/userAccess';
 import {
   documentMatchesSystem,
   loadDocumentProjectSystems,
@@ -94,6 +96,8 @@ const STATUS_CONFIG: Record<DocStatus, { label: string; color: string }> = {
 export default function HandoverPage() {
   const { project } = useProject();
   const pid = project?.id;
+  const { role } = useUserAccess();
+  const showConfig = canAccessHandoverConfig(role);
 
   const [activeTab, setActiveTab] = useState<'documents' | 'config'>('documents');
   const [docs, setDocs] = useState<HandoverDoc[]>([]);
@@ -580,6 +584,7 @@ export default function HandoverPage() {
       <input ref={otherFileRef} type="file" accept="application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" className="hidden" onChange={e => { setOtherFile(e.target.files?.[0] ?? null); e.target.value = ''; }} />
 
       {/* Tab switcher */}
+      {showConfig ? (
       <div className="flex gap-1 bg-white border border-slate-200 rounded-xl p-1 shadow-sm w-fit">
         <button
           onClick={() => setActiveTab('documents')}
@@ -600,9 +605,11 @@ export default function HandoverPage() {
         </button>
       </div>
 
-      {activeTab === 'config' && <HandoverConfigPage />}
+      ) : null}
 
-      {activeTab === 'documents' && (
+      {showConfig && activeTab === 'config' && <HandoverConfigPage />}
+
+      {(!showConfig || activeTab === 'documents') && (
         <>
       {/* System / cost centre tabs */}
       <div className="flex flex-wrap gap-1.5 bg-white rounded-xl border border-slate-200 shadow-sm px-4 py-3">

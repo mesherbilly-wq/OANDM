@@ -15,7 +15,6 @@ import { useUserAccess } from '../lib/userAccess';
 
 const PROJECT_MODULES = [
   { name: 'Overview',           slug: 'info',          icon: Info },
-  { name: 'SDP',                slug: 'sdp',           icon: FileText },
   { name: 'Document Mgmt',      slug: 'documents',     icon: FileText },
   { name: 'Systems',            slug: 'systems',       icon: Cpu,           hasChildren: true },
   { name: 'Device Schedule',    slug: 'schedule',      icon: ClipboardCheck },

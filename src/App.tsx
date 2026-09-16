@@ -25,6 +25,7 @@ import { IntegrationsPage } from './pages/IntegrationsPage';
 import { ImportReviewPage } from './pages/ImportReviewPage';
 import AsBuiltDrawingsPage from './pages/AsBuiltDrawingsPage';
 import PublicHandoverFormPage from './pages/PublicHandoverFormPage';
+import SafetyCulturePage from './pages/SafetyCulturePage';
 import { UsersPage } from './pages/UsersPage';
 import { ProjectInvitePage } from './pages/ProjectInvitePage';
 import SdpPage from './pages/SdpPage';
@@ -170,7 +171,7 @@ function AuthedApp({
             <Route path="commissioning" element={<CommissioningPage />} />
             <Route path="sdp" element={<SdpPage />} />
             <Route path="handover" element={<HandoverPage />} />
-            <Route path="safetyculture" element={<Navigate to="../handover" replace />} />
+            <Route path="safetyculture" element={<SafetyCulturePage />} />
             <Route path="datasheets" element={<ProjectDatasheetsPage />} />
             <Route path="as-fitted" element={<AsBuiltDrawingsPage />} />
             <Route path="om-builder" element={<ProjectOMExportPage />} />

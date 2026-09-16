@@ -3,6 +3,7 @@ import { Check, ClipboardCopy, Loader2, Plus, Save, Settings, Trash2 } from 'luc
 import { Link } from 'react-router-dom';
 
 import migration024Sql from '../../supabase/migrations/20260626150000_024_handover_document_config.sql?raw';
+import migration038Sql from '../../supabase/migrations/20260916230000_038_restore_safetyculture_handover.sql?raw';
 
 import {
   DEFAULT_SC_FIELD_MAPPINGS,
@@ -216,7 +217,7 @@ export default function HandoverConfigPage() {
 
   const copyMigrationSql = async () => {
     try {
-      await navigator.clipboard.writeText(migration024Sql);
+      await navigator.clipboard.writeText(`${migration024Sql}\n\n${migration038Sql}`);
       setMigrationCopied(true);
       window.setTimeout(() => setMigrationCopied(false), 2500);
     } catch {
@@ -241,6 +242,24 @@ export default function HandoverConfigPage() {
           document and configure field linking here. Connect the API on{' '}
           <Link to="/integrations" className="text-cyan-600 hover:underline">Integrations</Link>.
         </p>
+        <div className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-3 mt-3 space-y-2">
+          <p>
+            Paste <strong>038</strong> in the Supabase SQL editor to turn SafetyCulture documents back on and hide the Pacific PDF packs.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard.writeText(migration038Sql).then(() => {
+                setMigrationCopied(true);
+                window.setTimeout(() => setMigrationCopied(false), 2500);
+              }).catch(() => setError('Clipboard is blocked. Copy supabase/migrations/20260916230000_038_restore_safetyculture_handover.sql manually.'));
+            }}
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-cyan-600 text-white hover:bg-cyan-700"
+          >
+            {migrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
+            {migrationCopied ? 'Copied 038 — paste in Supabase' : 'Copy 038 SQL'}
+          </button>
+        </div>
         {!scConnected && (
           <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-3">
             SafetyCulture is not connected — template lists and field linking require an API token on Integrations.
