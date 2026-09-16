@@ -1,13 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, ClipboardCopy, Loader2, Plus, Save, Trash2 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { Check, ClipboardCopy, Loader2, Plus, Save, Settings, Trash2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 
 import migration024Sql from '../../supabase/migrations/20260626150000_024_handover_document_config.sql?raw';
-import migration025Sql from '../../supabase/migrations/20260915120000_025_handover_web_forms.sql?raw';
-import migration026Sql from '../../supabase/migrations/20260916120000_026_intruder_master_form.sql?raw';
-import migration035Sql from '../../supabase/migrations/20260916200000_035_pacific_completion_sdp.sql?raw';
-import migration036Sql from '../../supabase/migrations/20260916210000_036_sdp_revisions_and_returns.sql?raw';
-import migration037Sql from '../../supabase/migrations/20260916220000_037_pdf_only_handover.sql?raw';
 
 import {
   DEFAULT_SC_FIELD_MAPPINGS,
@@ -17,46 +12,67 @@ import {
   upsertHandoverDocumentType,
   deleteHandoverDocumentDefinition,
   isHandoverConfigLocalOnly,
-  uniqueHandoverDocumentId,
   type HandoverDocumentDefinition,
   type HandoverDocumentType,
 } from '../lib/handoverDocumentConfig';
+import { invokeSafetyCulture } from '../lib/safetyCultureApi';
+import { supabase } from '../lib/supabase';
+import type { SCTemplateMapping } from '../types';
+import {
+  SafetyCultureFieldMappingModal,
+  type SafetyCultureFieldMappingResult,
+} from '../components/safetyculture/SafetyCultureFieldMappingModal';
+
+const ICON_OPTIONS = [
+  'file', 'camera', 'lock', 'shield_alert', 'clipboard', 'car', 'phone',
+  'network', 'graduation', 'award', 'shield', 'hardhat',
+];
 
 export default function HandoverConfigPage() {
   const [types, setTypes] = useState<HandoverDocumentType[]>([]);
   const [definitions, setDefinitions] = useState<HandoverDocumentDefinition[]>([]);
   const [selectedTypeKey, setSelectedTypeKey] = useState<string>('cctv');
+  const [templates, setTemplates] = useState<any[]>([]);
+  const [savedMappings, setSavedMappings] = useState<Record<string, SCTemplateMapping>>({});
+  const [scConnected, setScConnected] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editingDefId, setEditingDefId] = useState<number | 'new' | null>(null);
-  const [documentIdTouched, setDocumentIdTouched] = useState(false);
+  const [fieldMappingOpen, setFieldMappingOpen] = useState(false);
   const [localConfigOnly, setLocalConfigOnly] = useState(false);
-  const [formsMigrationNeeded, setFormsMigrationNeeded] = useState(false);
   const [migrationCopied, setMigrationCopied] = useState(false);
 
   const [draftDef, setDraftDef] = useState<Partial<HandoverDocumentDefinition>>({});
 
-  const pendingMigrationSql = localConfigOnly
-    ? `${migration024Sql}\n\n${migration025Sql}\n\n${migration026Sql}\n\n${migration035Sql}\n\n${migration036Sql}\n\n${migration037Sql}`
-    : formsMigrationNeeded
-      ? `${migration025Sql}\n\n${migration035Sql}\n\n${migration036Sql}\n\n${migration037Sql}`
-      : `${migration035Sql}\n\n${migration036Sql}\n\n${migration037Sql}`;
-
-  const load = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
-    const [typeRows, defRows] = await Promise.all([
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [typeRows, defRows, { data: maps }, tok] = await Promise.all([
       fetchHandoverDocumentTypes(),
       fetchHandoverDocumentDefinitions(),
+      supabase.from('sc_template_mappings').select('*'),
+      supabase.from('integration_settings').select('value').eq('key', 'safetyculture_api_token').maybeSingle(),
     ]);
 
     setTypes(typeRows.filter(type => type.key !== 'project_wide'));
     setDefinitions(defRows);
+    const byTmpl: Record<string, SCTemplateMapping> = {};
+    for (const m of maps ?? []) byTmpl[m.template_id] = m;
+    setSavedMappings(byTmpl);
 
-    const { error: formsTableError } = await supabase.from('handover_form_invites').select('id').limit(1);
-    setFormsMigrationNeeded(Boolean(formsTableError && /does not exist|schema cache/i.test(formsTableError.message)));
+    if (tok.data?.value) {
+      setScConnected(true);
+      try {
+        const data = await invokeSafetyCulture('list_templates');
+        setTemplates(data.templates ?? []);
+      } catch {
+        setScConnected(false);
+      }
+    } else {
+      setScConnected(false);
+    }
 
-    if (!silent) setLoading(false);
+    setLoading(false);
     setLocalConfigOnly(isHandoverConfigLocalOnly());
   }, []);
 
@@ -64,82 +80,56 @@ export default function HandoverConfigPage() {
 
   const typeDefinitions = useMemo(
     () => definitions
-      .filter(def => def.type_key === selectedTypeKey && def.is_active)
+      .filter(def => def.type_key === selectedTypeKey)
       .sort((a, b) => a.display_order - b.display_order || a.title.localeCompare(b.title)),
     [definitions, selectedTypeKey],
   );
 
   const beginNewDefinition = () => {
-    setError(null);
     setEditingDefId('new');
-    setDocumentIdTouched(false);
     setDraftDef({
-      document_id: uniqueHandoverDocumentId(selectedTypeKey, 'document', definitions.map(def => def.document_id)),
+      document_id: '',
       type_key: selectedTypeKey,
       title: '',
       description: '',
       icon_key: 'file',
-      sc_enabled: false,
+      sc_enabled: true,
       sc_template_id: null,
       field_mappings: { ...DEFAULT_SC_FIELD_MAPPINGS },
       required: false,
       upload_only: false,
       multi: false,
-      display_order: (typeDefinitions[typeDefinitions.length - 1]?.display_order ?? 0) + 10,
+      display_order: (typeDefinitions.at(-1)?.display_order ?? 0) + 10,
       is_active: true,
     });
   };
 
   const beginEditDefinition = (def: HandoverDocumentDefinition) => {
-    setError(null);
     setEditingDefId(def.id);
-    setDocumentIdTouched(true);
-    setDraftDef({
-      ...def,
-      type_key: selectedTypeKey,
-      field_mappings: { ...DEFAULT_SC_FIELD_MAPPINGS, ...def.field_mappings },
-      sc_enabled: false,
-      sc_template_id: null,
-    });
+    setDraftDef({ ...def, field_mappings: { ...DEFAULT_SC_FIELD_MAPPINGS, ...def.field_mappings } });
   };
 
   const saveDefinition = async () => {
-    const title = draftDef.title?.trim() ?? '';
-    if (!title) {
-      setError('Enter a title before saving this document.');
-      return;
-    }
-
-    const existingIds = definitions
-      .filter(def => editingDefId === 'new' || def.id !== editingDefId)
-      .map(def => def.document_id);
-    let documentId = draftDef.document_id?.trim() || uniqueHandoverDocumentId(selectedTypeKey, title, existingIds);
-
+    if (!draftDef.document_id?.trim() || !draftDef.title?.trim() || !draftDef.type_key) return;
     setSaving(true);
     setError(null);
 
-    const payload = {
+    const saveError = await upsertHandoverDocumentDefinition({
       id: editingDefId === 'new' ? undefined : (editingDefId as number),
-      document_id: documentId,
-      type_key: selectedTypeKey,
-      title,
+      document_id: draftDef.document_id,
+      type_key: draftDef.type_key,
+      title: draftDef.title,
       description: draftDef.description ?? null,
       icon_key: draftDef.icon_key ?? 'file',
-      sc_enabled: false,
-      sc_template_id: null,
+      sc_enabled: draftDef.sc_enabled ?? false,
+      sc_template_id: draftDef.sc_template_id ?? null,
       field_mappings: draftDef.field_mappings ?? { ...DEFAULT_SC_FIELD_MAPPINGS },
       required: draftDef.required ?? false,
       upload_only: draftDef.upload_only ?? false,
       multi: draftDef.multi ?? false,
       display_order: draftDef.display_order ?? 0,
       is_active: draftDef.is_active ?? true,
-    };
-
-    let saveError = await upsertHandoverDocumentDefinition(payload);
-    if (saveError && editingDefId === 'new' && /already exists/i.test(saveError)) {
-      documentId = uniqueHandoverDocumentId(selectedTypeKey, title, [...existingIds, documentId]);
-      saveError = await upsertHandoverDocumentDefinition({ ...payload, document_id: documentId });
-    }
+    });
 
     setSaving(false);
     if (saveError) {
@@ -147,35 +137,9 @@ export default function HandoverConfigPage() {
       return;
     }
 
-    setDefinitions(current => {
-      const next = [...current];
-      const matchIndex = next.findIndex(def =>
-        editingDefId !== 'new' ? def.id === editingDefId : def.document_id === documentId,
-      );
-      const row: HandoverDocumentDefinition = {
-        id: editingDefId === 'new' ? Date.now() : (editingDefId as number),
-        document_id: documentId,
-        type_key: selectedTypeKey,
-        title,
-        description: payload.description,
-        icon_key: payload.icon_key,
-        sc_enabled: payload.sc_enabled,
-        sc_template_id: payload.sc_template_id,
-        field_mappings: payload.field_mappings,
-        required: payload.required,
-        upload_only: payload.upload_only,
-        multi: payload.multi,
-        display_order: payload.display_order,
-        is_active: payload.is_active,
-      };
-      if (matchIndex >= 0) next[matchIndex] = { ...next[matchIndex], ...row };
-      else next.push(row);
-      return next;
-    });
-
     setEditingDefId(null);
     setDraftDef({});
-    await load(true);
+    await load();
     setLocalConfigOnly(isHandoverConfigLocalOnly());
   };
 
@@ -199,28 +163,65 @@ export default function HandoverConfigPage() {
     else await load();
   };
 
-  const copyMigrationSql = async () => {
-    try {
-      await navigator.clipboard.writeText(pendingMigrationSql);
-      setMigrationCopied(true);
-      window.setTimeout(() => setMigrationCopied(false), 2500);
-    } catch {
-      setError('Clipboard is blocked. Select the SQL in the box below, copy it, then paste it in Supabase.');
+  const selectedTemplateName = useMemo(() => {
+    const tid = draftDef.sc_template_id;
+    if (!tid) return '';
+    const tmpl = templates.find(t => (t.template_id ?? t.id) === tid);
+    return tmpl?.name ?? savedMappings[tid]?.template_name ?? tid;
+  }, [draftDef.sc_template_id, templates, savedMappings]);
+
+  const applyTemplateSelection = (templateId: string | null) => {
+    const global = templateId ? savedMappings[templateId]?.field_mappings : undefined;
+    setDraftDef(current => ({
+      ...current,
+      sc_template_id: templateId,
+      field_mappings: {
+        ...DEFAULT_SC_FIELD_MAPPINGS,
+        ...global,
+      },
+    }));
+  };
+
+  const handleFieldMappingSave = async (result: SafetyCultureFieldMappingResult) => {
+    const tid = draftDef.sc_template_id;
+    if (!tid) return;
+
+    setDraftDef(current => ({
+      ...current,
+      field_mappings: { ...DEFAULT_SC_FIELD_MAPPINGS, ...result.field_mappings },
+    }));
+
+    await supabase.from('sc_template_mappings').upsert({
+      template_id: tid,
+      template_name: selectedTemplateName || null,
+      field_mappings: result.field_mappings,
+      table_column_mappings: result.table_column_mappings,
+    }, { onConflict: 'template_id' });
+
+    const { data: updated } = await supabase
+      .from('sc_template_mappings')
+      .select('*')
+      .eq('template_id', tid)
+      .maybeSingle();
+    if (updated) {
+      setSavedMappings(prev => ({ ...prev, [tid]: updated }));
     }
   };
 
-  const downloadMigrationSql = () => {
-    const blob = new Blob([pendingMigrationSql], { type: 'text/sql' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = localConfigOnly
-      ? 'handover-024-031.sql'
-      : formsMigrationNeeded
-        ? 'handover-025-031.sql'
-        : 'handover-027-031-packs.sql';
-    link.click();
-    URL.revokeObjectURL(url);
+  const mappedFieldCount = (def: HandoverDocumentDefinition) => {
+    const global = def.sc_template_id ? savedMappings[def.sc_template_id]?.field_mappings : undefined;
+    const merged = { ...global, ...def.field_mappings };
+    return Object.values(merged).filter(Boolean).length;
+  };
+
+  const copyMigrationSql = async () => {
+    try {
+      await navigator.clipboard.writeText(migration024Sql);
+      setMigrationCopied(true);
+      window.setTimeout(() => setMigrationCopied(false), 2500);
+    } catch {
+      setError('Could not copy SQL — open supabase/migrations/20260626150000_024_handover_document_config.sql manually.');
+    }
   };
 
   if (loading) {
@@ -236,66 +237,36 @@ export default function HandoverConfigPage() {
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
         <h2 className="font-semibold text-slate-900">Handover document template sets</h2>
         <p className="text-sm text-slate-500 mt-1">
-          Configure which document cards appear for each system document type. Intruder, CCTV and access control use the Pacific fillable PDFs only — not browser forms.
+          Configure which document cards appear for each system document type. Link SafetyCulture templates to each
+          document and configure field linking here. Connect the API on{' '}
+          <Link to="/integrations" className="text-cyan-600 hover:underline">Integrations</Link>.
         </p>
-        <div className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-3 mt-3 space-y-2">
-          <p className="font-semibold">Pacific SDP + IA01 / CC01 / AC01</p>
-          <p>
-            Paste <strong>035</strong>, <strong>036</strong> and <strong>037</strong> in the Supabase SQL editor. This installs the Pacific IA01, CC01 and AC01 PDFs, turns off browser forms, and keeps the SDP as a generated PDF.
+        {!scConnected && (
+          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-3">
+            SafetyCulture is not connected — template lists and field linking require an API token on Integrations.
           </p>
-          <button
-            type="button"
-            onClick={() => {
-              void navigator.clipboard.writeText(`${migration035Sql}\n\n${migration036Sql}\n\n${migration037Sql}`).then(() => {
-                setMigrationCopied(true);
-                window.setTimeout(() => setMigrationCopied(false), 2500);
-              }).catch(() => setError('Clipboard is blocked. Use Download SQL file below.'));
-            }}
-            className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-[#C00000] text-white hover:bg-[#a00000]"
-          >
-            {migrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
-            {migrationCopied ? 'Copied 035–037 — paste in Supabase' : 'Copy 035–037 SQL'}
-          </button>
-        </div>
-        {(localConfigOnly || formsMigrationNeeded) && (
+        )}
+        {localConfigOnly && (
           <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-3 mt-3 space-y-2">
-            <p className="font-semibold">
-              {localConfigOnly
-                ? 'Handover config is saved in this browser only'
-                : 'Handover SQL is not fully applied yet'}
-            </p>
+            <p className="font-semibold">Handover config is saved in this browser only</p>
             <p>
-              {localConfigOnly
-                ? 'Run migrations 024–037 in Supabase so handover templates, return uploads and Pacific PDFs are shared for all users.'
-                : '024 is already in place. Paste Copy 025–037 SQL, then refresh this page.'}
+              Run migration <code className="font-mono text-[11px]">024_handover_document_config</code> in Supabase
+              so template links are shared for all users. After you run it, refresh this page — any config saved here
+              will upload automatically.
             </p>
             <ol className="list-decimal list-inside space-y-1 text-amber-900/90">
               <li>Open <strong>Supabase Dashboard → SQL Editor → New query</strong></li>
-              <li>Copy or download the SQL below and paste it into the editor</li>
+              <li>Click <strong>Copy migration SQL</strong> below and paste into the editor</li>
               <li>Click <strong>Run</strong>, then hard-refresh OANDM</li>
             </ol>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => void copyMigrationSql()}
-                className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 transition-colors"
-              >
-                {migrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
-                {migrationCopied ? 'Copied — paste in Supabase SQL Editor' : (localConfigOnly ? 'Copy 024–037 SQL' : (formsMigrationNeeded ? 'Copy 025–037 SQL' : 'Copy 035–037 SQL'))}
-              </button>
-              <button
-                type="button"
-                onClick={downloadMigrationSql}
-                className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 transition-colors"
-              >
-                Download SQL file
-              </button>
-            </div>
-            <textarea
-              readOnly
-              value={pendingMigrationSql}
-              className="w-full h-40 font-mono text-[10px] bg-white border border-amber-200 rounded-lg p-2 text-slate-700"
-            />
+            <button
+              type="button"
+              onClick={() => void copyMigrationSql()}
+              className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 transition-colors"
+            >
+              {migrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
+              {migrationCopied ? 'Copied — paste in Supabase SQL Editor' : 'Copy migration SQL'}
+            </button>
           </div>
         )}
       </div>
@@ -311,12 +282,7 @@ export default function HandoverConfigPage() {
             <button
               key={type.key}
               type="button"
-              onClick={() => {
-                setSelectedTypeKey(type.key);
-                setEditingDefId(null);
-                setDraftDef({});
-                setError(null);
-              }}
+              onClick={() => setSelectedTypeKey(type.key)}
               className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
                 selectedTypeKey === type.key ? 'bg-cyan-600 text-white' : 'text-slate-700 hover:bg-slate-100'
               }`}
@@ -347,13 +313,8 @@ export default function HandoverConfigPage() {
           </div>
 
           <div className="space-y-3">
-            {typeDefinitions.length === 0 && (
-              <p className="text-sm text-slate-500 bg-white border border-dashed border-slate-300 rounded-xl px-4 py-8 text-center">
-                No documents in this type yet. Add a certificate, training record or upload.
-              </p>
-            )}
             {typeDefinitions.map(def => (
-              <div key={def.document_id} className={`bg-white rounded-xl border shadow-sm overflow-hidden ${def.is_active ? 'border-slate-200' : 'border-slate-100 opacity-70'}`}>
+              <div key={def.id} className={`bg-white rounded-xl border shadow-sm overflow-hidden ${def.is_active ? 'border-slate-200' : 'border-slate-100 opacity-70'}`}>
                 <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-slate-100 bg-slate-50">
                   <div>
                     <p className="text-sm font-semibold text-slate-800">{def.title}</p>
@@ -362,6 +323,7 @@ export default function HandoverConfigPage() {
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     {def.required && <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">Required</span>}
+                    {def.sc_enabled && <span className="text-[10px] font-semibold uppercase tracking-wide text-cyan-700 bg-cyan-50 px-2 py-0.5 rounded-full">SC</span>}
                     {def.upload_only && <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">Upload</span>}
                     <button type="button" onClick={() => beginEditDefinition(def)} className="text-xs text-cyan-700 hover:underline">Edit</button>
                     <button type="button" onClick={() => void removeDefinition(def)} className="p-1 text-slate-400 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
@@ -369,6 +331,18 @@ export default function HandoverConfigPage() {
                 </div>
                 <div className="px-4 py-2 text-xs text-slate-500 flex flex-wrap gap-3">
                   <span>Order: {def.display_order}</span>
+                  {def.sc_template_id && (
+                    <span>
+                      Template: {savedMappings[def.sc_template_id]?.template_name ?? def.sc_template_id}
+                    </span>
+                  )}
+                  {def.sc_enabled && def.sc_template_id && (
+                    <span className={mappedFieldCount(def) > 0 ? 'text-emerald-600' : 'text-amber-600'}>
+                      {mappedFieldCount(def) > 0
+                        ? `${mappedFieldCount(def)} field${mappedFieldCount(def) !== 1 ? 's' : ''} linked`
+                        : 'No field linking'}
+                    </span>
+                  )}
                 </div>
               </div>
             ))}
@@ -390,16 +364,10 @@ export default function HandoverConfigPage() {
                   <label className="text-xs font-medium text-slate-700 mb-1 block">Document ID</label>
                   <input
                     value={draftDef.document_id ?? ''}
-                    onChange={e => {
-                      setDocumentIdTouched(true);
-                      setDraftDef(current => ({ ...current, document_id: e.target.value }));
-                    }}
+                    onChange={e => setDraftDef(current => ({ ...current, document_id: e.target.value }))}
                     disabled={editingDefId !== 'new'}
                     className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 font-mono disabled:bg-slate-50"
                   />
-                  {editingDefId === 'new' && (
-                    <p className="text-[11px] text-slate-500 mt-1">Generated from the title. Change it only if you need a specific ID.</p>
-                  )}
                 </div>
                 <div>
                   <label className="text-xs font-medium text-slate-700 mb-1 block">Display order</label>
@@ -415,16 +383,7 @@ export default function HandoverConfigPage() {
                 <label className="text-xs font-medium text-slate-700 mb-1 block">Title</label>
                 <input
                   value={draftDef.title ?? ''}
-                  onChange={e => {
-                    const title = e.target.value;
-                    setDraftDef(current => ({
-                      ...current,
-                      title,
-                      document_id: editingDefId === 'new' && !documentIdTouched
-                        ? uniqueHandoverDocumentId(selectedTypeKey, title || 'document', definitions.map(def => def.document_id))
-                        : current.document_id,
-                    }));
-                  }}
+                  onChange={e => setDraftDef(current => ({ ...current, title: e.target.value }))}
                   className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2"
                 />
               </div>
@@ -436,9 +395,13 @@ export default function HandoverConfigPage() {
                   className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2"
                 />
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input type="checkbox" checked={draftDef.upload_only ?? false} onChange={e => setDraftDef(current => ({ ...current, upload_only: e.target.checked, sc_enabled: false }))} />
+                  <input type="checkbox" checked={draftDef.sc_enabled ?? false} onChange={e => setDraftDef(current => ({ ...current, sc_enabled: e.target.checked }))} />
+                  SafetyCulture enabled
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input type="checkbox" checked={draftDef.upload_only ?? false} onChange={e => setDraftDef(current => ({ ...current, upload_only: e.target.checked, sc_enabled: e.target.checked ? false : current.sc_enabled }))} />
                   Upload only
                 </label>
                 <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -446,6 +409,48 @@ export default function HandoverConfigPage() {
                   Required
                 </label>
               </div>
+                  {draftDef.sc_enabled && (
+                <div className="space-y-3">
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 text-xs text-slate-600">
+                    <p>
+                      <strong>Inspection name</strong> is set automatically as{' '}
+                      <span className="font-mono text-slate-700">Project name - Document title</span> when you click
+                      Create from SafetyCulture. Use <strong>Configure field linking</strong> to map project/site fields;
+                      Audit Title is at the top of that list (optional for custom templates).
+                    </p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-slate-700 mb-1 block">SafetyCulture template</label>
+                    <select
+                      value={draftDef.sc_template_id ?? ''}
+                      onChange={e => applyTemplateSelection(e.target.value || null)}
+                      disabled={!scConnected}
+                      className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 disabled:bg-slate-50 disabled:text-slate-400"
+                    >
+                      <option value="">Choose template…</option>
+                      {templates.map(t => {
+                        const tid = t.template_id ?? t.id;
+                        return <option key={tid} value={tid}>{t.name}</option>;
+                      })}
+                    </select>
+                  </div>
+                  {draftDef.sc_template_id && scConnected && (
+                    <button
+                      type="button"
+                      onClick={() => setFieldMappingOpen(true)}
+                      className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border border-cyan-200 text-cyan-700 bg-cyan-50 hover:bg-cyan-100 transition-colors"
+                    >
+                      <Settings className="w-3.5 h-3.5" />
+                      Configure field linking
+                      {Object.values(draftDef.field_mappings ?? {}).filter(Boolean).length > 0 && (
+                        <span className="text-emerald-600">
+                          ({Object.values(draftDef.field_mappings ?? {}).filter(Boolean).length} linked)
+                        </span>
+                      )}
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
             <div className="flex gap-3 px-6 py-4 border-t border-slate-200 bg-slate-50">
               <button type="button" onClick={() => { setEditingDefId(null); setDraftDef({}); }} className="flex-1 px-4 py-2.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-100">Cancel</button>
@@ -456,6 +461,21 @@ export default function HandoverConfigPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {fieldMappingOpen && draftDef.sc_template_id && (
+        <SafetyCultureFieldMappingModal
+          templateId={draftDef.sc_template_id}
+          templateName={selectedTemplateName}
+          initialFieldMappings={{
+            ...DEFAULT_SC_FIELD_MAPPINGS,
+            ...savedMappings[draftDef.sc_template_id]?.field_mappings,
+            ...draftDef.field_mappings,
+          }}
+          initialTableMappings={savedMappings[draftDef.sc_template_id]?.table_column_mappings ?? {}}
+          onSave={handleFieldMappingSave}
+          onClose={() => setFieldMappingOpen(false)}
+        />
       )}
 
       <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs text-slate-500">
