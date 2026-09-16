@@ -12,6 +12,7 @@ interface Candidate {
   domain: string;
   verified: boolean;
   score: number;
+  source?: string;
 }
 
 async function verify(url: string): Promise<boolean> {
@@ -57,14 +58,21 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const [aiHits, adiHits] = await Promise.all([
-      findWithClaude(manufacturer, model),
-      searchAdiDatasheets(manufacturer, model),
-    ]);
-    const discovered: Array<{ url: string; title: string; domain: string; score: number | null }> = [...adiHits];
+    const adiHits = await searchAdiDatasheets(manufacturer, model);
+    const adiChecked = await verifyCandidates(adiHits, manufacturer, model);
+    const adiVerified = adiChecked.filter((c) => c.verified && isAdiDatasheetUrl(c.url));
+    if (adiVerified.length > 0) {
+      adiVerified.sort((a, b) => (b.score - a.score) || (b.verified ? 1 : 0) - (a.verified ? 1 : 0));
+      return new Response(JSON.stringify({ candidates: adiVerified, source: "adi" }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const aiHits = await findWithClaude(manufacturer, model);
+    const discovered: Array<{ url: string; title: string; domain: string; score: number | null; source?: string }> = [...adiHits];
 
     for (const hit of aiHits) {
-      if (/\.pdf(\?|#|$)/i.test(hit.url)) discovered.push(hit);
+      if (/\.pdf(\?|#|$)/i.test(hit.url)) discovered.push({ ...hit, source: "ai" });
     }
 
     const pagesToScrape = [
@@ -81,6 +89,7 @@ Deno.serve(async (req: Request) => {
           title: `${manufacturer} ${model} datasheet`,
           domain: safeDomain(url),
           score: /datasheet|data-sheet/i.test(url) ? 94 : 80,
+          source: /adiglobaldistribution/i.test(url) ? "adi" : "web",
         });
       }
     }
@@ -91,32 +100,19 @@ Deno.serve(async (req: Request) => {
     }
 
     const webHits = await webSearchPdfs(manufacturer, model);
-    discovered.push(...webHits.map((hit) => ({ ...hit, score: null })));
+    discovered.push(...webHits.map((hit) => ({ ...hit, score: null as number | null, source: "web" })));
     for (const hit of webHits) {
       if (adiProductSegment(hit.url)) {
         discovered.push(...await adiDocumentsFromProductUrl(hit.url, model));
       }
     }
 
-  const uniqueSeeds = uniqueByUrl(discovered);
-  const checked: Candidate[] = await Promise.all(
-    uniqueSeeds.slice(0, 16).map(async (c) => {
-      const verifiedPdf = await verify(c.url);
-      return {
-        url: c.url,
-        title: c.title || c.url,
-        domain: c.domain || safeDomain(c.url),
-        verified: verifiedPdf,
-        score: hitScore(c, manufacturer, model, verifiedPdf, c.score),
-      };
-    }),
-  );
+    const uniqueSeeds = uniqueByUrl(discovered);
+    const checked = await verifyCandidates(uniqueSeeds, manufacturer, model);
+    checked.sort((a, b) => (b.score - a.score) || (b.verified ? 1 : 0) - (a.verified ? 1 : 0));
+    const verifiedOnly = checked.filter((c) => c.verified);
 
-  const unique = uniqueByUrl(checked);
-  unique.sort((a, b) => (b.score - a.score) || (b.verified ? 1 : 0) - (a.verified ? 1 : 0));
-  const verifiedOnly = unique.filter((c) => c.verified);
-
-    return new Response(JSON.stringify({ candidates: verifiedOnly.length > 0 ? verifiedOnly : unique.slice(0, 6) }), {
+    return new Response(JSON.stringify({ candidates: verifiedOnly.length > 0 ? verifiedOnly : checked.slice(0, 6) }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error: any) {
@@ -205,6 +201,27 @@ function uniqueByUrl<T extends { url: string }>(items: T[]): T[] {
     seen.add(key);
     return true;
   });
+}
+
+async function verifyCandidates(
+  seeds: Array<{ url: string; title: string; domain: string; score: number | null; source?: string }>,
+  manufacturer: string,
+  model: string,
+): Promise<Candidate[]> {
+  const checked = await Promise.all(
+    uniqueByUrl(seeds).slice(0, 16).map(async (c) => {
+      const verifiedPdf = await verify(c.url);
+      return {
+        url: c.url,
+        title: c.title || c.url,
+        domain: c.domain || safeDomain(c.url),
+        verified: verifiedPdf,
+        score: hitScore(c, manufacturer, model, verifiedPdf, c.score),
+        source: c.source,
+      };
+    }),
+  );
+  return uniqueByUrl(checked);
 }
 
 function modelSlug(model: string): string {
@@ -351,7 +368,7 @@ const BROWSER_HEADERS = {
   Accept: "application/json,text/html;q=0.9,*/*;q=0.8",
 };
 
-type AdiHit = { url: string; title: string; domain: string; score: number | null };
+type AdiHit = { url: string; title: string; domain: string; score: number | null; source?: string };
 
 async function searchAdiDatasheets(manufacturer: string, model: string): Promise<AdiHit[]> {
   const hits: AdiHit[] = [];
@@ -426,6 +443,7 @@ async function adiDocumentsForProduct(origin: string, product: AdiProduct, model
         title: `${product.name || model} — ${doc?.name || "Datasheet"}`,
         domain: safeDomain(url) || safeDomain(origin),
         score: isAdiDatasheetDoc(doc, url) ? 93 : 82,
+        source: "adi",
       });
     }
     return hits;

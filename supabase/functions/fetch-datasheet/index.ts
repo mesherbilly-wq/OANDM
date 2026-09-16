@@ -260,8 +260,11 @@ Deno.serve(async (req: Request) => {
     const safeMfr = manufacturerName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     const safeMdl = modelNumber.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-|-$/g, "");
     const hitScore = Number(score);
+    const fromAdi = source === "adi";
     const fromAi = source === "ai" && Number.isFinite(hitScore);
-    const fileName = fromAi
+    const fileName = fromAdi
+      ? `adi-placed-${Number.isFinite(hitScore) ? Math.round(hitScore) : 93}_${safeMfr || "manufacturer"}_${safeMdl || "model"}_datasheet.pdf`
+      : fromAi
       ? `ai-placed-${Math.round(hitScore)}_${safeMfr || "manufacturer"}_${safeMdl || "model"}_datasheet.pdf`
       : `${safeMfr || "manufacturer"}_${safeMdl || "model"}_datasheet.pdf`;
     const storagePath = `${safeMfr || "manufacturer"}/${safeMdl || "model"}/${Date.now()}_${fileName}`;

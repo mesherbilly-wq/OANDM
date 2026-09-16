@@ -74,6 +74,7 @@ export function ProjectDatasheetsPage() {
   const [updatingRowKey, setUpdatingRowKey] = useState<string | null>(null);
   const [aiByRow, setAiByRow] = useState<Record<string, AiLookupState>>({});
   const [findingAll, setFindingAll] = useState(false);
+  const [findingProgress, setFindingProgress] = useState<{ current: number; total: number } | null>(null);
 
   useEffect(() => {
     if (projectId) {
@@ -209,7 +210,10 @@ export function ProjectDatasheetsPage() {
     const key = row.match.rowKey;
     setAiByRow(prev => ({ ...prev, [key]: { ...prev[key], status: 'attaching', candidates: prev[key]?.candidates } }));
     try {
-      await saveDatasheetFromUrl(candidate.url, row.manufacturer, row.model_number);
+      await saveDatasheetFromUrl(candidate.url, row.manufacturer, row.model_number, {
+        source: /adiglobaldistribution|product-data-sheet/i.test(`${candidate.domain} ${candidate.url}`) || candidate.source === 'adi' ? 'adi' : 'ai',
+        score: candidate.score,
+      });
       await markDevicesDatasheetFound(row.manufacturer, row.model_number);
       await refreshDatasheets();
       setAiByRow(prev => ({ ...prev, [key]: { status: 'idle' } }));
@@ -226,14 +230,17 @@ export function ProjectDatasheetsPage() {
     }
   };
 
-  const findMissingWithAi = async () => {
+  const findMissingDatasheets = async () => {
     const missingRows = rows.filter(row => !row.match.datasheet && row.match.status !== 'needs_review');
     if (missingRows.length === 0) return;
     setFindingAll(true);
-    for (const row of missingRows) {
-      await runAiLookup(row);
+    setFindingProgress({ current: 0, total: missingRows.length });
+    for (let i = 0; i < missingRows.length; i++) {
+      setFindingProgress({ current: i + 1, total: missingRows.length });
+      await runAiLookup(missingRows[i]);
     }
     setFindingAll(false);
+    setFindingProgress(null);
   };
 
   const found = rows.filter(row => row.match.datasheet).length;
@@ -250,19 +257,21 @@ export function ProjectDatasheetsPage() {
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Datasheets</h2>
             <p className="text-sm text-slate-500">
-              Use the library first. If a datasheet is missing, find it with AI. Hits of {AI_AUTO_PLACE_SCORE}% or more are saved to the library automatically. If that fails, search the web or upload a PDF.
+              Library first, then ADI, then AI. Hits of {AI_AUTO_PLACE_SCORE}% or more are saved automatically. If that fails, search the web or upload a PDF.
             </p>
           </div>
         </div>
         {missing > 0 && (
           <button
             type="button"
-            onClick={() => void findMissingWithAi()}
+            onClick={() => void findMissingDatasheets()}
             disabled={findingAll}
             className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium bg-cyan-600 text-white rounded-xl hover:bg-cyan-700 disabled:opacity-50 flex-shrink-0"
           >
-            {findingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-            {findingAll ? 'Finding…' : `Find ${missing} missing with AI`}
+            {findingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+            {findingAll && findingProgress
+              ? `Finding ${findingProgress.current} of ${findingProgress.total}…`
+              : `Find ${missing} missing datasheets`}
           </button>
         )}
       </div>
@@ -315,7 +324,7 @@ export function ProjectDatasheetsPage() {
                 const isExpanded = expandedRowKey === match.rowKey;
                 const isUpdating = updatingRowKey === match.rowKey;
                 const aiLookup = aiByRow[match.rowKey];
-                const aiPlacement = match.datasheet ? aiPlacementFromDatasheet(match.datasheet) : { placed: false, score: null };
+                const placement = match.datasheet ? aiPlacementFromDatasheet(match.datasheet) : { placed: false, source: null as 'adi' | 'ai' | null, score: null };
 
                 return (
                   <React.Fragment key={match.rowKey}>
@@ -329,10 +338,14 @@ export function ProjectDatasheetsPage() {
                       </td>
                       <td className="px-5 py-3.5">
                         {match.status === 'matched' && match.datasheet ? (
-                          aiPlacement.placed ? (
-                            <span className="inline-flex items-center gap-1 text-xs font-medium text-cyan-800 bg-cyan-100 px-2 py-1 rounded">
-                              <Sparkles className="w-3 h-3" />
-                              AI placed it{aiPlacement.score != null ? ` · ${aiPlacement.score}%` : ''}
+                          placement.placed ? (
+                            <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded ${
+                              placement.source === 'adi' ? 'text-slate-800 bg-slate-200' : 'text-cyan-800 bg-cyan-100'
+                            }`}>
+                              {placement.source === 'adi' ? <Search className="w-3 h-3" /> : <Sparkles className="w-3 h-3" />}
+                              {placement.source === 'adi'
+                                ? `ADI${placement.score != null ? ` · ${placement.score}%` : ''}`
+                                : `AI placed it${placement.score != null ? ` · ${placement.score}%` : ''}`}
                             </span>
                           ) : (
                             <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-100 px-2 py-1 rounded">
@@ -356,7 +369,7 @@ export function ProjectDatasheetsPage() {
                             className="inline-flex items-center gap-1 text-xs font-medium text-cyan-700 bg-cyan-100 px-2 py-1 rounded hover:bg-cyan-200 transition-colors"
                           >
                             <Sparkles className="w-3 h-3" />
-                            {aiLookup.candidates?.length ?? 0} AI result{(aiLookup.candidates?.length ?? 0) !== 1 ? 's' : ''}
+                            {aiLookup.candidates?.length ?? 0} result{(aiLookup.candidates?.length ?? 0) !== 1 ? 's' : ''}
                           </button>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 bg-slate-100 px-2 py-1 rounded">
@@ -372,9 +385,11 @@ export function ProjectDatasheetsPage() {
                               <CheckCircle className="w-3 h-3" />
                               Available
                             </span>
-                            {aiPlacement.placed ? (
-                              <p className="text-cyan-700 mt-0.5">
-                                AI placed it{aiPlacement.score != null ? ` · ${aiPlacement.score}% hit` : ''}
+                            {placement.placed ? (
+                              <p className={placement.source === 'adi' ? 'text-slate-600 mt-0.5' : 'text-cyan-700 mt-0.5'}>
+                                {placement.source === 'adi'
+                                  ? `From ADI${placement.score != null ? ` · ${placement.score}% hit` : ''}`
+                                  : `AI placed it${placement.score != null ? ` · ${placement.score}% hit` : ''}`}
                               </p>
                             ) : match.confidence != null && match.method !== 'exact_device' ? (
                               <p className="text-slate-400 mt-0.5">
@@ -417,7 +432,7 @@ export function ProjectDatasheetsPage() {
                                 ) : (
                                   <Sparkles className="w-3.5 h-3.5" />
                                 )}
-                                {aiLookup?.status === 'attaching' ? 'Saving…' : aiLookup?.status === 'searching' ? 'Finding…' : 'Find with AI'}
+                                {aiLookup?.status === 'attaching' ? 'Saving…' : aiLookup?.status === 'searching' ? 'Finding…' : 'Find datasheet'}
                               </button>
                               {(aiLookup?.status === 'failed' || aiLookup?.status === 'candidates') && (
                                 <>
@@ -465,7 +480,7 @@ export function ProjectDatasheetsPage() {
                         </div>
                         {aiLookup?.status === 'failed' && (
                           <p className="text-xs text-amber-700 mt-1.5">
-                            {aiLookup.error ?? 'AI did not find a datasheet. Search the web or upload a PDF.'}
+                            {aiLookup.error ?? 'No datasheet found. Search ADI / the web or upload a PDF.'}
                           </p>
                         )}
                       </td>
@@ -533,7 +548,7 @@ export function ProjectDatasheetsPage() {
                           <div className="space-y-3">
                             <p className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
                               <Sparkles className="w-4 h-4 text-cyan-600" />
-                              AI found possible datasheets — {AI_AUTO_PLACE_SCORE}%+ verified PDFs are saved automatically
+                              Found possible datasheets — {AI_AUTO_PLACE_SCORE}%+ verified PDFs are saved automatically
                             </p>
                             {aiLookup.error && <p className="text-xs text-red-600">{aiLookup.error}</p>}
                             <div className="grid gap-2">

@@ -32,25 +32,31 @@ export interface DatasheetCandidate {
   domain: string;
   verified: boolean;
   score?: number;
+  source?: string;
 }
 
 export const AI_AUTO_PLACE_SCORE = 90;
 
 export function aiPlacementFromDatasheet(
   datasheet: Pick<Datasheet, 'file_name'> & { source?: string | null; ai_confidence?: number | null },
-): { placed: boolean; score: number | null } {
+): { placed: boolean; source: 'adi' | 'ai' | null; score: number | null } {
+  const adiScore = parsePlacedScore(datasheet.file_name, 'adi-placed');
+  if (datasheet.source === 'adi' || adiScore != null) {
+    return { placed: true, source: 'adi', score: adiScore ?? datasheet.ai_confidence ?? null };
+  }
   if (datasheet.source === 'ai') {
     return {
       placed: true,
-      score: datasheet.ai_confidence ?? parseAiPlacedScore(datasheet.file_name),
+      source: 'ai',
+      score: datasheet.ai_confidence ?? parsePlacedScore(datasheet.file_name, 'ai-placed'),
     };
   }
-  const score = parseAiPlacedScore(datasheet.file_name);
-  return { placed: score != null, score };
+  const aiScore = parsePlacedScore(datasheet.file_name, 'ai-placed');
+  return { placed: aiScore != null, source: aiScore != null ? 'ai' : null, score: aiScore };
 }
 
-function parseAiPlacedScore(fileName: string | null | undefined): number | null {
-  const match = /(?:^|\/)ai-placed-(\d+)[_-]/i.exec(fileName ?? '');
+function parsePlacedScore(fileName: string | null | undefined, prefix: 'ai-placed' | 'adi-placed'): number | null {
+  const match = new RegExp(`(?:^|/)${prefix}-(\\d+)[_-]`, 'i').exec(fileName ?? '');
   if (!match) return null;
   const score = Number(match[1]);
   return Number.isFinite(score) ? score : null;
@@ -80,7 +86,7 @@ export async function saveDatasheetFromUrl(
   url: string,
   manufacturer: string,
   model: string,
-  options?: { source?: 'ai' | 'upload'; score?: number },
+  options?: { source?: 'ai' | 'adi' | 'upload'; score?: number },
 ): Promise<Datasheet> {
   const { data, error } = await supabase.functions.invoke('fetch-datasheet', {
     body: {
@@ -100,23 +106,32 @@ export async function saveDatasheetFromUrl(
 export async function findAndSaveDatasheet(
   manufacturer: string,
   model: string,
-): Promise<{ datasheet: Datasheet | null; candidates: DatasheetCandidate[]; placedScore: number | null }> {
+): Promise<{ datasheet: Datasheet | null; candidates: DatasheetCandidate[]; placedScore: number | null; placedSource: 'adi' | 'ai' | null }> {
   const candidates = await searchDatasheetCandidates(manufacturer, model);
   const autoPlace = [...candidates]
     .filter(candidate => candidate.verified && (candidate.score ?? 0) >= AI_AUTO_PLACE_SCORE)
-    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    .sort((a, b) => {
+      const aAdi = candidateIsAdi(a) ? 1 : 0;
+      const bAdi = candidateIsAdi(b) ? 1 : 0;
+      return (bAdi - aAdi) || ((b.score ?? 0) - (a.score ?? 0));
+    });
 
   for (const candidate of autoPlace) {
+    const source = candidateIsAdi(candidate) ? 'adi' : 'ai';
     try {
       const datasheet = await saveDatasheetFromUrl(candidate.url, manufacturer, model, {
-        source: 'ai',
+        source,
         score: candidate.score,
       });
-      return { datasheet, candidates, placedScore: candidate.score ?? AI_AUTO_PLACE_SCORE };
+      return { datasheet, candidates, placedScore: candidate.score ?? AI_AUTO_PLACE_SCORE, placedSource: source };
     } catch {
       // Try the next high-score PDF.
     }
   }
 
-  return { datasheet: null, candidates, placedScore: null };
+  return { datasheet: null, candidates, placedScore: null, placedSource: null };
+}
+
+function candidateIsAdi(candidate: DatasheetCandidate): boolean {
+  return candidate.source === 'adi' || /adiglobaldistribution/i.test(candidate.domain) || /adiglobaldistribution|product-data-sheet/i.test(candidate.url);
 }

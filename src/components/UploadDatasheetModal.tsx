@@ -2,7 +2,7 @@ import React, { useRef, useState } from 'react';
 import { X, Upload, CheckCircle, AlertCircle, FileText, Info, Search, Link, ExternalLink, Loader2, Download, ShieldCheck } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Datasheet } from '../types';
-import { AI_AUTO_PLACE_SCORE, adiDatasheetSearchUrl, googleDatasheetSearchUrl, saveDatasheetFromUrl, searchDatasheetCandidates, type DatasheetCandidate } from '../lib/datasheetLookup';
+import { adiDatasheetSearchUrl, findAndSaveDatasheet, googleDatasheetSearchUrl, saveDatasheetFromUrl, type DatasheetCandidate } from '../lib/datasheetLookup';
 
 type Mode = 'search' | 'upload' | 'link';
 
@@ -48,19 +48,12 @@ export function UploadDatasheetModal({ manufacturer, modelNumber, initialMode = 
     setAttachError(null);
 
     try {
-      const found = await searchDatasheetCandidates(mfr, model);
-      const autoPlace = [...found]
-        .filter(candidate => candidate.verified && (candidate.score ?? 0) >= AI_AUTO_PLACE_SCORE)
-        .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-      if (autoPlace[0]) {
-        const datasheet = await saveDatasheetFromUrl(autoPlace[0].url, mfr, model, {
-          source: 'ai',
-          score: autoPlace[0].score,
-        });
+      const { datasheet, candidates } = await findAndSaveDatasheet(mfr, model);
+      if (datasheet) {
         onUploaded(datasheet);
         return;
       }
-      setCandidates(found);
+      setCandidates(candidates);
     } catch (e: any) {
       setSearchError(e.message ?? 'Search failed — try uploading a PDF or pasting a URL instead');
     } finally {
