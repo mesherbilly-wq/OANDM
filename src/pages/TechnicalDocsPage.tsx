@@ -56,6 +56,85 @@ interface TextItem {
   width: number;
 }
 
+function filledCount(row: string[]): number {
+  return row.filter(cell => cell.trim()).length;
+}
+
+function looksLikeDataValue(text: string): boolean {
+  const value = text.trim();
+  if (!value) return false;
+  if (/^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?$/.test(value)) return true;
+  if (/^([0-9a-f]{2}[:\-]){5}[0-9a-f]{2}$/i.test(value)) return true;
+  if (/^https?:\/\//i.test(value)) return true;
+  if (/^[\w.+-]+@[\w.-]+\.[a-z]{2,}$/i.test(value)) return true;
+  if (/^\d+([.,]\d+)?$/.test(value)) return true;
+  return false;
+}
+
+function looksLikeHeaderRow(row: string[]): boolean {
+  const filled = row.map(cell => cell.trim()).filter(Boolean);
+  if (filled.length < 2) return false;
+  const dataLike = filled.filter(looksLikeDataValue).length;
+  if (dataLike >= Math.ceil(filled.length / 2)) return false;
+  const long = filled.filter(cell => cell.length > 60).length;
+  return long < filled.length / 2;
+}
+
+function uniquifyHeaders(headers: string[]): string[] {
+  const seen = new Map<string, number>();
+  return headers.map((header, index) => {
+    const base = header.trim() || `Column ${index + 1}`;
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    return count === 0 ? base : `${base} ${count + 1}`;
+  });
+}
+
+function findHeaderRowIndex(grid: string[][]): number {
+  let best = -1;
+  let bestScore = -1;
+  const searchLimit = Math.min(grid.length - 1, 40);
+  for (let i = 0; i <= searchLimit; i++) {
+    if (!looksLikeHeaderRow(grid[i])) continue;
+    let following = 0;
+    for (let j = i + 1; j < Math.min(grid.length, i + 8); j++) {
+      if (filledCount(grid[j]) >= 2) following++;
+    }
+    const score = filledCount(grid[i]) * 2 + following * 3 - i;
+    if (score > bestScore) {
+      bestScore = score;
+      best = i;
+    }
+  }
+  if (best >= 0) return best;
+  return grid.findIndex(row => filledCount(row) >= 2);
+}
+
+/** Use only the detected table: skip titles/notes, take headers from the table row even if it is not row 1. */
+function extractTableFromGrid(raw: unknown[][]): { headers: string[]; rows: Record<string, string>[] } {
+  const grid = raw.map(row => (Array.isArray(row) ? row : [row]).map(cell => String(cell ?? '').trim()));
+  const headerIdx = findHeaderRowIndex(grid);
+  if (headerIdx < 0) return { headers: [], rows: [] };
+
+  const headerRaw = grid[headerIdx];
+  let width = headerRaw.length;
+  while (width > 0 && !headerRaw[width - 1]) width--;
+  if (width < 2) return { headers: [], rows: [] };
+
+  const headers = uniquifyHeaders(headerRaw.slice(0, width));
+  const rows: Record<string, string>[] = [];
+  for (let i = headerIdx + 1; i < grid.length; i++) {
+    const cells = headers.map((_, col) => grid[i][col] ?? '');
+    if (cells.every(cell => !cell.trim())) continue;
+    const filled = cells.filter(cell => cell.trim());
+    if (filled.length === 1 && filled[0].length > 80) continue;
+    const row: Record<string, string> = {};
+    for (let col = 0; col < headers.length; col++) row[headers[col]] = cells[col];
+    rows.push(row);
+  }
+  return { headers, rows };
+}
+
 function clusterXPositions(xValues: number[], tolerance: number): number[] {
   const sorted = [...xValues].sort((a, b) => a - b);
   const centers: number[] = [];
@@ -96,33 +175,9 @@ function buildTableFromBlock(block: TextItem[][], pageWidth: number): { headers:
     return cells;
   });
 
-  // First row as headers; skip if it looks empty
-  const headerRow = grid[0];
-  const nonEmptyHeaders = headerRow.filter(h => h.trim());
-  if (nonEmptyHeaders.length < 2) return null;
-
-  // Ensure headers are unique
-  const headers = headerRow.map((h, i) => h.trim() || `Column ${i + 1}`);
-  const seen = new Map<string, number>();
-  const uniqueHeaders = headers.map(h => {
-    const count = seen.get(h) ?? 0;
-    seen.set(h, count + 1);
-    return count === 0 ? h : `${h} ${count + 1}`;
-  });
-
-  const rows: Record<string, string>[] = [];
-  for (let i = 1; i < grid.length; i++) {
-    const row: Record<string, string> = {};
-    for (let j = 0; j < uniqueHeaders.length; j++) {
-      row[uniqueHeaders[j]] = grid[i][j] ?? '';
-    }
-    // Skip entirely blank rows
-    if (Object.values(row).every(v => !v.trim())) continue;
-    rows.push(row);
-  }
-
-  if (rows.length === 0) return null;
-  return { headers: uniqueHeaders, rows };
+  const table = extractTableFromGrid(grid);
+  if (table.headers.length < 2 || table.rows.length === 0) return null;
+  return table;
 }
 
 async function extractTablesFromPDF(file: File): Promise<ExtractedTable[]> {
@@ -219,16 +274,13 @@ async function parseNonPdfFile(file: File): Promise<{ headers: string[]; rows: R
   if (name.endsWith('.csv') || name.endsWith('.txt')) {
     return new Promise((resolve, reject) => {
       Papa.parse(file, {
-        header: true,
-        skipEmptyLines: true,
+        header: false,
+        skipEmptyLines: false,
         complete: (result) => {
-          const headers = result.meta.fields ?? [];
-          const rows = (result.data as Record<string, string>[]).map(r => {
-            const clean: Record<string, string> = {};
-            for (const h of headers) clean[h] = String(r[h] ?? '');
-            return clean;
-          });
-          resolve({ headers, rows });
+          const grid = (result.data as unknown[][]).map(row =>
+            (Array.isArray(row) ? row : [row]).map(cell => String(cell ?? '')),
+          );
+          resolve(extractTableFromGrid(grid));
         },
         error: reject,
       });
@@ -239,18 +291,8 @@ async function parseNonPdfFile(file: File): Promise<{ headers: string[]; rows: R
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(buf, { type: 'array' });
     const ws = wb.Sheets[wb.SheetNames[0]];
-    const data = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: false }) as unknown[][];
-    if (data.length === 0) return { headers: [], rows: [] };
-    const headers = (data[0] as unknown[]).map(h => String(h ?? '')).filter(Boolean);
-    const rows: Record<string, string>[] = [];
-    for (let i = 1; i < data.length; i++) {
-      const raw = data[i] as unknown[];
-      if (!raw || raw.every(c => !c)) continue;
-      const row: Record<string, string> = {};
-      for (let j = 0; j < headers.length; j++) row[headers[j]] = String(raw[j] ?? '');
-      rows.push(row);
-    }
-    return { headers, rows };
+    const data = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: false, defval: '' }) as unknown[][];
+    return extractTableFromGrid(data);
   }
 
   throw new Error('Unsupported file type. Please use CSV, TXT, Excel, or PDF files.');

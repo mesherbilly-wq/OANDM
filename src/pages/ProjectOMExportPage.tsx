@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { groupDevices } from '../lib/deviceGrouping';
@@ -59,16 +59,27 @@ interface AsBuiltDrawing {
 // Renders all pages of a PDF URL into base64 image data URLs using pdfjs-dist.
 // Returns an array of data URL strings (one per page), or null on error.
 
+type PdfRenderState = { pages: string[]; loading: boolean; failed: boolean };
+
 async function renderPdfToImages(url: string): Promise<string[] | null> {
   try {
     const pdfjsLib = await import('pdfjs-dist');
-    // Use a stable CDN-independent worker path via import.meta.url
     pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
       'pdfjs-dist/build/pdf.worker.min.mjs',
       import.meta.url,
     ).href;
 
-    const pdf = await pdfjsLib.getDocument({ url, withCredentials: false }).promise;
+    let data: ArrayBuffer | null = null;
+    try {
+      const res = await fetch(url);
+      if (res.ok) data = await res.arrayBuffer();
+    } catch {
+      data = null;
+    }
+
+    const pdf = data
+      ? await pdfjsLib.getDocument({ data }).promise
+      : await pdfjsLib.getDocument({ url, withCredentials: false }).promise;
     const pages: string[] = [];
     for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
       const page = await pdf.getPage(pageNum);
@@ -78,13 +89,28 @@ async function renderPdfToImages(url: string): Promise<string[] | null> {
       canvas.height = viewport.height;
       const ctx = canvas.getContext('2d');
       if (!ctx) continue;
-      await page.render({ canvasContext: ctx, viewport }).promise;
+      await (page.render as (params: Record<string, unknown>) => { promise: Promise<void> })({
+        canvas,
+        canvasContext: ctx,
+        viewport,
+      }).promise;
       pages.push(canvas.toDataURL('image/jpeg', 0.92));
     }
     return pages;
   } catch {
     return null;
   }
+}
+
+interface OtherHandoverDoc {
+  id: number;
+  title: string;
+  description: string | null;
+  system_type: string | null;
+  project_system_id: number | null;
+  file_name: string | null;
+  file_url: string | null;
+  link_url: string | null;
 }
 
 interface DeviceWithDatasheet extends Device {
@@ -213,7 +239,8 @@ export function ProjectOMExportPage() {
   const [handoverDocs, setHandoverDocs] = useState<HandoverDocument[]>([]);
   const [omUploads, setOmUploads] = useState<OmUpload[]>([]);
   const [asFittedDrawings, setAsFittedDrawings] = useState<AsBuiltDrawing[]>([]);
-  const [scHandoverDocs, setScHandoverDocs] = useState<{ document_type: string; title: string; status: string; file_url: string | null; file_name: string | null; sc_inspection_id: string | null; sc_result: string | null }[]>([]);
+  const [scHandoverDocs, setScHandoverDocs] = useState<{ id?: number; document_type: string; title: string; status: string; file_url: string | null; file_name: string | null; sc_inspection_id: string | null; sc_result: string | null; system_type?: string | null; project_system_id?: number | null }[]>([]);
+  const [otherHandoverDocs, setOtherHandoverDocs] = useState<OtherHandoverDoc[]>([]);
   const [projectManuals, setProjectManuals] = useState<{ id: number; manual_id: number; manual: { title: string; description: string | null; manufacturer: string | null; model_number: string | null; file_name: string; file_url: string } }[]>([]);
   const [contractorProfile, setContractorProfile] = useState<any>(null);
   const [docAuthority, setDocAuthority] = useState<any>(null);
@@ -222,12 +249,8 @@ export function ProjectOMExportPage() {
   // Tech doc imported data: { rows, colConfig } per system
   const [techDocState, setTechDocState] = useState<Partial<Record<string, { rows: { id: number; row_index: number; data: Record<string, string> }[]; colConfig: { key: string; display_name: string; visible: boolean; order: number }[] }>>>({});
 
-  // Pre-rendered handover PDF pages: upload.id → { pages: dataUrlArray, loading: bool }
-  const [handoverPageImages, setHandoverPageImages] = useState<Record<number, { pages: string[]; loading: boolean; failed: boolean }>>({});
-  // Pre-rendered as-fitted drawing pages: drawing.id → { pages, loading, failed }
-  const [asFittedPageImages, setAsFittedPageImages] = useState<Record<number, { pages: string[]; loading: boolean; failed: boolean }>>({});
-  // Pre-rendered datasheet pages: datasheet.id → { pages, loading, failed }
-  const [datasheetPageImages, setDatasheetPageImages] = useState<Record<number, { pages: string[]; loading: boolean; failed: boolean }>>({});
+  const [pdfPageImages, setPdfPageImages] = useState<Record<string, PdfRenderState>>({});
+  const pdfRenderStarted = useRef(new Set<string>());
 
   // Scope of works edit state
   const [scopeContent, setScopeContent] = useState('');
@@ -261,6 +284,7 @@ export function ProjectOMExportPage() {
       { data: contrData },
       { data: authData },
       { data: scHandData },
+      { data: otherHandData },
       { data: manualData },
       { data: techRowData },
       { data: techCfgData },
@@ -274,8 +298,9 @@ export function ProjectOMExportPage() {
       supabase.from('as_fitted_drawings').select('*').eq('project_id', pid).order('created_at'),
       supabase.from('contractor_profile').select('*').limit(1).maybeSingle(),
       supabase.from('document_authority').select('*').eq('project_id', pid).maybeSingle(),
-      supabase.from('project_handover_docs').select('document_type,title,status,file_url,file_name,sc_inspection_id,sc_result,system_type,project_system_id').eq('project_id', pid).in('status', ['completed', 'imported', 'uploaded']),
-      supabase.from('project_user_manuals').select('id, manual_id, manual:user_manuals(title,description,manufacturer,model_number,file_name,file_url)').eq('project_id', pid),
+      supabase.from('project_handover_docs').select('id,document_type,title,status,file_url,file_name,sc_inspection_id,sc_result,system_type,project_system_id').eq('project_id', pid).in('status', ['completed', 'imported', 'uploaded']),
+      supabase.from('handover_other_docs').select('*').eq('project_id', pid).order('created_at'),
+      supabase.from('project_user_manuals').select('id, manual_id, manual:user_manuals(title,description,manufacturer,model_number,file_name,file_url,link_url)').eq('project_id', pid),
       supabase.from('tech_doc_rows').select('*').eq('project_id', pid).order('system_type').order('row_index'),
       supabase.from('tech_doc_column_configs').select('*').eq('project_id', pid),
       fetchProjectSystems(pid).catch(() => [] as ProjectSystemRecord[]),
@@ -309,6 +334,7 @@ export function ProjectOMExportPage() {
     setOmUploads(uplData ?? []);
     setAsFittedDrawings(afdData ?? []);
     setScHandoverDocs(scHandData ?? []);
+    setOtherHandoverDocs((otherHandData ?? []) as OtherHandoverDoc[]);
     setProjectManuals((manualData ?? []) as any);
     setContractorProfile(contrData ?? null);
     setDocAuthority(authData ?? null);
@@ -401,66 +427,33 @@ export function ProjectOMExportPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Pre-render handover PDFs to images whenever the upload list changes
+  const packPdfUrls = useMemo(() => {
+    const urls: string[] = [];
+    const add = (url?: string | null) => {
+      if (url && !urls.includes(url)) urls.push(url);
+    };
+    for (const upload of omUploads) add(upload.file_url);
+    for (const doc of scHandoverDocs) add(doc.file_url);
+    for (const doc of otherHandoverDocs) add(doc.file_url);
+    for (const drawing of asFittedDrawings) add(drawing.file_url);
+    for (const device of devices) add(device.datasheet?.datasheet_url ?? null);
+    for (const manual of projectManuals) add(manual.manual.file_url);
+    return urls;
+  }, [omUploads, scHandoverDocs, otherHandoverDocs, asFittedDrawings, devices, projectManuals]);
+
   useEffect(() => {
-    const hUploads = omUploads.filter(u => HANDOVER_SECTIONS.has(u.section));
-    if (hUploads.length === 0) return;
-    hUploads.forEach(upload => {
-      setHandoverPageImages(prev => {
-        if (prev[upload.id]) return prev; // already loaded or loading
-        return { ...prev, [upload.id]: { pages: [], loading: true, failed: false } };
-      });
-      renderPdfToImages(upload.file_url).then(pages => {
-        setHandoverPageImages(prev => ({
+    for (const url of packPdfUrls) {
+      if (pdfRenderStarted.current.has(url)) continue;
+      pdfRenderStarted.current.add(url);
+      setPdfPageImages(prev => ({ ...prev, [url]: { pages: [], loading: true, failed: false } }));
+      void renderPdfToImages(url).then(pages => {
+        setPdfPageImages(prev => ({
           ...prev,
-          [upload.id]: { pages: pages ?? [], loading: false, failed: pages === null },
+          [url]: { pages: pages ?? [], loading: false, failed: pages === null },
         }));
       });
-    });
-  }, [omUploads]);
-
-  // Pre-render as-fitted drawings to images whenever the list changes
-  useEffect(() => {
-    if (asFittedDrawings.length === 0) return;
-    asFittedDrawings.forEach(drawing => {
-      setAsFittedPageImages(prev => {
-        if (prev[drawing.id]) return prev;
-        return { ...prev, [drawing.id]: { pages: [], loading: true, failed: false } };
-      });
-      renderPdfToImages(drawing.file_url).then(pages => {
-        setAsFittedPageImages(prev => ({
-          ...prev,
-          [drawing.id]: { pages: pages ?? [], loading: false, failed: pages === null },
-        }));
-      });
-    });
-  }, [asFittedDrawings]);
-
-  // Pre-render unique datasheet PDFs to images whenever devices changes
-  useEffect(() => {
-    const seen = new Set<string>();
-    const unique: { id: number; url: string }[] = [];
-    for (const d of devices) {
-      if (!d.datasheet?.datasheet_url || !d.datasheet.id) continue;
-      const key = `${d.manufacturer?.trim().toLowerCase()}|${d.model_number?.trim().toLowerCase()}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      unique.push({ id: d.datasheet.id, url: d.datasheet.datasheet_url });
     }
-    if (unique.length === 0) return;
-    unique.forEach(({ id, url }) => {
-      setDatasheetPageImages(prev => {
-        if (prev[id]) return prev;
-        return { ...prev, [id]: { pages: [], loading: true, failed: false } };
-      });
-      renderPdfToImages(url).then(pages => {
-        setDatasheetPageImages(prev => ({
-          ...prev,
-          [id]: { pages: pages ?? [], loading: false, failed: pages === null },
-        }));
-      });
-    });
-  }, [devices]);
+  }, [packPdfUrls]);
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -497,7 +490,9 @@ export function ProjectOMExportPage() {
     if (s === 'commissioning') return getUpload('commissioning') ? 'complete' : commRecords.length > 0 ? 'partial' : 'empty';
     if (s === 'handover') {
       const hUploads = omUploads.filter(u => HANDOVER_SECTIONS.has(u.section));
-      return hUploads.length > 0 || scHandoverDocs.length > 0 ? 'complete' : handoverDocs.length > 0 ? 'partial' : 'empty';
+      const scReady = scHandoverDocs.some(doc => doc.file_url);
+      const otherReady = otherHandoverDocs.some(doc => doc.file_url);
+      return hUploads.length > 0 || scReady || otherReady ? 'complete' : handoverDocs.length > 0 || scHandoverDocs.length > 0 ? 'partial' : 'empty';
     }
     if (s === 'as_fitted') return asFittedDrawings.length > 0 ? 'complete' : 'empty';
     if (s === 'datasheets') return devices.some(d => d.datasheet) ? 'complete' : 'empty';
@@ -606,10 +601,20 @@ export function ProjectOMExportPage() {
   // ── Print ─────────────────────────────────────────────────────────────────────
 
   const hUploads = omUploads.filter(u => HANDOVER_SECTIONS.has(u.section));
-  const handoverRendering = hUploads.some(u => handoverPageImages[u.id]?.loading);
-  const asFittedRendering = asFittedDrawings.some(d => asFittedPageImages[d.id]?.loading);
-  const datasheetRendering = Object.values(datasheetPageImages).some(v => v.loading);
-  const printRendering = handoverRendering || asFittedRendering || datasheetRendering;
+  const handoverPackPdfs = useMemo(() => {
+    const docs: { key: string; title: string; file_name: string | null; file_url: string }[] = [];
+    const seen = new Set<string>();
+    const add = (key: string, title: string, file_name: string | null | undefined, file_url: string | null | undefined) => {
+      if (!file_url || seen.has(file_url)) return;
+      seen.add(file_url);
+      docs.push({ key, title, file_name: file_name ?? null, file_url });
+    };
+    for (const upload of hUploads) add(`upload-${upload.id}`, handoverSectionLabel(upload.section), upload.file_name, upload.file_url);
+    for (const doc of scHandoverDocs) add(`sc-${doc.id ?? doc.document_type}`, doc.title, doc.file_name, doc.file_url);
+    for (const doc of otherHandoverDocs) add(`other-${doc.id}`, doc.title, doc.file_name, doc.file_url);
+    return docs;
+  }, [hUploads, scHandoverDocs, otherHandoverDocs]);
+  const printRendering = packPdfUrls.some(url => pdfPageImages[url]?.loading);
 
   const handlePrint = () => window.print();
 
@@ -841,7 +846,7 @@ export function ProjectOMExportPage() {
         'print-section-commissioning':    'Commissioning Pack',
         'print-section-handover':         'Handover Documents',
         'print-section-as_fitted':        'As Fitted Drawings',
-        'print-section-datasheets':       'Datasheet Index',
+        'print-section-datasheets':       'Datasheets',
         'print-section-user_manuals':     'User Manuals',
       };
       for (const [anchorId, pageNum] of Object.entries(sectionPageMap)) {
@@ -999,7 +1004,10 @@ export function ProjectOMExportPage() {
                 ? `Plans for ${systemGroups.filter(g => maintPlanContent[g.system]?.trim()).map(g => g.system).join(', ')}`
                 : 'Not yet created',
               commissioning: getUpload('commissioning') ? 'PDF uploaded' : commRecords.length > 0 ? `${commRecords.length} test records in database` : 'Not yet uploaded',
-              handover: (() => { const h = omUploads.filter(u => HANDOVER_SECTIONS.has(u.section)); const total = h.length + scHandoverDocs.length; return total > 0 ? `${total} document${total !== 1 ? 's' : ''} ready` : handoverDocs.length > 0 ? 'Handover data available' : 'Not yet uploaded'; })(),
+              handover: (() => {
+                const total = hUploads.length + scHandoverDocs.filter(d => d.file_url).length + otherHandoverDocs.filter(d => d.file_url).length;
+                return total > 0 ? `${total} document${total !== 1 ? 's' : ''} ready` : handoverDocs.length > 0 || scHandoverDocs.length > 0 ? 'Handover data available' : 'Not yet uploaded';
+              })(),
               as_fitted: asFittedDrawings.length > 0 ? `${asFittedDrawings.length} drawing${asFittedDrawings.length !== 1 ? 's' : ''} uploaded` : 'No drawings uploaded',
               datasheets: (() => { const found = devices.filter(d => d.datasheet).length; return found > 0 ? `${found} of ${devices.length} devices have datasheets` : 'No datasheets found'; })(),
               user_manuals: projectManuals.length > 0 ? `${projectManuals.length} manual${projectManuals.length !== 1 ? 's' : ''} attached` : 'No manuals attached',
@@ -1139,6 +1147,7 @@ export function ProjectOMExportPage() {
               onRemove={handleRemoveUpload}
               handoverDocs={handoverDocs}
               scHandoverDocs={scHandoverDocs}
+              otherHandoverDocs={otherHandoverDocs}
               documentSystems={documentSystems}
               readOnly={packReadOnly}
             />
@@ -1146,7 +1155,7 @@ export function ProjectOMExportPage() {
           {activeSection === 'as_fitted' && (
             <AsFittedDrawingsSection
               drawings={asFittedDrawings}
-              pageImages={asFittedPageImages}
+              pageImages={pdfPageImages}
               documentSystems={documentSystems}
             />
           )}
@@ -1178,7 +1187,7 @@ export function ProjectOMExportPage() {
           hasTechDocs={importedTechSystems.length > 0 || devices.some(d => d.ip_address || d.mac_address || d.firmware_version || d.username_hint || d.password_hint || d.controller_address || d.vlan || d.network_zone)}
           hasMaintPlan={systemGroups.some(g => maintPlanContent[g.system]?.trim())}
           hasCommissioning={!!(getUpload('commissioning') || commRecords.length > 0)}
-          hasHandover={!!(omUploads.filter(u => HANDOVER_SECTIONS.has(u.section)).length > 0 || handoverDocs.length > 0)}
+          hasHandover={handoverPackPdfs.length > 0 || handoverDocs.length > 0 || scHandoverDocs.length > 0}
           hasAsFitted={asFittedDrawings.length > 0}
           hasDatasheets={devices.some(d => d.datasheet)}
           hasUserManuals={projectManuals.length > 0}
@@ -1252,7 +1261,12 @@ export function ProjectOMExportPage() {
         {getUpload('commissioning') ? (
           <>
             <PrintSection title="Commissioning Pack" anchorId="print-section-commissioning">
-              <PrintAttachment upload={getUpload('commissioning')!} />
+              <PrintPdfPages
+                title="Commissioning Pack"
+                fileName={getUpload('commissioning')!.file_name}
+                url={getUpload('commissioning')!.file_url}
+                pageImages={pdfPageImages}
+              />
             </PrintSection>
             <div className="page-break" />
           </>
@@ -1266,11 +1280,18 @@ export function ProjectOMExportPage() {
         )}
 
         {(() => {
-          const hUploads = omUploads.filter(u => HANDOVER_SECTIONS.has(u.section));
-          if (hUploads.length > 0) return (
+          if (handoverPackPdfs.length > 0) return (
             <>
               <PrintSection title="Handover Documents" anchorId="print-section-handover">
-                <PrintHandoverDocs uploads={hUploads} pageImages={handoverPageImages} />
+                {handoverPackPdfs.map(doc => (
+                  <PrintPdfPages
+                    key={doc.key}
+                    title={doc.title}
+                    fileName={doc.file_name}
+                    url={doc.file_url}
+                    pageImages={pdfPageImages}
+                  />
+                ))}
               </PrintSection>
               <div className="page-break" />
             </>
@@ -1288,15 +1309,15 @@ export function ProjectOMExportPage() {
 
         {asFittedDrawings.length > 0 && (
           <>
-            <PrintAsFittedDrawings drawings={asFittedDrawings} pageImages={asFittedPageImages} documentSystems={documentSystems} />
+            <PrintAsFittedDrawings drawings={asFittedDrawings} pageImages={pdfPageImages} documentSystems={documentSystems} />
             <div className="page-break" />
           </>
         )}
 
         {devices.some(d => d.datasheet) && (
           <>
-            <PrintSection title="Datasheet Index" anchorId="print-section-datasheets">
-              <PrintDatasheets groups={systemGroups} pageImages={datasheetPageImages} />
+            <PrintSection title="Datasheets" anchorId="print-section-datasheets">
+              <PrintDatasheets groups={systemGroups} pageImages={pdfPageImages} />
             </PrintSection>
             <div className="page-break" />
           </>
@@ -1305,19 +1326,25 @@ export function ProjectOMExportPage() {
         {projectManuals.length > 0 && (
           <>
             <PrintSection title="User Manuals" anchorId="print-section-user_manuals">
-              <div className="space-y-3">
+              <div className="space-y-8">
                 {projectManuals.map(pm => (
-                  <div key={pm.id} className="flex items-start gap-3 p-3 border border-slate-200 rounded-lg">
-                    <BookMarked className="w-4 h-4 text-slate-400 mt-0.5 flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
+                  pm.manual.file_url ? (
+                    <PrintPdfPages
+                      key={pm.id}
+                      title={pm.manual.title}
+                      fileName={pm.manual.file_name}
+                      url={pm.manual.file_url}
+                      pageImages={pdfPageImages}
+                    />
+                  ) : (
+                    <div key={pm.id} className="border border-slate-200 rounded p-4">
                       <p className="text-sm font-semibold text-slate-800">{pm.manual.title}</p>
                       {pm.manual.description && <p className="text-xs text-slate-500 mt-0.5">{pm.manual.description}</p>}
-                      {(pm.manual.manufacturer || pm.manual.model_number) && (
-                        <p className="text-xs text-slate-400 mt-0.5">{[pm.manual.manufacturer, pm.manual.model_number].filter(Boolean).join(' · ')}</p>
+                      {pm.manual.link_url && (
+                        <p className="text-xs text-slate-400 mt-1 break-all">Linked document: {pm.manual.link_url}</p>
                       )}
                     </div>
-                    <a href={pm.manual.file_url} target="_blank" rel="noopener noreferrer" className="text-xs text-cyan-600 hover:underline flex-shrink-0">View</a>
-                  </div>
+                  )
                 ))}
               </div>
             </PrintSection>
@@ -1538,6 +1565,7 @@ function UserManualsSection({ pid, projectManuals, onRefresh, readOnly }: {
   const [addMode, setAddMode] = useState<'upload' | 'link'>('upload');
   const [form, setForm] = useState({ title: '', description: '', manufacturer: '', model_number: '', link_url: '' });
   const [linkVerified, setLinkVerified] = useState<'idle' | 'checking' | 'ok' | 'fail'>('idle');
+  const [expandedId, setExpandedId] = useState<number | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
 
@@ -1760,8 +1788,11 @@ function UserManualsSection({ pid, projectManuals, onRefresh, readOnly }: {
               <p className="text-xs text-slate-400 mt-1">Upload a PDF or paste a link to add one, or search the library.</p>
             </div>
           ) : (
-            projectManuals.map(pm => (
-              <div key={pm.id} className="flex items-center gap-4 px-6 py-4 hover:bg-slate-50 transition-colors">
+            projectManuals.map(pm => {
+              const isExpanded = expandedId === pm.id;
+              return (
+              <div key={pm.id}>
+              <div className="flex items-center gap-4 px-6 py-4 hover:bg-slate-50 transition-colors">
                 <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${isLinkManual(pm.manual) ? 'bg-blue-50' : 'bg-slate-100'}`}>
                   {isLinkManual(pm.manual) ? <ExternalLink className="w-4 h-4 text-blue-500" /> : <FileText className="w-4 h-4 text-slate-500" />}
                 </div>
@@ -1782,6 +1813,13 @@ function UserManualsSection({ pid, projectManuals, onRefresh, readOnly }: {
                     className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 transition-colors">
                     <ExternalLink className="w-3 h-3" />{isLinkManual(pm.manual) ? 'Open' : 'View'}
                   </a>
+                  {pm.manual.file_url && (
+                    <button onClick={() => setExpandedId(isExpanded ? null : pm.id)}
+                      className={`text-xs px-2 py-1 border rounded-lg transition-colors flex items-center gap-1 ${isExpanded ? 'bg-cyan-50 border-cyan-300 text-cyan-700' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                      {isExpanded ? <X className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                      {isExpanded ? 'Close' : 'View PDF'}
+                    </button>
+                  )}
                   {!readOnly && (
                   <button onClick={() => handleRemove(pm.id)}
                     className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
@@ -1790,7 +1828,15 @@ function UserManualsSection({ pid, projectManuals, onRefresh, readOnly }: {
                   )}
                 </div>
               </div>
-            ))
+              {isExpanded && pm.manual.file_url && (
+                <div className="bg-slate-100 px-6 py-4">
+                  <iframe src={pm.manual.file_url} title={pm.manual.title}
+                    className="w-full rounded-lg shadow-sm border border-slate-200" style={{ height: '1050px' }} />
+                </div>
+              )}
+              </div>
+              );
+            })
           )}
         </div>
       </div>
@@ -2363,11 +2409,12 @@ function MaintenancePlanSection({ systemGroups, content, onChange, onSave, savin
 
 // ─── Handover Pack Section (screen) ──────────────────────────────────────────
 
-function HandoverPackSection({ uploads, onRemove, handoverDocs, scHandoverDocs, documentSystems, readOnly }: {
+function HandoverPackSection({ uploads, onRemove, handoverDocs, scHandoverDocs, otherHandoverDocs, documentSystems, readOnly }: {
   uploads: OmUpload[];
   onRemove: (u: OmUpload) => void;
   handoverDocs: HandoverDocument[];
   scHandoverDocs: {
+    id?: number;
     document_type: string;
     title: string;
     status: string;
@@ -2378,12 +2425,13 @@ function HandoverPackSection({ uploads, onRemove, handoverDocs, scHandoverDocs, 
     system_type?: string | null;
     project_system_id?: number | null;
   }[];
+  otherHandoverDocs: OtherHandoverDoc[];
   documentSystems: ProjectSystem[];
   readOnly?: boolean;
 }) {
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
-  if (uploads.length === 0 && scHandoverDocs.length === 0) {
+  if (uploads.length === 0 && scHandoverDocs.length === 0 && otherHandoverDocs.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
         <div>
@@ -2408,16 +2456,19 @@ function HandoverPackSection({ uploads, onRemove, handoverDocs, scHandoverDocs, 
 
   const uploadGroups = groupRecordsByProjectSystems(documentSystems, uploads);
   const scGroups = groupRecordsByProjectSystems(documentSystems, scHandoverDocs);
-  const sectionLabels = [...new Set([...uploadGroups, ...scGroups].map(group => group.label))];
+  const otherGroups = groupRecordsByProjectSystems(documentSystems, otherHandoverDocs);
+  const sectionLabels = [...new Set([...uploadGroups, ...scGroups, ...otherGroups].map(group => group.label))];
 
   return (
     <div className="space-y-6">
       {sectionLabels.map(label => {
         const uploadGroup = uploadGroups.find(group => group.label === label);
         const scGroup = scGroups.find(group => group.label === label);
-        const system = uploadGroup?.system ?? scGroup?.system ?? null;
+        const otherGroup = otherGroups.find(group => group.label === label);
+        const system = uploadGroup?.system ?? scGroup?.system ?? otherGroup?.system ?? null;
         const groupUploads = uploadGroup?.records ?? [];
         const groupScDocs = scGroup?.records ?? [];
+        const groupOtherDocs = otherGroup?.records ?? [];
 
         const grouped: { section: string; label: string; items: OmUpload[] }[] = [];
         const seenSections = new Set<string>();
@@ -2442,7 +2493,7 @@ function HandoverPackSection({ uploads, onRemove, handoverDocs, scHandoverDocs, 
               )}
               <h3 className="font-semibold text-slate-800">{label}</h3>
               <span className="ml-auto text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full font-medium">
-                {groupUploads.length + groupScDocs.length} document{(groupUploads.length + groupScDocs.length) !== 1 ? 's' : ''}
+                {groupUploads.length + groupScDocs.length + groupOtherDocs.length} document{(groupUploads.length + groupScDocs.length + groupOtherDocs.length) !== 1 ? 's' : ''}
               </span>
             </div>
 
@@ -2450,7 +2501,7 @@ function HandoverPackSection({ uploads, onRemove, handoverDocs, scHandoverDocs, 
               {grouped.flatMap(({ label: docLabel, items }) =>
                 items.map((upload, idx) => {
                   const displayLabel = items.length > 1 ? `${docLabel} (${idx + 1})` : docLabel;
-                  const isExpanded = expandedId === upload.id;
+                  const isExpanded = expandedKey === `upload-${upload.id}`;
                   return (
                     <div key={upload.id}>
                       <div className={`flex items-center gap-3 px-6 py-4 transition-colors ${isExpanded ? 'bg-slate-50' : 'hover:bg-slate-50'}`}>
@@ -2466,7 +2517,7 @@ function HandoverPackSection({ uploads, onRemove, handoverDocs, scHandoverDocs, 
                             className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors flex items-center gap-1">
                             <ExternalLink className="w-3 h-3" />Open
                           </a>
-                          <button onClick={() => setExpandedId(isExpanded ? null : upload.id)}
+                          <button onClick={() => setExpandedKey(isExpanded ? null : `upload-${upload.id}`)}
                             className={`text-xs px-2 py-1 border rounded-lg transition-colors flex items-center gap-1 ${isExpanded ? 'bg-cyan-50 border-cyan-300 text-cyan-700' : 'border-slate-200 text-slate-500 hover:bg-slate-100'}`}>
                             {isExpanded ? <X className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                             {isExpanded ? 'Close' : 'View PDF'}
@@ -2493,24 +2544,83 @@ function HandoverPackSection({ uploads, onRemove, handoverDocs, scHandoverDocs, 
 
             {groupScDocs.length > 0 && (
               <div className="border-t border-slate-200 px-6 py-4 space-y-3">
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Signed forms</p>
-                {groupScDocs.map(doc => (
-                  <div key={`${label}-${doc.document_type}`} className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3">
-                    <CheckCircle className="w-4 h-4 text-blue-600 flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-blue-900">{doc.title}</p>
-                      <p className="text-xs text-blue-600 mt-0.5">
-                        {doc.status === 'completed' ? 'Signed web form' : doc.status === 'uploaded' ? 'PDF uploaded' : 'Completed'}
-                        {doc.sc_result && <span className="ml-2 font-medium">{doc.sc_result === 'pass' ? 'PASS' : 'FAIL'}</span>}
-                      </p>
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Imported handover documents</p>
+                {groupScDocs.map(doc => {
+                  const key = `sc-${doc.id ?? doc.document_type}`;
+                  const isExpanded = expandedKey === key;
+                  return (
+                    <div key={key} className="border border-blue-200 rounded-lg overflow-hidden">
+                      <div className="flex items-center gap-3 bg-blue-50 px-4 py-3">
+                        <CheckCircle className="w-4 h-4 text-blue-600 flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-blue-900">{doc.title}</p>
+                          <p className="text-xs text-blue-600 mt-0.5">
+                            {doc.file_name ?? (doc.status === 'uploaded' ? 'PDF uploaded' : 'Completed in SafetyCulture')}
+                            {doc.sc_result && <span className="ml-2 font-medium">{doc.sc_result === 'pass' ? 'PASS' : 'FAIL'}</span>}
+                          </p>
+                        </div>
+                        {doc.file_url && (
+                          <>
+                            <a href={doc.file_url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-700 hover:underline flex items-center gap-1 flex-shrink-0">
+                              <ExternalLink className="w-3 h-3" />Open
+                            </a>
+                            <button onClick={() => setExpandedKey(isExpanded ? null : key)}
+                              className={`text-xs px-2 py-1 border rounded-lg transition-colors flex items-center gap-1 ${isExpanded ? 'bg-cyan-50 border-cyan-300 text-cyan-700' : 'border-blue-200 text-blue-700 hover:bg-blue-100'}`}>
+                              {isExpanded ? <X className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                              {isExpanded ? 'Close' : 'View PDF'}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                      {isExpanded && doc.file_url && (
+                        <div className="bg-slate-100 px-4 py-4">
+                          <iframe src={doc.file_url} title={doc.title}
+                            className="w-full rounded-lg shadow-sm border border-slate-200" style={{ height: '1050px' }} />
+                        </div>
+                      )}
                     </div>
-                    {doc.file_url && (
-                      <a href={doc.file_url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-700 hover:underline flex items-center gap-1 flex-shrink-0">
-                        <ExternalLink className="w-3 h-3" />View PDF
-                      </a>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
+              </div>
+            )}
+
+            {groupOtherDocs.length > 0 && (
+              <div className="border-t border-slate-200 px-6 py-4 space-y-3">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Other documents</p>
+                {groupOtherDocs.map(doc => {
+                  const key = `other-${doc.id}`;
+                  const isExpanded = expandedKey === key;
+                  const href = doc.file_url ?? doc.link_url;
+                  return (
+                    <div key={key} className="border border-slate-200 rounded-lg overflow-hidden">
+                      <div className="flex items-center gap-3 px-4 py-3">
+                        <FileText className="w-4 h-4 text-slate-500 flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-slate-800">{doc.title}</p>
+                          {doc.description && <p className="text-xs text-slate-500 mt-0.5">{doc.description}</p>}
+                        </div>
+                        {href && (
+                          <a href={href} target="_blank" rel="noopener noreferrer" className="text-xs text-slate-600 hover:underline flex items-center gap-1 flex-shrink-0">
+                            <ExternalLink className="w-3 h-3" />Open
+                          </a>
+                        )}
+                        {doc.file_url && (
+                          <button onClick={() => setExpandedKey(isExpanded ? null : key)}
+                            className={`text-xs px-2 py-1 border rounded-lg transition-colors flex items-center gap-1 ${isExpanded ? 'bg-cyan-50 border-cyan-300 text-cyan-700' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                            {isExpanded ? <X className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                            {isExpanded ? 'Close' : 'View PDF'}
+                          </button>
+                        )}
+                      </div>
+                      {isExpanded && doc.file_url && (
+                        <div className="bg-slate-100 px-4 py-4">
+                          <iframe src={doc.file_url} title={doc.title}
+                            className="w-full rounded-lg shadow-sm border border-slate-200" style={{ height: '1050px' }} />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -2520,53 +2630,38 @@ function HandoverPackSection({ uploads, onRemove, handoverDocs, scHandoverDocs, 
   );
 }
 
-function PrintHandoverDocs({ uploads, pageImages }: {
-  uploads: OmUpload[];
-  pageImages: Record<number, { pages: string[]; loading: boolean; failed: boolean }>;
+function PrintPdfPages({ title, fileName, url, pageImages }: {
+  title: string;
+  fileName?: string | null;
+  url: string;
+  pageImages: Record<string, PdfRenderState>;
 }) {
-  const grouped: { label: string; items: OmUpload[] }[] = [];
-  const seen = new Set<string>();
-  for (const u of uploads) {
-    if (!seen.has(u.section)) {
-      seen.add(u.section);
-      grouped.push({ label: handoverSectionLabel(u.section), items: uploads.filter(x => x.section === u.section) });
-    }
-  }
+  const rendered = pageImages[url];
   return (
-    <div className="space-y-8">
-      {grouped.map(({ label, items }) =>
-        items.map((upload, idx) => {
-          const docLabel = items.length > 1 ? `${label} (${idx + 1})` : label;
-          const rendered = pageImages[upload.id];
-          return (
-            <div key={upload.id}>
-              <h3 className="text-base font-bold text-slate-800 mb-4 pb-2 border-b border-slate-300">{docLabel}</h3>
-              {rendered?.failed ? (
-                <div className="border border-slate-200 rounded p-6 text-center text-slate-500 text-sm">
-                  <p className="font-medium mb-1">Could not render PDF for print</p>
-                  <p className="text-xs text-slate-400">{upload.file_name}</p>
-                </div>
-              ) : rendered?.pages.length ? (
-                <div className="space-y-2">
-                  {rendered.pages.map((src, pageIdx) => (
-                    <img
-                      key={pageIdx}
-                      src={src}
-                      alt={`${docLabel} — page ${pageIdx + 1}`}
-                      className="w-full"
-                      style={{ pageBreakInside: 'avoid' }}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="border border-slate-200 rounded p-6 text-center text-slate-500 text-sm">
-                  <p>PDF not yet rendered — open the O&M Builder to prepare for print</p>
-                  <p className="text-xs mt-1 text-slate-400">{upload.file_name}</p>
-                </div>
-              )}
-            </div>
-          );
-        })
+    <div className="mb-8">
+      <h3 className="text-base font-bold text-slate-800 mb-4 pb-2 border-b border-slate-300">{title}</h3>
+      {rendered?.failed ? (
+        <div className="border border-slate-200 rounded p-6 text-center text-slate-500 text-sm">
+          <p className="font-medium mb-1">Could not render PDF for print</p>
+          <p className="text-xs text-slate-400">{fileName ?? url}</p>
+        </div>
+      ) : rendered?.pages.length ? (
+        <div className="space-y-2">
+          {rendered.pages.map((src, pageIdx) => (
+            <img
+              key={pageIdx}
+              src={src}
+              alt={`${title} — page ${pageIdx + 1}`}
+              className="w-full"
+              style={{ pageBreakInside: 'avoid' }}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="border border-slate-200 rounded p-6 text-center text-slate-500 text-sm">
+          <p>PDF not yet rendered — wait for “Preparing PDFs for print” to finish</p>
+          <p className="text-xs mt-1 text-slate-400">{fileName ?? url}</p>
+        </div>
       )}
     </div>
   );
@@ -2649,7 +2744,7 @@ function UploadSection({ sectionId, title, description, upload, uploading, onUpl
 
 function AsFittedDrawingsSection({ drawings, pageImages, documentSystems }: {
   drawings: AsBuiltDrawing[];
-  pageImages: Record<number, { pages: string[]; loading: boolean; failed: boolean }>;
+  pageImages: Record<string, PdfRenderState>;
   documentSystems: ProjectSystem[];
 }) {
   const [previewId, setPreviewId] = useState<number | null>(null);
@@ -2684,7 +2779,7 @@ function AsFittedDrawingsSection({ drawings, pageImages, documentSystems }: {
           </div>
           <div className="divide-y divide-slate-100">
             {group.records.map(d => {
-              const rendered = pageImages[d.id];
+              const rendered = pageImages[d.file_url];
               const isOpen = previewId === d.id;
               return (
                 <div key={d.id}>
@@ -2734,7 +2829,7 @@ function AsFittedDrawingsSection({ drawings, pageImages, documentSystems }: {
 
 function PrintAsFittedDrawings({ drawings, pageImages, documentSystems }: {
   drawings: AsBuiltDrawing[];
-  pageImages: Record<number, { pages: string[]; loading: boolean; failed: boolean }>;
+  pageImages: Record<string, PdfRenderState>;
   documentSystems: ProjectSystem[];
 }) {
   const drawingGroups = groupRecordsByProjectSystems(documentSystems, drawings);
@@ -2744,7 +2839,7 @@ function PrintAsFittedDrawings({ drawings, pageImages, documentSystems }: {
     <>
       {drawingGroups.flatMap(group =>
         group.records.map(d => {
-          const rendered = pageImages[d.id];
+          const rendered = pageImages[d.file_url];
           const anchorId = !anchorAssigned ? 'print-section-as_fitted' : undefined;
           if (!anchorAssigned) anchorAssigned = true;
           return (
@@ -2782,6 +2877,7 @@ function PrintAsFittedDrawings({ drawings, pageImages, documentSystems }: {
 }
 
 function DatasheetsSection({ systemGroups }: { systemGroups: { system: SystemType; devices: DeviceWithDatasheet[] }[] }) {
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const withDS = systemGroups.map(g => {
     const seen = new Set<string>();
     const unique = g.devices.filter(d => {
@@ -2803,17 +2899,37 @@ function DatasheetsSection({ systemGroups }: { systemGroups: { system: SystemTyp
         <div key={g.system} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
           <SystemHeader system={g.system} count={g.devices.length} />
           <div className="divide-y divide-slate-100">
-            {g.devices.map(d => (
-              <div key={d.id} className="flex items-center gap-4 px-5 py-3">
-                <span className="text-sm text-slate-700 flex-1">{[d.manufacturer, d.model_number].filter(Boolean).join(' ')}</span>
-                {d.datasheet?.datasheet_url && (
-                  <a href={d.datasheet.datasheet_url} target="_blank" rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline">
-                    <ExternalLink className="w-3 h-3" />Datasheet
-                  </a>
-                )}
-              </div>
-            ))}
+            {g.devices.map(d => {
+              const url = d.datasheet?.datasheet_url;
+              const key = `${g.system}-${d.id}`;
+              const isExpanded = expandedKey === key;
+              return (
+                <div key={d.id}>
+                  <div className="flex items-center gap-4 px-5 py-3">
+                    <span className="text-sm text-slate-700 flex-1">{[d.manufacturer, d.model_number].filter(Boolean).join(' ')}</span>
+                    {url && (
+                      <>
+                        <a href={url} target="_blank" rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline">
+                          <ExternalLink className="w-3 h-3" />Open
+                        </a>
+                        <button onClick={() => setExpandedKey(isExpanded ? null : key)}
+                          className={`text-xs px-2 py-1 border rounded-lg transition-colors flex items-center gap-1 ${isExpanded ? 'bg-cyan-50 border-cyan-300 text-cyan-700' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                          {isExpanded ? <X className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                          {isExpanded ? 'Close' : 'View PDF'}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  {isExpanded && url && (
+                    <div className="bg-slate-100 px-5 py-4">
+                      <iframe src={url} title={[d.manufacturer, d.model_number].filter(Boolean).join(' ')}
+                        className="w-full rounded-lg shadow-sm border border-slate-200" style={{ height: '1050px' }} />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       ))}
@@ -2934,7 +3050,7 @@ function PrintTableOfContents({
   if (hasCommissioning) entries.push({ label: 'Commissioning Pack', anchorId: 'print-section-commissioning', number: num++ });
   if (hasHandover) entries.push({ label: 'Handover Documents', anchorId: 'print-section-handover', number: num++ });
   if (hasAsFitted) entries.push({ label: 'As Fitted Drawings', anchorId: 'print-section-as_fitted', number: num++ });
-  if (hasDatasheets) entries.push({ label: 'Datasheet Index', anchorId: 'print-section-datasheets', number: num++ });
+  if (hasDatasheets) entries.push({ label: 'Datasheets', anchorId: 'print-section-datasheets', number: num++ });
   if (hasUserManuals) entries.push({ label: 'User Manuals', anchorId: 'print-section-user_manuals', number: num++ });
 
   return (
@@ -3308,19 +3424,9 @@ function PrintMaintenanceTable({ groups }: { groups: { system: SystemType; devic
   );
 }
 
-function PrintAttachment({ upload }: { upload: OmUpload }) {
-  return (
-    <div style={{ border: '2px dashed #cbd5e1', borderRadius: '0.5rem', padding: '2rem', textAlign: 'center' as const }}>
-      <p style={{ fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>Document Attached</p>
-      <p style={{ fontSize: '0.85rem', color: '#64748b' }}>{upload.file_name}</p>
-      <p style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '0.5rem', wordBreak: 'break-all' as const }}>Print / attach this PDF separately: {upload.file_url}</p>
-    </div>
-  );
-}
-
 function PrintDatasheets({ groups, pageImages }: {
   groups: { system: SystemType; devices: DeviceWithDatasheet[] }[];
-  pageImages: Record<number, { pages: string[]; loading: boolean; failed: boolean }>;
+  pageImages: Record<string, PdfRenderState>;
 }) {
   const seen = new Set<string>();
   const unique: { system: SystemType; d: DeviceWithDatasheet }[] = [];
@@ -3337,20 +3443,20 @@ function PrintDatasheets({ groups, pageImages }: {
   return (
     <div>
       {unique.map(({ system, d }) => {
-        const dsId = d.datasheet!.id;
-        const rendered = pageImages[dsId];
+        const url = d.datasheet!.datasheet_url;
+        const rendered = pageImages[url];
         const label = [d.manufacturer, d.model_number].filter(Boolean).join(' ');
         return (
-          <div key={`${system}-${dsId}`} style={{ marginBottom: '2rem', pageBreakInside: 'avoid' }}>
+          <div key={`${system}-${url}`} style={{ marginBottom: '2rem' }}>
             <div style={{ background: '#0f172a', padding: '0.4rem 0.75rem', borderRadius: '0.375rem 0.375rem 0 0', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
               <p style={{ fontWeight: 700, color: 'white', margin: 0, fontSize: '0.75rem' }}>{label || d.file_name}</p>
-              <span style={{ fontSize: '0.65rem', color: '#64748b', fontWeight: 400 }}>{system}</span>
+              <span style={{ fontSize: '0.65rem', color: '#94a3b8', fontWeight: 400 }}>{system}</span>
             </div>
             <div style={{ border: '1px solid #e2e8f0', borderTop: 'none', padding: '0.5rem' }}>
               {rendered?.failed ? (
                 <div style={{ border: '1px solid #e2e8f0', borderRadius: '0.375rem', padding: '1rem', textAlign: 'center' as const, color: '#64748b', fontSize: '0.8rem' }}>
                   <p style={{ fontWeight: 600, marginBottom: '0.25rem' }}>Could not render datasheet PDF</p>
-                  <p style={{ fontSize: '0.7rem', color: '#94a3b8', wordBreak: 'break-all' as const }}>{d.datasheet?.datasheet_url}</p>
+                  <p style={{ fontSize: '0.7rem', color: '#94a3b8', wordBreak: 'break-all' as const }}>{url}</p>
                 </div>
               ) : rendered?.pages.length ? (
                 <div>
@@ -3360,7 +3466,7 @@ function PrintDatasheets({ groups, pageImages }: {
                 </div>
               ) : (
                 <div style={{ border: '1px solid #e2e8f0', borderRadius: '0.375rem', padding: '1rem', textAlign: 'center' as const, color: '#64748b', fontSize: '0.8rem' }}>
-                  <p>Datasheet not yet rendered — open the O&M Builder to prepare for print</p>
+                  <p>Datasheet not yet rendered — wait for “Preparing PDFs for print” to finish</p>
                 </div>
               )}
             </div>

@@ -1113,18 +1113,46 @@ Deno.serve(async (req: Request) => {
     let date_completed: string | null = null;
     let result: string | null = null;
 
+    const usableDate = (value: unknown): string | null => {
+      if (value == null || value === "") return null;
+      if (typeof value === "number") {
+        if (!Number.isFinite(value) || value <= 0) return null;
+        const ms = value < 1e12 ? value * 1000 : value;
+        return new Date(ms).toISOString();
+      }
+      const text = String(value);
+      if (!text || text === "0001-01-01T00:00:00Z") return null;
+      return text;
+    };
+
+    const statusLooksComplete = (raw: unknown): boolean => {
+      const normalized = String(raw ?? "").toUpperCase().replace(/[^A-Z]/g, "");
+      return normalized === "COMPLETED" || normalized === "COMPLETE" || normalized === "FINISHED" || normalized === "CLOSED";
+    };
+
     // Helper: extract fields from a flat or nested SC response object
     const extract = (d: any) => {
       const node = d.inspection ?? d.audit ?? d.audit_data ?? d;
-      const dc =
+      const dc = usableDate(
         node.date_completed ?? node.dateCompleted ??
         node.completed_at ?? node.completedAt ??
+        node.conducted_on ?? node.conductedOn ??
         d.audit_data?.date_completed ?? d.audit_data?.dateCompleted ??
-        null;
-      // Ignore the proto zero-time placeholder SC sometimes returns
-      const cleaned = (dc && dc !== "0001-01-01T00:00:00Z" && dc !== "") ? dc : null;
+        d.completed_at ?? d.date_completed ??
+        null,
+      );
+      const complete = !!(
+        dc ||
+        node.completed === true ||
+        node.is_completed === true ||
+        node.isCompleted === true ||
+        statusLooksComplete(node.status) ||
+        statusLooksComplete(node.inspection_status) ||
+        statusLooksComplete(d.status)
+      );
       return {
-        date_completed: cleaned,
+        complete,
+        date_completed: dc ?? (complete ? usableDate(node.modified_at ?? node.modifiedAt ?? d.modified_at) : null),
         score_pct: node.score_percentage ?? node.scorePercentage ??
           d.audit_data?.score_percentage ?? null,
         engineer_name: node.modified_by?.name ?? node.modifiedBy?.name ??
@@ -1139,32 +1167,29 @@ Deno.serve(async (req: Request) => {
     const inspId  = isAudit ? "insp_" + inspection_id.slice(6) : inspection_id;
 
     const attempts = [
-      // v1 details endpoint (works for insp_ IDs)
+      { url: `${SC_BASE}/inspections/v1/inspections/${inspId}`, label: "v1/insp" },
       { url: `${SC_BASE}/inspections/v1/inspections/${inspId}/details`, label: "v1/details/insp" },
-      // v1 with audit_ ID as-is (some orgs)
+      { url: `${SC_BASE}/inspections/v1/inspections/${inspection_id}`, label: "v1/insp/raw" },
       { url: `${SC_BASE}/inspections/v1/inspections/${inspection_id}/details`, label: "v1/details/raw" },
-      // Legacy audit endpoint
       { url: `${SC_BASE}/audits/${auditId}`, label: "legacy/audits" },
-      // Legacy with raw ID
       { url: `${SC_BASE}/audits/${inspection_id}`, label: "legacy/audits/raw" },
     ];
 
     for (const { url, label } of attempts) {
-      if (date_completed !== null) break;
+      if (status === "completed") break;
       try {
         const r = await fetch(url, { headers: authHeaders });
         log("get_inspection", `${label} → ${r.status}`);
         if (!r.ok) continue;
         const d = await r.json().catch(() => ({}));
         const fields = extract(d);
-        if (fields.date_completed) {
+        if (fields.complete) {
           date_completed = fields.date_completed;
           score_pct = fields.score_pct;
           engineer_name = fields.engineer_name;
           status = "completed";
           log("get_inspection", `found completed via ${label}: date=${date_completed}`);
         } else if (!score_pct) {
-          // Not complete but at least capture score info
           score_pct = fields.score_pct;
           engineer_name = fields.engineer_name;
           log("get_inspection", `not complete via ${label}`);

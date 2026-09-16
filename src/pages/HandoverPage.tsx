@@ -126,6 +126,9 @@ export default function HandoverPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadDocRef = useRef('');
+  const docsRef = useRef<HandoverDoc[]>([]);
+  const syncingRef = useRef(false);
+  docsRef.current = docs;
 
   // Other docs modal
   const [showOtherModal, setShowOtherModal] = useState(false);
@@ -175,6 +178,79 @@ export default function HandoverPage() {
   }, [pid]);
 
   useEffect(() => { load(); }, [load]);
+
+  const applyInspectionCompletion = async (doc: HandoverDoc, forceUpdate = false): Promise<boolean> => {
+    if (!pid || !doc.sc_inspection_id) return false;
+    const d = await invoke('get_inspection', { inspection_id: doc.sc_inspection_id });
+    const isComplete = d.status === 'completed' || !!d.date_completed;
+    if (!isComplete && !forceUpdate) return false;
+
+    const update: Record<string, unknown> = {
+      status: isComplete ? 'completed' : 'in_progress',
+      sc_result: d.result ?? null,
+      sc_score_pct: d.score_pct ?? null,
+      sc_engineer_name: d.engineer_name ?? null,
+      sc_completion_date: d.date_completed ?? null,
+      sc_imported_at: isComplete ? new Date().toISOString() : null,
+    };
+
+    if (isComplete && !doc.file_url) {
+      try {
+        const pdf = await invoke('export_pdf', { inspection_id: doc.sc_inspection_id, project_id: pid, path_prefix: 'handover' });
+        if (pdf.pdf_url) {
+          update.file_url = pdf.pdf_url;
+          update.file_name = pdf.file_name;
+        }
+      } catch {
+        // PDF export failure is non-fatal — still mark as completed
+      }
+    }
+
+    const { error } = await supabase.from('project_handover_docs').update(update).eq('id', doc.id);
+    if (error) throw error;
+    return isComplete;
+  };
+
+  const syncInProgressInspections = useCallback(async () => {
+    if (!pid || !scConnected || syncingRef.current) return;
+    const pending = docsRef.current.filter(doc =>
+      !!doc.sc_inspection_id && (doc.status === 'in_progress' || doc.status === 'not_started'),
+    );
+    if (!pending.length) return;
+    syncingRef.current = true;
+    try {
+      let changed = false;
+      for (const doc of pending) {
+        try {
+          if (await applyInspectionCompletion(doc)) changed = true;
+        } catch {
+          // Leave the row in progress if SafetyCulture cannot be reached
+        }
+      }
+      if (changed) await load();
+    } finally {
+      syncingRef.current = false;
+    }
+  }, [pid, scConnected, load]);
+
+  useEffect(() => {
+    if (loading || !scConnected) return;
+    void syncInProgressInspections();
+  }, [loading, scConnected, syncInProgressInspections]);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void syncInProgressInspections();
+    };
+    window.addEventListener('focus', onVisible);
+    document.addEventListener('visibilitychange', onVisible);
+    const timer = window.setInterval(onVisible, 30000);
+    return () => {
+      window.removeEventListener('focus', onVisible);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.clearInterval(timer);
+    };
+  }, [syncInProgressInspections]);
 
   useEffect(() => {
     if (activeTab !== 'documents' || !pid) return;
@@ -386,34 +462,7 @@ export default function HandoverPage() {
     if (!doc?.sc_inspection_id || !pid) return;
     setImportingDoc(docType);
     try {
-      const d = await invoke('get_inspection', { inspection_id: doc.sc_inspection_id });
-      const isComplete = d.status === 'completed' || !!d.date_completed;
-      const status: DocStatus = isComplete ? 'imported' : 'in_progress';
-
-      // Build the update payload
-      const update: Record<string, unknown> = {
-        status,
-        sc_result: d.result ?? null,
-        sc_score_pct: d.score_pct ?? null,
-        sc_engineer_name: d.engineer_name ?? null,
-        sc_completion_date: d.date_completed ?? null,
-        sc_imported_at: isComplete ? new Date().toISOString() : null,
-      };
-
-      // If completed and no PDF yet, export and attach it
-      if (isComplete && !doc.file_url) {
-        try {
-          const pdf = await invoke('export_pdf', { inspection_id: doc.sc_inspection_id, project_id: pid, path_prefix: 'handover' });
-          if (pdf.pdf_url) {
-            update.file_url = pdf.pdf_url;
-            update.file_name = pdf.file_name;
-          }
-        } catch {
-          // PDF export failure is non-fatal — still mark as imported
-        }
-      }
-
-      await supabase.from('project_handover_docs').update(update).eq('id', doc.id);
+      await applyInspectionCompletion(doc, true);
       await load();
     } catch (e: any) {
       alert('Import failed: ' + e.message);
@@ -745,7 +794,7 @@ export default function HandoverPage() {
                         )}
                       </>
                     )}
-                    {record?.sc_inspection_id && status !== 'imported' && (
+                    {record?.sc_inspection_id && !['completed', 'imported', 'uploaded'].includes(status) && (
                       <button onClick={() => importResults(doc.document_id)} disabled={importingDoc === doc.document_id} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50">
                         {importingDoc === doc.document_id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
                         Import Results
