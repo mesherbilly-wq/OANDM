@@ -62,6 +62,7 @@ export async function createHandoverFormInvite(payload: {
   system_type?: string | null;
   project_system_id?: number | null;
   prefill?: Record<string, string>;
+  answers?: Record<string, unknown>;
 }): Promise<HandoverFormInvite> {
   const token = randomToken();
   const url = fillUrl(token);
@@ -75,6 +76,7 @@ export async function createHandoverFormInvite(payload: {
     recipient_name: payload.recipient_name || null,
     status: payload.recipient_email ? 'sent' : 'pending',
     prefill: payload.prefill ?? {},
+    answers: payload.answers ?? null,
     system_type: payload.system_type ?? null,
     project_system_id: payload.project_system_id ?? null,
   });

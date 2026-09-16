@@ -30,6 +30,11 @@ import { formTemplateKeyForDefinition, getHandoverFormTemplate } from '../lib/ha
 import { getCategoryStyle, type ProjectSystem } from '../lib/systems';
 import HandoverConfigPage from './HandoverConfigPage';
 import type { Device } from '../types';
+import { sendCompletionPack } from '../lib/completionPackWorkflow';
+import { listSdpRevisions } from '../lib/sdpRevisionsApi';
+import { buildSdpAnswers } from '../lib/sdpAnswers';
+import { fetchPublicContractorBrand } from '../lib/contractorBrand';
+import { Link } from 'react-router-dom';
 import {
   Upload, X, ExternalLink, CheckCircle, FileText, Loader2,
   Award, Plus, Mail, Copy,
@@ -57,6 +62,9 @@ interface HandoverDoc {
   sc_imported_at: string | null;
   file_name: string | null;
   file_url: string | null;
+  workflow_status?: string | null;
+  revision_no?: number | null;
+  extraction_flag?: string | null;
 }
 
 interface LegacyUpload {
@@ -114,6 +122,10 @@ export default function HandoverPage() {
   const [formLink, setFormLink] = useState<string | null>(null);
   const [mailtoHref, setMailtoHref] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [packEmail, setPackEmail] = useState('');
+  const [packName, setPackName] = useState(project.engineer ?? '');
+  const [packSending, setPackSending] = useState(false);
+  const [packNotice, setPackNotice] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadDocRef = useRef('');
@@ -310,6 +322,80 @@ export default function HandoverPage() {
   const copyFormLink = async () => {
     if (!formLink) return;
     await navigator.clipboard.writeText(formLink);
+  };
+
+  const sendPackToEngineer = async () => {
+    if (!pid) return;
+    if (!packEmail.trim()) {
+      alert('Enter the engineer email address.');
+      return;
+    }
+    setPackSending(true);
+    setPackNotice(null);
+    try {
+      const [{ data: scopeRow }, { data: asFitted }, { data: systemRows }, contractor] = await Promise.all([
+        supabase.from('project_documents').select('content').eq('project_id', pid).eq('document_type', 'scope_of_works').maybeSingle(),
+        supabase.from('as_fitted_items').select('quoted_description,quoted_quantity,source_quote_line_id').eq('project_id', pid),
+        supabase.from('project_systems').select('category'),
+        fetchPublicContractorBrand(),
+      ]);
+      let sdpAnswers;
+      let revisionNo = 1;
+      try {
+        const revisions = await listSdpRevisions(pid);
+        if (revisions[0]) {
+          sdpAnswers = revisions[0].answers;
+          revisionNo = revisions[0].revision_no;
+        }
+      } catch {
+        sdpAnswers = undefined;
+      }
+      if (!sdpAnswers) {
+        sdpAnswers = buildSdpAnswers({
+          project,
+          scopeText: scopeRow?.content ?? project.project_notes,
+          equipment: (asFitted ?? []).map(item => ({
+            item: item.quoted_description,
+            qty_proposed: item.quoted_quantity,
+            source: item.source_quote_line_id ? `Simpro line ${item.source_quote_line_id}` : 'Simpro quote line',
+          })),
+        });
+      }
+      const result = await sendCompletionPack({
+        projectId: pid,
+        project,
+        systemCategories: (systemRows ?? []).map(row => String(row.category ?? '')),
+        recipientEmail: packEmail.trim(),
+        recipientName: packName.trim() || project.engineer || 'Engineer',
+        sdpAnswers,
+        sdpRevisionNo: revisionNo,
+        brand: contractor,
+      });
+      setPackNotice(result.emailed
+        ? `Pack emailed via ${result.provider}.`
+        : `Development outbox saved. Opening a mail draft with ${result.links.length} document links.`);
+      if (result.mailtoHref) window.location.href = result.mailtoHref;
+      await load();
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Could not email the completion pack.');
+    } finally {
+      setPackSending(false);
+    }
+  };
+
+  const setWorkflowStatus = async (documentId: string, workflowStatus: string) => {
+    if (!pid) return;
+    await supabase.from('project_handover_docs').update({
+      workflow_status: workflowStatus,
+      status: workflowStatus === 'finalised' ? 'completed' : 'completed',
+    }).eq('project_id', pid).eq('document_type', documentId);
+    if (documentId === 'sdp') {
+      const revisionNo = docs.find(item => item.document_type === documentId)?.revision_no;
+      if (revisionNo) {
+        await supabase.from('sdp_revisions').update({ status: workflowStatus }).eq('project_id', pid).eq('revision_no', revisionNo);
+      }
+    }
+    await load();
   };
 
   // ── Upload PDF ─────────────────────────────────────────────────────────────
@@ -565,11 +651,38 @@ export default function HandoverPage() {
           <h2 className="font-semibold text-slate-900">
             {documentTypes.find(type => type.key === selectedDocTypeKey)?.label ?? 'Handover'} documents
           </h2>
-          <p className="text-sm text-slate-500 mt-0.5">Email a browser form, collect a signature, or upload a signed PDF</p>
+          <p className="text-sm text-slate-500 mt-0.5">Email the SDP and relevant handover PDFs, or complete one document at a time</p>
         </div>
         <span className={`text-sm font-semibold px-3 py-1 rounded-full ${completedDocs === totalDocs ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
           {completedDocs}/{totalDocs} complete
         </span>
+      </div>
+
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4 space-y-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h3 className="font-semibold text-slate-900">Email completion pack to engineer</h3>
+            <p className="text-sm text-slate-500 mt-0.5">
+              Sends the current SDP plus IA01, CC01 or AC01 for the systems on this job. Includes fill links and a backup return upload.
+            </p>
+          </div>
+          <Link to="../sdp" className="text-xs font-medium text-cyan-700 hover:underline">Open SDP editor</Link>
+        </div>
+        <div className="flex flex-wrap gap-2 items-end">
+          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+            Engineer name
+            <input value={packName} onChange={event => setPackName(event.target.value)} className="mt-1 block w-56 text-sm border border-slate-200 rounded-lg px-3 py-2" />
+          </label>
+          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+            Engineer email
+            <input type="email" value={packEmail} onChange={event => setPackEmail(event.target.value)} className="mt-1 block w-64 text-sm border border-slate-200 rounded-lg px-3 py-2" placeholder="name@pacific-uk.co.uk" />
+          </label>
+          <button type="button" onClick={() => void sendPackToEngineer()} disabled={packSending} className="inline-flex items-center gap-1.5 text-sm font-medium px-4 py-2 rounded-lg bg-cyan-600 text-white hover:bg-cyan-700 disabled:opacity-50">
+            {packSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
+            {packSending ? 'Preparing…' : 'Generate and email pack'}
+          </button>
+        </div>
+        {packNotice && <p className="text-xs text-emerald-800">{packNotice}</p>}
       </div>
 
       {/* SC-enabled document cards */}
@@ -598,7 +711,7 @@ export default function HandoverPage() {
                     <p className="text-xs text-slate-500 truncate mt-0.5">{doc.description}</p>
                   </div>
                   <span className={`text-xs font-medium px-2.5 py-1 rounded-full border ${statusCfg.color}`}>
-                    {statusCfg.label}
+                    {record?.workflow_status ? record.workflow_status.replace(/_/g, ' ') : statusCfg.label}
                   </span>
                 </div>
 
@@ -630,13 +743,31 @@ export default function HandoverPage() {
                     </div>
                   )}
 
+                  {record?.extraction_flag && (
+                    <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                      Returned PDF could not be read as form fields ({record.extraction_flag}). The original file is kept for review.
+                    </p>
+                  )}
+
                   <div className="flex flex-wrap gap-2">
+                    {doc.document_id === 'sdp' && (
+                      <Link to="../sdp" className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50">
+                        Edit SDP
+                      </Link>
+                    )}
                     <button onClick={() => openEmailFormModal(doc)} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-cyan-600 text-white hover:bg-cyan-700 transition-colors">
                       <Mail className="w-3.5 h-3.5" />{record?.sc_inspection_id && status === 'in_progress' ? 'Resend form' : 'Email form'}
                     </button>
                     <button onClick={() => triggerUpload(doc.document_id)} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">
                       <Upload className="w-3.5 h-3.5" />Upload PDF
                     </button>
+                    {record?.file_url && (
+                      <>
+                        <button onClick={() => void setWorkflowStatus(doc.document_id, 'needs_correction')} className="text-xs px-3 py-2 rounded-lg border border-amber-200 text-amber-800">Needs correction</button>
+                        <button onClick={() => void setWorkflowStatus(doc.document_id, 'technically_reviewed')} className="text-xs px-3 py-2 rounded-lg border border-slate-200 text-slate-700">Technically reviewed</button>
+                        <button onClick={() => void setWorkflowStatus(doc.document_id, 'finalised')} className="text-xs px-3 py-2 rounded-lg border border-emerald-200 text-emerald-800">Finalise for O&M</button>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>

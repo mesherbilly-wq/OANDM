@@ -10,6 +10,7 @@ import {
   type IntegrationSettingsGroupView,
 } from '../integrations/settings/integrationSettingsGroups';
 import { SimproConnectionSetup } from '../components/simpro/SimproConnectionSetup';
+import { EmailProviderSettings } from '../components/EmailProviderSettings';
 
 const GROUP_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   simpro: Building,
@@ -105,6 +106,7 @@ export function IntegrationsPage() {
         {groups.map(group => (
           <IntegrationSettingsCard key={group.id} group={group} />
         ))}
+        <EmailProviderSettings />
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import { INTRUDER_ALARM_FORM_KEY } from './schemaForm';
-import { cctvPackTemplateList } from './cctvSurveillancePack';
-import { intruderPackTemplateList } from './intruderAlarmPack';
+import { pacificCompletionTemplateList } from './pacificCompletionPacks';
+import { sdpTemplateList } from './systemDesignProposal';
 import { getPackFormSchema, isPackFormKey } from './packFormSchemas';
 
 export type HandoverFormFieldType = 'text' | 'textarea' | 'date' | 'email' | 'select' | 'checkbox';
@@ -154,13 +154,13 @@ const GENERIC_TEMPLATES: Record<string, HandoverFormTemplate> = {
 
 export const HANDOVER_FORM_TEMPLATES: Record<string, HandoverFormTemplate> = {
   ...GENERIC_TEMPLATES,
-  ...Object.fromEntries(intruderPackTemplateList().map(item => [item.key, item])),
-  ...Object.fromEntries(cctvPackTemplateList().map(item => [item.key, item])),
+  ...Object.fromEntries(sdpTemplateList().map(item => [item.key, item])),
+  ...Object.fromEntries(pacificCompletionTemplateList().map(item => [item.key, item])),
 };
 
 export const HANDOVER_FORM_TEMPLATE_LIST = [
-  ...intruderPackTemplateList(),
-  ...cctvPackTemplateList(),
+  ...sdpTemplateList(),
+  ...pacificCompletionTemplateList(),
   ...Object.values(GENERIC_TEMPLATES),
 ];
 
@@ -170,7 +170,11 @@ export function isHandoverFormTemplateKey(key: string | null | undefined): key i
 
 export function inferFormTemplateKey(title: string): string {
   const value = title.toLowerCase();
-  if (/\bcv01\b/.test(value) || (/cctv/.test(value) && /as-fitted|as fitted|camera schedule/.test(value))) return 'cv01_as_fitted';
+  if (/\bsdp\b|system design proposal/.test(value)) return 'sdp';
+  if (/\bcc01\b|cctv completion/.test(value) || (/cctv/.test(value) && /handover|completion/.test(value))) return 'cc01_completion';
+  if (/\bac01\b|access control completion/.test(value) || (/access/.test(value) && /handover|completion/.test(value))) return 'ac01_completion';
+  if (/\bia01\b|intruder alarm completion/.test(value) || (/intruder/.test(value) && /handover|completion/.test(value))) return 'ia01_completion';
+  if (/\bcv01\b/.test(value) || (/cctv/.test(value) && /as-fitted|as fitted|camera schedule/.test(value))) return 'cc01_completion';
   if (/\bcv02\b/.test(value) || (/cctv/.test(value) && /camera and infrastructure|image and infrastructure/.test(value))) return 'cv02_cameras';
   if (/\bcv03\b/.test(value) || (/cctv/.test(value) && /commissioning/.test(value))) return 'cv03_commissioning';
   if (/\bcv04\b/.test(value) || (/cctv/.test(value) && /recording|export|nvr|dvr/.test(value))) return 'cv04_recording';

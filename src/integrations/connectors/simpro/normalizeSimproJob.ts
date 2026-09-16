@@ -8,6 +8,7 @@ import {
 } from '../../models/ImportReviewDraft';
 import { createSystemDraft } from '../../models/ImportSystemDraft';
 import type { ImportEquipmentDraft } from '../../models/ImportEquipmentDraft';
+import { mapSimproJobFields } from '../../../lib/simproJobFields';
 import {
   buildSimproSystemMergeKey,
   cleanTextField,
@@ -16,7 +17,6 @@ import {
   mapSimproCatalogLine,
   pickNestedName,
   pickProjectName,
-  pickScopeOfWorks,
   pickSimproCostCentreCatalogLines,
   pickSimproCostCentreLocation,
   pickSimproCostCentreName,
@@ -73,22 +73,33 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
     throw new Error('Simpro job payload is not an object.');
   }
 
+  const mapped = mapSimproJobFields(record);
   const issues: ImportReviewIssue[] = [];
-  const jobId = pickSimproJobId(record, options.jobId);
-  const jobNumber = pickSimproJobNumber(record);
-  const scopeOfWorks = pickScopeOfWorks(record);
+  const jobId = mapped.jobId ?? pickSimproJobId(record, options.jobId);
+  const jobNumber = mapped.jobNumber ?? pickSimproJobNumber(record);
+  const scopeOfWorks = mapped.scopeOfWorks;
 
   const project = {
     ...createEmptyProjectDraft(),
-    projectName: pickProjectName(record),
-    clientName: pickNestedName(record.Customer),
-    siteName: pickNestedName(record.Site),
-    siteAddress: asRecord(record.Site) ? pickSiteAddress(asRecord(record.Site)!) : null,
+    projectName: mapped.projectTitle ?? pickProjectName(record),
+    clientName: mapped.customerOrganisation ?? pickNestedName(record.Customer),
+    siteName: mapped.siteName ?? pickNestedName(record.Site),
+    siteAddress: mapped.siteAddress ?? (asRecord(record.Site) ? pickSiteAddress(asRecord(record.Site)!) : null),
     jobNumber,
+    quoteNumber: mapped.quoteNumber,
     projectNumber: jobId,
-    projectManager: pickNestedName(record.ProjectManager),
+    projectManager: mapped.projectManager ?? pickNestedName(record.ProjectManager),
+    engineer: mapped.engineer,
     projectSummary: scopeOfWorks,
-    projectNotes: cleanTextField(record.Notes),
+    projectNotes: [
+      cleanTextField(record.Notes),
+      mapped.scopeSources.length
+        ? `Simpro sources:\n${mapped.scopeSources.map(source => `- ${source.label} (${source.path})`).join('\n')}`
+        : null,
+      mapped.missing.length
+        ? `Incomplete Simpro fields:\n${mapped.missing.map(item => `- ${item}`).join('\n')}`
+        : null,
+    ].filter(Boolean).join('\n\n') || null,
   };
 
   if (!project.projectName) {
@@ -102,7 +113,7 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
   if (!scopeOfWorks) {
     issues.push({
       code: 'simpro.missing_scope',
-      message: 'Simpro job Description is empty — Scope of Works could not be populated.',
+      message: 'Simpro Description, Info custom fields and Notes are empty — Scope of Works could not be populated.',
       severity: 'warning',
     });
   }

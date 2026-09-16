@@ -1,17 +1,16 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useParams } from 'react-router-dom';
-import { jsPDF } from 'jspdf';
 import { CheckCircle, Loader2 } from 'lucide-react';
 import { SignaturePad } from '../components/SignaturePad';
 import { SchemaForm } from '../components/SchemaForm';
-import { FormLetterhead, WorksheetField, PACIFIC_LOGO_SRC } from '../components/FormLetterhead';
-import { fetchPublicContractorBrand, formatContractorAddress, formatContractorContact, imageUrlToDataUrl, type ContractorBrand } from '../lib/contractorBrand';
+import { FormLetterhead, WorksheetField } from '../components/FormLetterhead';
+import { fetchPublicContractorBrand, type ContractorBrand } from '../lib/contractorBrand';
 import { getPublicHandoverForm, saveHandoverFormDraft, submitPublicHandoverForm } from '../lib/handoverFormsApi';
 import { getHandoverFormTemplate, type HandoverFormField } from '../lib/handoverFormTemplates';
 import { getPackFormSchema, packCustomerSignatureNotice } from '../lib/packFormSchemas';
+import { buildPacificPdf } from '../lib/pacificPdf';
 import {
   applySchemaPrefill,
-  flattenAnswersForPdf,
   mergeSavedAnswers,
   primarySignatureDataUrl,
   primarySignerName,
@@ -62,127 +61,6 @@ function jobRefFromAnswers(
   );
 }
 
-function pdfImageFormat(dataUrl: string): 'PNG' | 'JPEG' {
-  return /image\/jpe?g/i.test(dataUrl) ? 'JPEG' : 'PNG';
-}
-
-function drawLetterhead(
-  doc: jsPDF,
-  brand: ContractorBrand | null,
-  logoDataUrl: string | null,
-  title: string,
-  jobRef: string,
-): number {
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const address = formatContractorAddress(brand);
-  const contact = formatContractorContact(brand);
-
-  doc.setFillColor(192, 0, 0);
-  doc.rect(pageWidth - 18, 0, 18, 42, 'F');
-  doc.circle(pageWidth - 24, 12, 1.4, 'F');
-  doc.circle(pageWidth - 24, 17, 1.4, 'F');
-  doc.circle(pageWidth - 24, 22, 1.4, 'F');
-
-  if (logoDataUrl) {
-    try {
-      doc.addImage(logoDataUrl, pdfImageFormat(logoDataUrl), 14, 10, 62, 16);
-    } catch {
-      /* logo optional */
-    }
-  }
-
-  const textX = 14;
-  let infoY = logoDataUrl ? 30 : 16;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7);
-  doc.setTextColor(192, 0, 0);
-  doc.text('SPECIALISTS IN FIRE; EXPERTS IN SECURITY.', textX, infoY);
-  infoY += 4;
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(64, 64, 64);
-  if (address) {
-    const lines = doc.splitTextToSize(address, 120);
-    doc.text(lines, textX, infoY);
-    infoY += lines.length * 3.2;
-  }
-  if (contact) {
-    doc.text(contact, textX, infoY);
-    infoY += 4;
-  }
-
-  if (jobRef) {
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7);
-    doc.setTextColor(192, 0, 0);
-    doc.text('JOB / SITE REF', pageWidth - 22, 12, { align: 'right' });
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    doc.setTextColor(64, 64, 64);
-    const jobLines = doc.splitTextToSize(jobRef, 40);
-    doc.text(jobLines, pageWidth - 22, 17, { align: 'right' });
-  }
-
-  infoY = Math.max(infoY, 36);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.setTextColor(192, 0, 0);
-  const titleLines = doc.splitTextToSize(title.toUpperCase(), pageWidth - 40);
-  doc.text(titleLines, 14, infoY + 4);
-  doc.setTextColor(64, 64, 64);
-  return infoY + 4 + titleLines.length * 6 + 4;
-}
-
-function addPdfLines(doc: jsPDF, lines: { label: string; value: string; image?: string }[], startY: number): number {
-  const pageWidth = doc.internal.pageSize.getWidth();
-  let y = startY;
-  for (const line of lines) {
-    if (y > 262) {
-      doc.addPage();
-      y = 16;
-    }
-    if (!line.value) {
-      doc.setFillColor(192, 0, 0);
-      doc.rect(14, y, pageWidth - 28, 7, 'F');
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(8);
-      doc.text(line.label.toUpperCase(), 16, y + 4.8);
-      doc.setTextColor(64, 64, 64);
-      y += 9;
-      continue;
-    }
-    doc.setDrawColor(64, 64, 64);
-    doc.setLineWidth(0.3);
-    const valueLines = doc.splitTextToSize(line.value || '—', pageWidth - 34);
-    const boxHeight = Math.max(12, 6 + valueLines.length * 4.2);
-    doc.rect(14, y, pageWidth - 28, boxHeight);
-    doc.setFillColor(217, 217, 217);
-    doc.rect(14, y, pageWidth - 28, 5, 'F');
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7);
-    doc.setTextColor(64, 64, 64);
-    doc.text(line.label.toUpperCase(), 16, y + 3.6);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    doc.text(valueLines, 16, y + 9);
-    y += boxHeight + 2;
-    if (line.image) {
-      if (y > 230) {
-        doc.addPage();
-        y = 16;
-      }
-      try {
-        doc.addImage(line.image, pdfImageFormat(line.image), 16, y, 70, 24);
-        y += 28;
-      } catch {
-        y += 4;
-      }
-    }
-  }
-  return y;
-}
-
 async function buildSignedPdf(opts: {
   title: string;
   brand: ContractorBrand | null;
@@ -193,61 +71,26 @@ async function buildSignedPdf(opts: {
   schema?: SchemaCatalogue | null;
   jobRef?: string;
 }): Promise<{ fileName: string; pdfBase64: string }> {
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
-  const logoDataUrl = await imageUrlToDataUrl(`${window.location.origin}${PACIFIC_LOGO_SRC}`);
-  let y = drawLetterhead(doc, opts.brand, logoDataUrl, opts.title, opts.jobRef ?? '');
-
-  doc.setFont('helvetica', 'italic');
-  doc.setFontSize(8);
-  doc.setTextColor(100, 116, 139);
-  doc.text('Complete all applicable sections. Use N/A where appropriate.', 14, y);
-  y += 6;
-  doc.setTextColor(15, 23, 42);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
-
-  if (opts.schema) {
-    y = addPdfLines(doc, flattenAnswersForPdf(opts.schema, opts.answers as FormAnswers), y);
-  } else {
-    y = addPdfLines(
-      doc,
-      (opts.fields ?? []).map(field => {
-        const raw = opts.answers[field.key];
-        const value = typeof raw === 'boolean' ? (raw ? 'Yes' : 'No') : String(raw ?? '').trim() || '—';
-        return { label: field.label, value };
-      }),
-      y,
-    );
-  }
-
-  if (!opts.schema) {
-    if (y > 220) {
-      doc.addPage();
-      y = 16;
-    }
-    const pageWidth = doc.internal.pageSize.getWidth();
-    doc.setFillColor(192, 0, 0);
-    doc.rect(14, y, pageWidth - 28, 7, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8);
-    doc.text('SIGN-OFF', 16, y + 4.8);
-    doc.setTextColor(15, 23, 42);
-    y += 10;
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    doc.text(opts.signerName, 16, y);
-    y += 4;
-    try {
-      if (opts.signatureDataUrl) doc.addImage(opts.signatureDataUrl, 'PNG', 16, y, 80, 28);
-    } catch {
-      doc.text('(Signature captured)', 16, y + 8);
-    }
-  }
-
-  const fileName = `${opts.title.replace(/[^\w]+/g, '_')}_${Date.now()}.pdf`;
-  const dataUri = doc.output('datauristring') as string;
-  return { fileName, pdfBase64: dataUri.split(',')[1] ?? '' };
+  const lines = opts.schema
+    ? undefined
+    : [
+        ...(opts.fields ?? []).map(field => {
+          const raw = opts.answers[field.key];
+          const value = typeof raw === 'boolean' ? (raw ? 'Yes' : 'No') : String(raw ?? '').trim() || '—';
+          return { label: field.label, value };
+        }),
+        { label: 'SIGN-OFF', value: '' },
+        { label: 'Signer', value: opts.signerName, image: opts.signatureDataUrl || undefined },
+      ];
+  const pdf = await buildPacificPdf({
+    title: opts.title,
+    brand: opts.brand,
+    answers: opts.answers,
+    schema: opts.schema,
+    lines,
+    jobRef: opts.jobRef,
+  });
+  return { fileName: pdf.fileName, pdfBase64: pdf.pdfBase64 };
 }
 
 export default function PublicHandoverFormPage() {

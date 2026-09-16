@@ -27,6 +27,8 @@ import AsBuiltDrawingsPage from './pages/AsBuiltDrawingsPage';
 import PublicHandoverFormPage from './pages/PublicHandoverFormPage';
 import { UsersPage } from './pages/UsersPage';
 import { ProjectInvitePage } from './pages/ProjectInvitePage';
+import SdpPage from './pages/SdpPage';
+import DocumentReturnPage from './pages/DocumentReturnPage';
 import { UserAccessProvider, useUserAccess } from './lib/userAccess';
 import { defaultHomePath, isEndUser } from './lib/appRoles';
 import { RequireAccess } from './components/RequireAccess';
@@ -63,12 +65,24 @@ function App() {
 
   const isPublicFormPath = typeof window !== 'undefined' && window.location.pathname.startsWith('/f/');
   const isInvitePath = typeof window !== 'undefined' && window.location.pathname.startsWith('/i/');
+  const isReturnPath = typeof window !== 'undefined' && window.location.pathname.startsWith('/r/');
 
   if (isPublicFormPath) {
     return (
       <BrowserRouter>
         <Routes>
           <Route path="/f/:token" element={<PublicHandoverFormPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    );
+  }
+
+  if (isReturnPath) {
+    return (
+      <BrowserRouter>
+        <Routes>
+          <Route path="/r/:token" element={<DocumentReturnPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
@@ -136,6 +150,7 @@ function AuthedApp({
     <BrowserRouter>
       <Routes>
         <Route path="/f/:token" element={<PublicHandoverFormPage />} />
+        <Route path="/r/:token" element={<DocumentReturnPage />} />
         <Route path="/i/:token" element={<ProjectInvitePage />} />
         <Route path="/" element={<Layout companyName={companyName} userEmail={userEmail} onSignOut={onSignOut} />}>
           <Route index element={<Navigate to={defaultHomePath(role)} replace />} />
@@ -153,6 +168,7 @@ function AuthedApp({
             <Route path="schedule" element={<DeviceSchedulePage />} />
             <Route path="technical" element={<TechnicalDocsPage />} />
             <Route path="commissioning" element={<CommissioningPage />} />
+            <Route path="sdp" element={<SdpPage />} />
             <Route path="handover" element={<HandoverPage />} />
             <Route path="safetyculture" element={<Navigate to="../handover" replace />} />
             <Route path="datasheets" element={<ProjectDatasheetsPage />} />

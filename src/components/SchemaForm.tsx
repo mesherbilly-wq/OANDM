@@ -195,6 +195,7 @@ function SchemaFieldControl({
           value={String(signature.dataUrl ?? '')}
           onChange={dataUrl => onChange({ ...signature, dataUrl, signedAt: new Date().toISOString() })}
         />
+        <p className="text-[10px] text-slate-500">Drawn image bound to this revision — not a verified digital signature.</p>
       </div>
     );
   }

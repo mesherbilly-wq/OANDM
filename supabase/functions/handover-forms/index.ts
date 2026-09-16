@@ -285,5 +285,26 @@ Deno.serve(async (req) => {
     });
   }
 
+  if (action === "send_pack") {
+    const to = String(body.to ?? "").trim();
+    const subject = String(body.subject ?? "Completion pack");
+    const text = String(body.body ?? "");
+    if (!to) return json({ error: "Missing recipient" }, 400);
+    const apiKey = Deno.env.get("RESEND_API_KEY");
+    const from = Deno.env.get("HANDOVER_FORMS_FROM_EMAIL") ?? Deno.env.get("RESEND_FROM_EMAIL");
+    if (!apiKey || !from) {
+      return json({ ok: false, emailed: false, reason: "RESEND_API_KEY or from address is not configured" });
+    }
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ from, to: [to], subject, text }),
+    });
+    return json({ ok: res.ok, emailed: res.ok, status: res.status });
+  }
+
   return json({ error: `Unknown action: ${action}` }, 400);
 });

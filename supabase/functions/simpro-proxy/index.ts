@@ -305,6 +305,48 @@ async function fetchJobList(
   return { ok: true, status: parsed.status, raw: parsed.raw, url };
 }
 
+async function fetchJsonOrNull(config: SimproConfig, path: string): Promise<unknown | null> {
+  const url = buildApiUrl(config.baseUrl, config.companyId, path);
+  const r = await simproFetch(url, config.apiToken).catch(() => null);
+  if (!r?.ok) return null;
+  const parsed = await readSimproJson(r, url, config.apiToken);
+  return parsed.ok ? parsed.raw : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+async function enrichJobPayload(config: SimproConfig, raw: unknown): Promise<unknown> {
+  const job = asRecord(raw);
+  if (!job) return raw;
+
+  const customFields = job.CustomFields ?? job.customFields;
+  const hasCustomFields = Array.isArray(customFields) && customFields.length > 0;
+  if (!hasCustomFields) {
+    const jobId = String(job.ID ?? job.Id ?? job.id ?? "").trim();
+    if (jobId) {
+      const extra = await fetchJsonOrNull(config, `/jobs/${jobId}/customFields/`);
+      if (extra) job.CustomFields = extra;
+    }
+  }
+
+  const site = job.Site;
+  const siteId = typeof site === "number" || typeof site === "string"
+    ? String(site)
+    : String(asRecord(site)?.ID ?? asRecord(site)?.Id ?? asRecord(site)?.id ?? "").trim();
+  const siteRecord = asRecord(site);
+  const hasAddress = Boolean(siteRecord && (siteRecord.Address || siteRecord.address || asRecord(siteRecord.Address)));
+  if (siteId && !hasAddress) {
+    const siteDetail = await fetchJsonOrNull(config, `/sites/${siteId}`);
+    if (siteDetail && typeof siteDetail === "object") {
+      job.Site = { ...(siteRecord ?? { ID: siteId }), ...(siteDetail as Record<string, unknown>) };
+    }
+  }
+
+  return job;
+}
+
 function simproFailureJson(parsed: {
   error: string;
   status: number;
@@ -481,10 +523,24 @@ Deno.serve(async (req: Request) => {
       return simproFailureJson(parsed);
     }
 
+    const enriched = await enrichJobPayload(config, parsed.raw);
     return json({
       ok: true,
       job_id: jobId,
-      raw: parsed.raw,
+      raw: enriched,
+      field_map: {
+        Description: "jobs.Description (HTML; primary scope of works)",
+        Notes: "jobs.Notes (HTML; supplementary)",
+        CustomFields: "jobs.CustomFields[] or GET /jobs/{id}/customFields/ — Name/Value; Info-named fields join the SDP scope",
+        Customer: "jobs.Customer.Name / CompanyName",
+        CustomerContact: "jobs.CustomerContact.GivenName + FamilyName",
+        Site: "jobs.Site then GET /sites/{id} for Address",
+        JobNo: "jobs.JobNo (user-facing job number)",
+        Name: "jobs.Name (project title)",
+        Technicians: "jobs.Technicians[0].Name (engineer)",
+        ProjectManager: "jobs.ProjectManager.Name",
+        ConvertedFromQuote: "jobs.ConvertedFromQuote.ID / ConvertedFrom when Type=Quote",
+      },
     });
   }
 

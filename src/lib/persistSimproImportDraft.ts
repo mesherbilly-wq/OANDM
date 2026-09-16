@@ -23,6 +23,7 @@ import {
   enrichDeviceRowsWithAutoManufacturer,
   type DeviceRowForManufacturerLookup,
 } from './autoManufacturerLookup';
+import { buildSdpAnswers, buildSdpSnapshot } from './sdpAnswers';
 
 const DEVICE_INSERT_BATCH = 100;
 const SOURCE_DOCUMENT = 'Simpro Import';
@@ -175,8 +176,10 @@ export async function persistSimproImportReviewDraft(
       site_name: nullIfEmpty(draft.project.siteName),
       site_address: nullIfEmpty(draft.project.siteAddress),
       job_number: nullIfEmpty(draft.project.jobNumber),
+      quote_number: nullIfEmpty(draft.project.quoteNumber),
       project_number: nullIfEmpty(draft.project.projectNumber),
       project_manager: nullIfEmpty(draft.project.projectManager),
+      engineer: nullIfEmpty(draft.project.engineer),
       project_notes: nullIfEmpty(draft.project.projectNotes),
       project_status: 'active',
     })
@@ -278,6 +281,55 @@ export async function persistSimproImportReviewDraft(
     if (asFittedError && !/does not exist|schema cache/i.test(asFittedError.message)) {
       throw new Error(`Project created but as-fitted quote lines failed to save: ${asFittedError.message}`);
     }
+  }
+
+  try {
+    const sdpAnswers = buildSdpAnswers({
+      project: {
+        project_name: draft.project.projectName,
+        client_name: draft.project.clientName,
+        site_name: draft.project.siteName,
+        site_address: draft.project.siteAddress,
+        job_number: draft.project.jobNumber,
+        quote_number: draft.project.quoteNumber,
+        project_manager: draft.project.projectManager,
+        engineer: draft.project.engineer,
+        project_notes: draft.project.projectNotes,
+      },
+      scopeText: scopeContent,
+      equipment: asFittedRows.map(item => ({
+        item: String(item.quoted_description ?? ''),
+        qty_proposed: item.quoted_quantity as number | null,
+        source: item.source_quote_line_id ? `Simpro line ${item.source_quote_line_id}` : 'Simpro quote line',
+      })),
+      discipline: draft.systems.filter(system => system.selected).map(system => system.name).join(', ') || undefined,
+    });
+    await supabase.from('sdp_revisions').insert({
+      project_id: project.id,
+      revision_no: 1,
+      kind: 'proposed',
+      status: 'draft',
+      answers: sdpAnswers,
+      source_snapshot: buildSdpSnapshot({
+        project_name: draft.project.projectName,
+        client_name: draft.project.clientName,
+        site_address: draft.project.siteAddress,
+        job_number: draft.project.jobNumber,
+        quote_number: draft.project.quoteNumber,
+        project_manager: draft.project.projectManager,
+        engineer: draft.project.engineer,
+      }, scopeContent),
+    });
+    await supabase.from('project_handover_docs').upsert({
+      project_id: project.id,
+      document_type: 'sdp',
+      title: 'System Design Proposal (SDP)',
+      status: 'in_progress',
+      workflow_status: 'draft',
+      revision_no: 1,
+    }, { onConflict: 'project_id,document_type,system_type' });
+  } catch {
+    /* SDP tables are created by migration 036 */
   }
 
   return { projectId: project.id as number };
