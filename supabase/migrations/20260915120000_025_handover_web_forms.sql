@@ -167,5 +167,9 @@ END
 WHERE sc_enabled = true
   AND upload_only = false
   AND (sc_template_id IS NULL OR sc_template_id NOT IN (
-    'handover_certificate', 'training_record', 'commissioning_sheet', 'test_record', 'keyholder_confirmation', 'intruder_alarm_master'
+    'handover_certificate', 'training_record', 'commissioning_sheet', 'test_record', 'keyholder_confirmation',
+    'intruder_alarm_master',
+    'ia01_as_fitted', 'ia02_readings', 'ia03_commissioning', 'ia04_arc', 'ia05_changes', 'ia06_training',
+    'ia07_handover', 'ia08_log', 'ia09_support', 'ia10_release', 'ia11_takeover', 'ia12_upgrade',
+    'ia13_transfer', 'ia14_maintenance'
   ));

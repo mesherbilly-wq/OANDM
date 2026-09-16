@@ -1,8 +1,8 @@
-import schemaJson from './intruderAlarmFormSchema.json';
-
 export type SchemaShowWhen = {
   anyWorkType?: string[];
   feature?: string;
+  fieldEquals?: { section: string; field: string; values: string[] };
+  checkboxTrue?: { section: string; field: string };
 } | null;
 
 export interface SchemaField {
@@ -32,7 +32,6 @@ export type FormAnswers = Record<string, unknown>;
 export type FormRow = Record<string, unknown> & { _rowId: string };
 
 export const INTRUDER_ALARM_FORM_KEY = 'intruder_alarm_master';
-export const INTRUDER_ALARM_SCHEMA = schemaJson as SchemaCatalogue;
 
 export const TEST_RESULT_OPTIONS = ['pass', 'fail', 'not_applicable', 'not_tested'] as const;
 
@@ -123,7 +122,23 @@ export function isSectionVisible(section: SchemaSection, answers: FormAnswers): 
   if (when.feature && !featuresOf(answers).includes(when.feature)) {
     return false;
   }
+  if (when.fieldEquals) {
+    const record = sectionRecord(answers, when.fieldEquals.section);
+    const value = String(record[when.fieldEquals.field] ?? '');
+    if (!when.fieldEquals.values.includes(value)) return false;
+  }
+  if (when.checkboxTrue) {
+    const record = sectionRecord(answers, when.checkboxTrue.section);
+    if (record[when.checkboxTrue.field] !== true) return false;
+  }
   return true;
+}
+
+function sectionRecord(answers: FormAnswers, sectionId: string): Record<string, unknown> {
+  const value = answers[sectionId];
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 export function visibleSections(schema: SchemaCatalogue, answers: FormAnswers): SchemaSection[] {
@@ -140,11 +155,38 @@ export function constrainWorkTypes(next: string[]): string[] {
   return unique;
 }
 
-export function applySchemaPrefill(prefill: Record<string, string>, companyName?: string | null): FormAnswers {
+const IA06_TOPIC_SEEDS = [
+  'Protection, limitations and authorised use',
+  'Setting, unsetting and part setting',
+  'Alarm reset, faults and omitted zones',
+  'Hold-up functions and confirmation where fitted',
+  'False-alarm prevention and safe user checks',
+  'Logbook, support and maintenance arrangements',
+  'App / remote access and secure credential receipt',
+];
+
+const IA10_MANIFEST_SEEDS = [
+  'As-fitted record and drawings',
+  'Readings, calculations and test results',
+  'Changes, defects and retest evidence',
+  'Training and handover acceptance',
+  'User instructions and logbook',
+  'Maintenance / warranty information',
+  'Takeover / upgrade / transfer records',
+  'Official NSI certificate (number / date)',
+];
+
+export function emptyAnswers(schema: SchemaCatalogue): FormAnswers {
   const answers: FormAnswers = {};
-  for (const section of INTRUDER_ALARM_SCHEMA.sections) {
+  for (const section of schema.sections) {
     if (section.repeatable) {
-      answers[section.id] = [emptyRow(section)];
+      if (section.id === 'topics') {
+        answers[section.id] = IA06_TOPIC_SEEDS.map(topic => ({ ...emptyRow(section), topic }));
+      } else if (section.id === 'manifest') {
+        answers[section.id] = IA10_MANIFEST_SEEDS.map(document_name => ({ ...emptyRow(section), document_name }));
+      } else {
+        answers[section.id] = [emptyRow(section)];
+      }
       continue;
     }
     const record: Record<string, unknown> = {};
@@ -153,19 +195,60 @@ export function applySchemaPrefill(prefill: Record<string, string>, companyName?
     }
     answers[section.id] = record;
   }
+  return answers;
+}
 
-  const project = projectRecord(answers);
-  project.project_reference = prefill.job_number || prefill.project_reference || '';
-  project.site_name = prefill.site_name || '';
-  project.site_address = prefill.site_address || '';
-  project.customer_name = prefill.client_name || prefill.customer_name || '';
-  project.customer_representative = prefill.project_manager || prefill.customer_representative || '';
-  project.scope = prefill.scope || '';
-  project.engineer_name = prefill.engineer || prefill.engineer_name || '';
-  project.company = companyName || prefill.company || '';
-  project.contract_reference = prefill.quote_number || prefill.contract_reference || '';
-  project.system_reference = prefill.job_number || '';
-  answers.project = project;
+const PREFILL_FIELD_MAP: Record<string, string[]> = {
+  site_building: ['site_name', 'project_name'],
+  job_system_ref: ['job_number', 'project_reference'],
+  site_name: ['site_name'],
+  site_address: ['site_address'],
+  installation_address: ['site_address'],
+  customer_organisation: ['client_name', 'customer_name'],
+  customer_name: ['client_name', 'customer_name'],
+  customer_name_role: ['client_name', 'customer_representative'],
+  customer_representative: ['project_manager', 'customer_representative'],
+  engineer_name: ['engineer', 'engineer_name'],
+  survey_engineer: ['engineer'],
+  trainer_name: ['engineer'],
+  company: ['company'],
+  project_reference: ['job_number'],
+  system_reference: ['job_number'],
+  quote_id: ['quote_number'],
+  quote_variation: ['quote_number'],
+  contract_reference: ['quote_number'],
+};
+
+export function applySchemaPrefill(
+  schema: SchemaCatalogue,
+  prefill: Record<string, string>,
+  companyName?: string | null,
+): FormAnswers {
+  const answers = emptyAnswers(schema);
+  const source: Record<string, string> = {
+    ...prefill,
+    company: companyName || prefill.company || '',
+  };
+
+  for (const section of schema.sections) {
+    if (section.repeatable) continue;
+    const record = sectionRecord(answers, section.id);
+    for (const field of section.fields) {
+      if (field.id === 'quote_note') {
+        record[field.id] = 'A quote is a proposed baseline. Confirm the actual installation before issuing the as-fitted record. Quoted quantity is not installed proof.';
+        continue;
+      }
+      const keys = PREFILL_FIELD_MAP[field.id];
+      if (!keys) continue;
+      for (const key of keys) {
+        if (source[key]) {
+          record[field.id] = source[key];
+          break;
+        }
+      }
+    }
+    answers[section.id] = record;
+  }
   return answers;
 }
 
@@ -291,21 +374,41 @@ function formatValue(value: unknown): string {
   return String(value);
 }
 
-export function primarySignerName(answers: FormAnswers): string {
-  const release = answers.release as Record<string, unknown> | undefined;
-  const declaration = release?.engineer_declaration as { signerName?: string } | undefined;
-  if (declaration?.signerName?.trim()) return declaration.signerName.trim();
-  const training = Array.isArray(answers.training) ? answers.training[0] as Record<string, unknown> | undefined : undefined;
-  const engineerSig = training?.engineer_signature as { signerName?: string } | undefined;
-  if (engineerSig?.signerName?.trim()) return engineerSig.signerName.trim();
-  return String(projectRecord(answers).engineer_name ?? '').trim();
+export function findSignatures(schema: SchemaCatalogue, answers: FormAnswers): Array<{
+  label: string;
+  required: boolean;
+  signerName: string;
+  dataUrl: string;
+}> {
+  const found: Array<{ label: string; required: boolean; signerName: string; dataUrl: string }> = [];
+  for (const section of visibleSections(schema, answers)) {
+    const rows = section.repeatable
+      ? (Array.isArray(answers[section.id]) ? answers[section.id] as FormRow[] : [])
+      : [sectionRecord(answers, section.id)];
+    for (const row of rows) {
+      for (const field of section.fields) {
+        if (field.type !== 'signature') continue;
+        const signature = row[field.id] as { signerName?: string; dataUrl?: string } | undefined;
+        found.push({
+          label: field.label,
+          required: Boolean(field.required),
+          signerName: String(signature?.signerName ?? '').trim(),
+          dataUrl: String(signature?.dataUrl ?? ''),
+        });
+      }
+    }
+  }
+  return found;
 }
 
-export function primarySignatureDataUrl(answers: FormAnswers): string {
-  const release = answers.release as Record<string, unknown> | undefined;
-  const declaration = release?.engineer_declaration as { dataUrl?: string } | undefined;
-  if (declaration?.dataUrl) return declaration.dataUrl;
-  const training = Array.isArray(answers.training) ? answers.training[0] as Record<string, unknown> | undefined : undefined;
-  const engineerSig = training?.engineer_signature as { dataUrl?: string } | undefined;
-  return engineerSig?.dataUrl || '';
+export function primarySignerName(schema: SchemaCatalogue, answers: FormAnswers): string {
+  const signatures = findSignatures(schema, answers);
+  const named = signatures.find(item => item.signerName) || signatures[0];
+  if (named?.signerName) return named.signerName;
+  return String(sectionRecord(answers, 'header').job_system_ref ?? sectionRecord(answers, 'meta').engineer_name ?? '').trim();
+}
+
+export function primarySignatureDataUrl(schema: SchemaCatalogue, answers: FormAnswers): string {
+  const signatures = findSignatures(schema, answers);
+  return signatures.find(item => item.dataUrl)?.dataUrl || '';
 }

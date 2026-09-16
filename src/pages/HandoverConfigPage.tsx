@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase';
 import migration024Sql from '../../supabase/migrations/20260626150000_024_handover_document_config.sql?raw';
 import migration025Sql from '../../supabase/migrations/20260915120000_025_handover_web_forms.sql?raw';
 import migration026Sql from '../../supabase/migrations/20260916120000_026_intruder_master_form.sql?raw';
+import migration027Sql from '../../supabase/migrations/20260916130000_027_intruder_ia_pack.sql?raw';
 
 import {
   DEFAULT_SC_FIELD_MAPPINGS,
@@ -40,8 +41,10 @@ export default function HandoverConfigPage() {
   const [draftDef, setDraftDef] = useState<Partial<HandoverDocumentDefinition>>({});
 
   const pendingMigrationSql = localConfigOnly
-    ? `${migration024Sql}\n\n${migration025Sql}\n\n${migration026Sql}`
-    : `${migration025Sql}\n\n${migration026Sql}`;
+    ? `${migration024Sql}\n\n${migration025Sql}\n\n${migration026Sql}\n\n${migration027Sql}`
+    : formsMigrationNeeded
+      ? `${migration025Sql}\n\n${migration026Sql}\n\n${migration027Sql}`
+      : migration027Sql;
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -64,7 +67,7 @@ export default function HandoverConfigPage() {
 
   const typeDefinitions = useMemo(
     () => definitions
-      .filter(def => def.type_key === selectedTypeKey)
+      .filter(def => def.type_key === selectedTypeKey && def.is_active)
       .sort((a, b) => a.display_order - b.display_order || a.title.localeCompare(b.title)),
     [definitions, selectedTypeKey],
   );
@@ -213,7 +216,11 @@ export default function HandoverConfigPage() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = localConfigOnly ? 'handover-024-025-026.sql' : 'handover-025-026.sql';
+    link.download = localConfigOnly
+      ? 'handover-024-027.sql'
+      : formsMigrationNeeded
+        ? 'handover-025-027.sql'
+        : 'handover-027-intruder-ia-pack.sql';
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -234,6 +241,27 @@ export default function HandoverConfigPage() {
           Configure which document cards appear for each system document type. Link a browser form to each
           certificate or record so it can be emailed, filled online, signed, and saved into Documents.
         </p>
+        <div className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-3 mt-3 space-y-2">
+          <p className="font-semibold">Intruder Alarm pack IA01–IA14</p>
+          <p>
+            Run <strong>027_intruder_ia_pack.sql</strong> in Supabase to install the fillable pack.
+            The customer signs <strong>IA07</strong> once. Technical sheets are engineer or reviewer sign-off.
+            Extra customer acceptance appears only for design changes, reduced protection or incomplete tests.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard.writeText(migration027Sql).then(() => {
+                setMigrationCopied(true);
+                window.setTimeout(() => setMigrationCopied(false), 2500);
+              }).catch(() => setError('Clipboard is blocked. Use Download SQL file below.'));
+            }}
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 hover:bg-slate-100"
+          >
+            {migrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
+            {migrationCopied ? 'Copied 027 — paste in Supabase' : 'Copy 027 SQL'}
+          </button>
+        </div>
         {(localConfigOnly || formsMigrationNeeded) && (
           <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-3 mt-3 space-y-2">
             <p className="font-semibold">
@@ -244,7 +272,7 @@ export default function HandoverConfigPage() {
             <p>
               {localConfigOnly
                 ? 'Run migrations 024, 025 and 026 in Supabase so template links, emailed forms and as-fitted quote lines are shared for all users.'
-                : '024 is already in place. Run 025_handover_web_forms and 026_intruder_master_form in the SQL Editor, then refresh this page.'}
+                : '024 is already in place. Run 025, 026 and 027 in the SQL Editor, then refresh this page.'}
             </p>
             <ol className="list-decimal list-inside space-y-1 text-amber-900/90">
               <li>Open <strong>Supabase Dashboard → SQL Editor → New query</strong></li>
@@ -258,7 +286,7 @@ export default function HandoverConfigPage() {
                 className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 transition-colors"
               >
                 {migrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
-                {migrationCopied ? 'Copied — paste in Supabase SQL Editor' : (localConfigOnly ? 'Copy 024–026 SQL' : 'Copy 025 + 026 SQL')}
+                {migrationCopied ? 'Copied — paste in Supabase SQL Editor' : (localConfigOnly ? 'Copy 024–027 SQL' : (formsMigrationNeeded ? 'Copy 025–027 SQL' : 'Copy 027 SQL'))}
               </button>
               <button
                 type="button"

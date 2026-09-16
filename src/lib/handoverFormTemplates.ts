@@ -1,4 +1,5 @@
 import { INTRUDER_ALARM_FORM_KEY } from './schemaForm';
+import { getIntruderFormSchema, isIntruderPackFormKey, intruderPackTemplateList } from './intruderAlarmPack';
 
 export type HandoverFormFieldType = 'text' | 'textarea' | 'date' | 'email' | 'select' | 'checkbox';
 
@@ -35,7 +36,7 @@ const COMMON_PROJECT_FIELDS: HandoverFormField[] = [
   { key: 'site_address', label: 'Site address', type: 'textarea', prefillFrom: 'site_address' },
 ];
 
-export const HANDOVER_FORM_TEMPLATES: Record<string, HandoverFormTemplate> = {
+const GENERIC_TEMPLATES: Record<string, HandoverFormTemplate> = {
   handover_certificate: {
     key: 'handover_certificate',
     name: 'Handover / acceptance certificate',
@@ -88,7 +89,7 @@ export const HANDOVER_FORM_TEMPLATES: Record<string, HandoverFormTemplate> = {
   commissioning_sheet: {
     key: 'commissioning_sheet',
     name: 'Commissioning / system checks',
-    description: 'Engineer commissioning checks with customer acknowledgement.',
+    description: 'Engineer commissioning checks.',
     fields: [
       ...COMMON_PROJECT_FIELDS,
       { key: 'document_title', label: 'Document', type: 'text', prefillFrom: 'document_title' },
@@ -103,7 +104,7 @@ export const HANDOVER_FORM_TEMPLATES: Record<string, HandoverFormTemplate> = {
       },
       { key: 'checks_completed', label: 'Checks completed', type: 'textarea', required: true },
       { key: 'observations', label: 'Observations / snags', type: 'textarea' },
-      { key: 'signer_name', label: 'Acknowledged by', type: 'text', required: true },
+      { key: 'signer_name', label: 'Engineer name', type: 'text', required: true },
       { key: 'signer_role', label: 'Position', type: 'text' },
       { key: 'comments', label: 'Comments', type: 'textarea' },
     ],
@@ -111,7 +112,7 @@ export const HANDOVER_FORM_TEMPLATES: Record<string, HandoverFormTemplate> = {
   test_record: {
     key: 'test_record',
     name: 'Test record',
-    description: 'Functional test sheet with signature.',
+    description: 'Functional test sheet with engineer signature.',
     fields: [
       ...COMMON_PROJECT_FIELDS,
       { key: 'document_title', label: 'Document', type: 'text', prefillFrom: 'document_title' },
@@ -126,7 +127,7 @@ export const HANDOVER_FORM_TEMPLATES: Record<string, HandoverFormTemplate> = {
         options: ['Pass', 'Pass with observations', 'Fail'],
       },
       { key: 'defects', label: 'Defects', type: 'textarea' },
-      { key: 'signer_name', label: 'Signed by', type: 'text', required: true },
+      { key: 'signer_name', label: 'Engineer name', type: 'text', required: true },
       { key: 'signer_role', label: 'Position', type: 'text' },
     ],
   },
@@ -147,26 +148,39 @@ export const HANDOVER_FORM_TEMPLATES: Record<string, HandoverFormTemplate> = {
       { key: 'completion_date', label: 'Date', type: 'date', required: true },
     ],
   },
-  [INTRUDER_ALARM_FORM_KEY]: {
-    key: INTRUDER_ALARM_FORM_KEY,
-    name: 'Intruder alarm master form',
-    description: 'Engineer questionnaire for new installs, takeovers, upgrades and extensions. Draft only — not an NSI certificate.',
-    fields: [
-      ...COMMON_PROJECT_FIELDS,
-      { key: 'signer_name', label: 'Engineer name', type: 'text', required: true },
-    ],
-  },
 };
 
-export const HANDOVER_FORM_TEMPLATE_LIST = Object.values(HANDOVER_FORM_TEMPLATES);
+export const HANDOVER_FORM_TEMPLATES: Record<string, HandoverFormTemplate> = {
+  ...GENERIC_TEMPLATES,
+  ...Object.fromEntries(intruderPackTemplateList().map(item => [item.key, item])),
+};
+
+export const HANDOVER_FORM_TEMPLATE_LIST = [
+  ...intruderPackTemplateList(),
+  ...Object.values(GENERIC_TEMPLATES),
+];
 
 export function isHandoverFormTemplateKey(key: string | null | undefined): key is string {
-  return Boolean(key && HANDOVER_FORM_TEMPLATES[key]);
+  return Boolean(key && (HANDOVER_FORM_TEMPLATES[key] || isIntruderPackFormKey(key)));
 }
 
 export function inferFormTemplateKey(title: string): string {
   const value = title.toLowerCase();
-  if (/intruder/.test(value) && /completion|certificate|master/.test(value)) return INTRUDER_ALARM_FORM_KEY;
+  if (/\bia01\b|as-fitted|as fitted/.test(value)) return 'ia01_as_fitted';
+  if (/\bia02\b|electrical reading|parameters/.test(value)) return 'ia02_readings';
+  if (/\bia03\b|commissioning and verification/.test(value)) return 'ia03_commissioning';
+  if (/\bia04\b|arc signalling|signalling/.test(value)) return 'ia04_arc';
+  if (/\bia05\b|remedial|design change/.test(value)) return 'ia05_changes';
+  if (/\bia06\b|demonstration/.test(value)) return 'ia06_training';
+  if (/\bia07\b|handover acceptance/.test(value)) return 'ia07_handover';
+  if (/\bia08\b|event log|system history/.test(value)) return 'ia08_log';
+  if (/\bia09\b|support information/.test(value)) return 'ia09_support';
+  if (/\bia10\b|technical release|o&m index/.test(value)) return 'ia10_release';
+  if (/\bia11\b|takeover survey/.test(value)) return 'ia11_takeover';
+  if (/\bia12\b|upgrade and extension/.test(value)) return 'ia12_upgrade';
+  if (/\bia13\b|monitoring transfer/.test(value)) return 'ia13_transfer';
+  if (/\bia14\b|corrective work/.test(value)) return 'ia14_maintenance';
+  if (/intruder/.test(value) && /completion|certificate|master|handover/.test(value)) return 'ia07_handover';
   if (/train/.test(value)) return 'training_record';
   if (/keyholder/.test(value)) return 'keyholder_confirmation';
   if (/commissioning sheet|record of system checks/.test(value)) return 'commissioning_sheet';
@@ -187,5 +201,11 @@ export function formTemplateKeyForDefinition(def: {
 
 export function getHandoverFormTemplate(key: string | null | undefined): HandoverFormTemplate {
   if (key && HANDOVER_FORM_TEMPLATES[key]) return HANDOVER_FORM_TEMPLATES[key];
+  const schema = getIntruderFormSchema(key);
+  if (schema) {
+    return { key: key || 'ia07_handover', name: schema.title, description: schema.status, fields: [] };
+  }
   return HANDOVER_FORM_TEMPLATES.handover_certificate;
 }
+
+export { INTRUDER_ALARM_FORM_KEY };

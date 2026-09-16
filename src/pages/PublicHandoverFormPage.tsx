@@ -8,9 +8,8 @@ import { FormLetterhead, WorksheetField } from '../components/FormLetterhead';
 import { fetchPublicContractorBrand, formatContractorAddress, formatContractorContact, imageUrlToDataUrl, type ContractorBrand } from '../lib/contractorBrand';
 import { getPublicHandoverForm, saveHandoverFormDraft, submitPublicHandoverForm } from '../lib/handoverFormsApi';
 import { getHandoverFormTemplate, type HandoverFormField } from '../lib/handoverFormTemplates';
+import { getIntruderFormSchema } from '../lib/intruderAlarmPack';
 import {
-  INTRUDER_ALARM_FORM_KEY,
-  INTRUDER_ALARM_SCHEMA,
   applySchemaPrefill,
   flattenAnswersForPdf,
   mergeSavedAnswers,
@@ -18,6 +17,7 @@ import {
   primarySignerName,
   validateSchemaAnswers,
   type FormAnswers,
+  type SchemaCatalogue,
 } from '../lib/schemaForm';
 
 const worksheetInputClass = 'w-full border-0 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-inset focus:ring-slate-400';
@@ -49,15 +49,17 @@ function jobRefFromAnswers(
   simpleAnswers: Record<string, string | boolean>,
   schemaAnswers: FormAnswers,
 ): string {
-  const schemaSite = schemaAnswers.site && typeof schemaAnswers.site === 'object' && !Array.isArray(schemaAnswers.site)
-    ? schemaAnswers.site as Record<string, unknown>
+  const schemaSite = schemaAnswers.header && typeof schemaAnswers.header === 'object' && !Array.isArray(schemaAnswers.header)
+    ? schemaAnswers.header as Record<string, unknown>
     : {};
   return String(
     simpleAnswers.job_number
     || prefill.job_number
+    || schemaSite.job_system_ref
     || schemaSite.job_number
     || simpleAnswers.site_name
     || prefill.site_name
+    || schemaSite.site_building
     || schemaSite.site_name
     || prefill.project_name
     || '',
@@ -195,7 +197,7 @@ async function buildSignedPdf(opts: {
   answers: Record<string, unknown>;
   signerName: string;
   signatureDataUrl: string;
-  schema?: boolean;
+  schema?: SchemaCatalogue | null;
   jobRef?: string;
 }): Promise<{ fileName: string; pdfBase64: string }> {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
@@ -212,7 +214,7 @@ async function buildSignedPdf(opts: {
   doc.setFontSize(10);
 
   if (opts.schema) {
-    y = addPdfLines(doc, flattenAnswersForPdf(INTRUDER_ALARM_SCHEMA, opts.answers as FormAnswers), y);
+    y = addPdfLines(doc, flattenAnswersForPdf(opts.schema, opts.answers as FormAnswers), y);
   } else {
     y = addPdfLines(
       doc,
@@ -225,27 +227,29 @@ async function buildSignedPdf(opts: {
     );
   }
 
-  if (y > 220) {
-    doc.addPage();
-    y = 16;
-  }
-  const pageWidth = doc.internal.pageSize.getWidth();
-  doc.setFillColor(15, 23, 42);
-  doc.rect(14, y, pageWidth - 28, 7, 'F');
-  doc.setTextColor(255, 255, 255);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.text('LEAD ENGINEER / SIGN-OFF', 16, y + 4.8);
-  doc.setTextColor(15, 23, 42);
-  y += 10;
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.text(opts.signerName, 16, y);
-  y += 4;
-  try {
-    if (opts.signatureDataUrl) doc.addImage(opts.signatureDataUrl, 'PNG', 16, y, 80, 28);
-  } catch {
-    doc.text('(Signature captured)', 16, y + 8);
+  if (!opts.schema) {
+    if (y > 220) {
+      doc.addPage();
+      y = 16;
+    }
+    const pageWidth = doc.internal.pageSize.getWidth();
+    doc.setFillColor(15, 23, 42);
+    doc.rect(14, y, pageWidth - 28, 7, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.text('SIGN-OFF', 16, y + 4.8);
+    doc.setTextColor(15, 23, 42);
+    y += 10;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text(opts.signerName, 16, y);
+    y += 4;
+    try {
+      if (opts.signatureDataUrl) doc.addImage(opts.signatureDataUrl, 'PNG', 16, y, 80, 28);
+    } catch {
+      doc.text('(Signature captured)', 16, y + 8);
+    }
   }
 
   const fileName = `${opts.title.replace(/[^\w]+/g, '_')}_${Date.now()}.pdf`;
@@ -271,7 +275,8 @@ export default function PublicHandoverFormPage() {
   const [signature, setSignature] = useState('');
 
   const template = useMemo(() => getHandoverFormTemplate(templateKey), [templateKey]);
-  const isSchemaForm = templateKey === INTRUDER_ALARM_FORM_KEY;
+  const schema = useMemo(() => getIntruderFormSchema(templateKey), [templateKey]);
+  const isSchemaForm = Boolean(schema);
   const displayBrand: ContractorBrand = brand ?? {
     company_name: companyName,
     logo_url: null,
@@ -307,8 +312,9 @@ export default function PublicHandoverFormPage() {
         setCompanyName(form.company_name);
         setTemplateKey(form.form_template_key);
         setPrefill(form.prefill ?? {});
-        if (form.form_template_key === INTRUDER_ALARM_FORM_KEY) {
-          setSchemaAnswers(mergeSavedAnswers(applySchemaPrefill(form.prefill ?? {}, form.company_name), form.answers));
+        if (getIntruderFormSchema(form.form_template_key)) {
+          const loaded = getIntruderFormSchema(form.form_template_key)!;
+          setSchemaAnswers(mergeSavedAnswers(applySchemaPrefill(loaded, form.prefill ?? {}, form.company_name), form.answers));
         } else {
           const tmpl = getHandoverFormTemplate(form.form_template_key);
           setSimpleAnswers(defaultAnswers(tmpl.fields, form.prefill ?? {}));
@@ -342,18 +348,14 @@ export default function PublicHandoverFormPage() {
     event.preventDefault();
     setError(null);
 
-    if (isSchemaForm) {
-      const schemaError = validateSchemaAnswers(INTRUDER_ALARM_SCHEMA, schemaAnswers);
+    if (isSchemaForm && schema) {
+      const schemaError = validateSchemaAnswers(schema, schemaAnswers);
       if (schemaError) {
         setError(schemaError);
         return;
       }
-      const signerName = primarySignerName(schemaAnswers);
-      const signatureDataUrl = primarySignatureDataUrl(schemaAnswers) || signature;
-      if (!signerName || !signatureDataUrl) {
-        setError('Complete the engineer declaration signature before submitting.');
-        return;
-      }
+      const signerName = primarySignerName(schema, schemaAnswers) || String(simpleAnswers.signer_name ?? 'Completed').trim();
+      const signatureDataUrl = primarySignatureDataUrl(schema, schemaAnswers) || signature;
       setSubmitting(true);
       try {
         const pdf = await buildSignedPdf({
@@ -362,7 +364,7 @@ export default function PublicHandoverFormPage() {
           answers: schemaAnswers,
           signerName,
           signatureDataUrl,
-          schema: true,
+          schema,
           jobRef,
         });
         await submitPublicHandoverForm({
@@ -470,7 +472,7 @@ export default function PublicHandoverFormPage() {
           <FormLetterhead
             brand={displayBrand}
             title={documentTitle}
-            subtitle={isSchemaForm ? INTRUDER_ALARM_SCHEMA.title : template.description}
+            subtitle={schema?.title || template.description}
             jobRef={jobRef}
             dateLabel={todayLabel()}
           />
@@ -479,14 +481,14 @@ export default function PublicHandoverFormPage() {
             <p className="text-xs text-slate-600 border border-slate-800 bg-slate-50 px-3 py-2">
               Complete all applicable sections. Use N/A where appropriate. Tick boxes and add brief details.
             </p>
-            {isSchemaForm && (
+            {isSchemaForm && schema && (
               <p className="text-[11px] text-amber-900 bg-amber-50 border border-amber-300 px-3 py-2">
-                {INTRUDER_ALARM_SCHEMA.status}. This is not an official NSI certificate.
+                {schema.status}. This is not an official NSI certificate. Technical measurements and tests are the engineer’s and company’s responsibility. The customer signs IA07 once, plus IA05/IA11/IA12/IA13 only where a change or limitation needs agreement.
               </p>
             )}
 
-            {isSchemaForm ? (
-              <SchemaForm schema={INTRUDER_ALARM_SCHEMA} answers={schemaAnswers} onChange={setSchemaAnswers} />
+            {isSchemaForm && schema ? (
+              <SchemaForm schema={schema} answers={schemaAnswers} onChange={setSchemaAnswers} />
             ) : (
               <>
                 {template.fields.map(field => (
