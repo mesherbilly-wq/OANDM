@@ -135,38 +135,36 @@ async function adiDatasheetUrls(manufacturer: string, model: string): Promise<st
   ];
   const modelKey = compact(model);
   const urls: string[] = [];
+  const queries = uniqueStrings([
+    model.trim(),
+    `${manufacturer} ${model}`.replace(/\s+/g, " ").trim(),
+  ].filter((query) => query.length >= 3));
+
   for (const origin of origins) {
     try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 12000);
-      const res = await fetch(
-        `${origin}/api/v1/products?query=${encodeURIComponent(`${manufacturer} ${model}`)}&pageSize=12`,
-        { signal: ctrl.signal, headers: { ...BROWSER_HEADERS, Accept: "application/json" }, redirect: "follow" },
-      );
-      clearTimeout(timer);
-      if (!res.ok) continue;
-      const json = await res.json();
-      const products = Array.isArray(json?.products) ? json.products : [];
-      const matched = products.filter((product: { id?: string; name?: string; modelNumber?: string }) => {
-        const number = compact(product.modelNumber || "");
-        if (number && number === modelKey) return true;
-        if (/\b(bracket|mount|shield|casing|spare|injector|armature|housing)\b/i.test(product.name || "")) return false;
-        return compact(product.name || "").includes(modelKey);
-      }).slice(0, 2);
+      const products: any[] = [];
+      for (const query of queries) {
+        const res = await fetch(
+          `${origin}/api/v1/products?query=${encodeURIComponent(query)}&pageSize=48`,
+          { headers: { ...BROWSER_HEADERS, Accept: "application/json", Referer: `${origin}/` }, redirect: "follow" },
+        );
+        if (res.ok) {
+          const json = await res.json();
+          if (Array.isArray(json?.products)) products.push(...json.products);
+        }
+        const acRes = await fetch(
+          `${origin}/api/v1/autocomplete?query=${encodeURIComponent(query)}`,
+          { headers: { ...BROWSER_HEADERS, Accept: "application/json", Referer: `${origin}/` }, redirect: "follow" },
+        );
+        if (acRes.ok) {
+          const acJson = await acRes.json();
+          if (Array.isArray(acJson?.products)) products.push(...acJson.products);
+        }
+      }
+      const matched = products.filter((product) => adiFetchProductMatches(product, modelKey)).slice(0, 4);
       for (const product of matched) {
-        const detailCtrl = new AbortController();
-        const detailTimer = setTimeout(() => detailCtrl.abort(), 12000);
-        const detailRes = await fetch(`${origin}/api/v1/products/${product.id}?expand=documents`, {
-          signal: detailCtrl.signal,
-          headers: { ...BROWSER_HEADERS, Accept: "application/json" },
-          redirect: "follow",
-        });
-        clearTimeout(detailTimer);
-        if (!detailRes.ok) continue;
-        const detailJson = await detailRes.json();
-        const docs = Array.isArray(detailJson?.product?.documents)
-          ? detailJson.product.documents
-          : Array.isArray(detailJson?.documents) ? detailJson.documents : [];
+        const detail = await adiFetchProductDetail(origin, product);
+        const docs = Array.isArray(detail?.documents) ? detail.documents : [];
         for (const doc of docs) {
           const raw = String(doc?.fileUrl || doc?.filePath || "");
           let url = raw;
@@ -185,6 +183,70 @@ async function adiDatasheetUrls(manufacturer: string, model: string): Promise<st
     }
   }
   return urls;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = value.trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function adiFetchIdentityKeys(product: any): string[] {
+  return uniqueStrings([
+    product?.modelNumber,
+    product?.manufacturerItem,
+    product?.manufacturerItemNumber,
+    product?.erpNumber,
+    product?.urlSegment,
+    product?.sku,
+  ].map((value) => compact(String(value || ""))).filter((value) => value.length >= 4));
+}
+
+function adiFetchProductMatches(product: any, modelKey: string): boolean {
+  if (!modelKey) return false;
+  const keys = adiFetchIdentityKeys(product);
+  if (keys.some((key) => key === modelKey || (modelKey.length >= 5 && key.includes(modelKey)) || (key.length >= 5 && modelKey.includes(key)))) {
+    return true;
+  }
+  const name = product?.name || product?.productTitle || "";
+  if (/\b(bracket|mount|shield|casing|spare|injector|armature|housing)\b/i.test(name)) return false;
+  return compact(name).includes(modelKey);
+}
+
+async function adiFetchProductDetail(origin: string, product: any): Promise<any | null> {
+  const ids = uniqueStrings([product?.id, product?.erpNumber, product?.manufacturerItemNumber, product?.urlSegment].map((value) => String(value || "")));
+  for (const id of ids) {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) continue;
+    const detailRes = await fetch(`${origin}/api/v1/products/${id}?expand=documents`, {
+      headers: { ...BROWSER_HEADERS, Accept: "application/json", Referer: `${origin}/` },
+      redirect: "follow",
+    });
+    if (!detailRes.ok) continue;
+    const detailJson = await detailRes.json();
+    const detail = detailJson?.product ?? detailJson;
+    if (Array.isArray(detail?.documents) && detail.documents.length > 0) return detail;
+  }
+  const part = String(product?.erpNumber || product?.manufacturerItemNumber || product?.urlSegment || "").trim();
+  if (!part) return null;
+  const listedRes = await fetch(
+    `${origin}/api/v1/products?query=${encodeURIComponent(part)}&pageSize=8`,
+    { headers: { ...BROWSER_HEADERS, Accept: "application/json", Referer: `${origin}/` }, redirect: "follow" },
+  );
+  if (!listedRes.ok) return null;
+  const listedJson = await listedRes.json();
+  const listed = (listedJson?.products || []).find((item: any) => compact(item?.erpNumber || "") === compact(part) && item?.id);
+  if (!listed?.id) return null;
+  const detailRes = await fetch(`${origin}/api/v1/products/${listed.id}?expand=documents`, {
+    headers: { ...BROWSER_HEADERS, Accept: "application/json", Referer: `${origin}/` },
+    redirect: "follow",
+  });
+  if (!detailRes.ok) return null;
+  const detailJson = await detailRes.json();
+  return detailJson?.product ?? detailJson;
 }
 
 async function scrapeDatasheetPdfUrls(pageUrl: string, model: string): Promise<string[]> {

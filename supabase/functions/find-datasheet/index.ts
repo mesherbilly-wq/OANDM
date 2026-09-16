@@ -16,6 +16,7 @@ interface Candidate {
 }
 
 async function verify(url: string): Promise<boolean> {
+  if (/adiglobaldistribution/i.test(url) && isAdiDatasheetUrl(url)) return true;
   const adiCdn = /adiglobaldistribution/i.test(url);
   const header = adiCdn
     ? await pdfHeader(url, false)
@@ -41,10 +42,37 @@ async function pdfHeader(url: string, useRange: boolean): Promise<string | null>
     });
     clearTimeout(timer);
     if (!res.ok && res.status !== 206) return null;
-    return new TextDecoder("latin1").decode(new Uint8Array(await res.arrayBuffer()).slice(0, 16)).trimStart();
+    return (await peekBytes(res, 16)).trimStart();
   } catch {
     return null;
   }
+}
+
+async function peekBytes(res: Response, maxBytes: number): Promise<string> {
+  if (res.body) {
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    try {
+      while (received < maxBytes) {
+        const { done, value } = await reader.read();
+        if (done || !value) break;
+        chunks.push(value);
+        received += value.byteLength;
+      }
+    } finally {
+      try { await reader.cancel(); } catch { /* ignore */ }
+    }
+    const merged = new Uint8Array(received);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk.subarray(0, Math.min(chunk.byteLength, maxBytes - offset)), offset);
+      offset += Math.min(chunk.byteLength, maxBytes - offset);
+      if (offset >= maxBytes) break;
+    }
+    return new TextDecoder("latin1").decode(merged);
+  }
+  return new TextDecoder("latin1").decode(new Uint8Array(await res.arrayBuffer()).slice(0, maxBytes));
 }
 
 Deno.serve(async (req: Request) => {
@@ -378,7 +406,10 @@ const BROWSER_HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
   Accept: "application/json,text/html;q=0.9,*/*;q=0.8",
+  "Accept-Language": "en-GB,en;q=0.9",
 };
+
+const adiCookiesByOrigin = new Map<string, Map<string, string>>();
 
 type AdiHit = { url: string; title: string; domain: string; score: number | null; source?: string };
 
@@ -392,8 +423,11 @@ async function searchAdiDatasheets(manufacturer: string, model: string): Promise
 }
 
 async function searchAdiOrigin(origin: string, manufacturer: string, model: string): Promise<AdiHit[]> {
-  const products = await adiSearchProducts(origin, `${manufacturer} ${model}`);
-  const matched = products.filter((product) => adiProductMatches(product, model)).slice(0, 3);
+  const products = await adiFindProducts(origin, manufacturer, model);
+  const matched = products
+    .filter((product) => adiProductMatches(product, model))
+    .sort((a, b) => adiMatchRank(b, model) - adiMatchRank(a, model))
+    .slice(0, 4);
   const hits: AdiHit[] = [];
   for (const product of matched) {
     hits.push(...await adiDocumentsForProduct(origin, product, model));
@@ -406,7 +440,7 @@ async function adiDocumentsFromProductUrl(pageUrl: string, model: string): Promi
   const segment = adiProductSegment(pageUrl);
   if (!origin || !segment) return [];
   const products = (await adiSearchProducts(origin, segment))
-    .filter((product) => adiProductMatches(product, model) || compact(product.urlSegment || "") === compact(segment));
+    .filter((product) => adiProductMatches(product, model) || compact(adiPartNumber(product)) === compact(segment));
   const hits: AdiHit[] = [];
   for (const product of products.slice(0, 2)) {
     hits.push(...await adiDocumentsForProduct(origin, product, model));
@@ -414,54 +448,149 @@ async function adiDocumentsFromProductUrl(pageUrl: string, model: string): Promi
   return hits;
 }
 
-async function adiSearchProducts(origin: string, query: string): Promise<AdiProduct[]> {
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 12000);
-    const res = await fetch(
-      `${origin}/api/v1/products?query=${encodeURIComponent(query)}&pageSize=12`,
-      { signal: ctrl.signal, headers: BROWSER_HEADERS, redirect: "follow" },
-    );
-    clearTimeout(timer);
-    if (!res.ok) return [];
-    const json = await res.json();
-    return Array.isArray(json?.products) ? json.products : [];
-  } catch {
-    return [];
+async function adiFindProducts(origin: string, manufacturer: string, model: string): Promise<AdiProduct[]> {
+  const products: AdiProduct[] = [];
+  for (const query of adiQueryVariants(manufacturer, model)) {
+    products.push(...await adiSearchProducts(origin, query));
+    products.push(...await adiAutocompleteProducts(origin, query));
+    if (products.some((product) => adiProductMatches(product, model))) break;
   }
+  return uniqueById(products);
+}
+
+function adiQueryVariants(manufacturer: string, model: string): string[] {
+  const modelOnly = model.trim();
+  const combined = `${manufacturer} ${model}`.replace(/\s+/g, " ").trim();
+  const withoutMfr = manufacturer
+    ? modelOnly.replace(new RegExp(`^${escapeRegExp(manufacturer)}\\s+`, "i"), "").trim()
+    : modelOnly;
+  return uniqueStrings([modelOnly, withoutMfr, combined].filter((query) => query.length >= 3));
+}
+
+async function adiSearchProducts(origin: string, query: string): Promise<AdiProduct[]> {
+  const json = await adiJson(origin, `/api/v1/products?query=${encodeURIComponent(query)}&pageSize=48`);
+  return Array.isArray(json?.products) ? json.products.map(normalizeAdiProduct) : [];
+}
+
+async function adiAutocompleteProducts(origin: string, query: string): Promise<AdiProduct[]> {
+  const json = await adiJson(origin, `/api/v1/autocomplete?query=${encodeURIComponent(query)}`);
+  return Array.isArray(json?.products) ? json.products.map(normalizeAdiProduct) : [];
 }
 
 async function adiDocumentsForProduct(origin: string, product: AdiProduct, model: string): Promise<AdiHit[]> {
+  const detail = await adiProductDetail(origin, product);
+  const docs = Array.isArray(detail?.documents) ? detail.documents : [];
+  const hits: AdiHit[] = [];
+  for (const doc of docs) {
+    const url = adiAbsolutePdfUrl(doc?.fileUrl || doc?.filePath, origin);
+    if (!url) continue;
+    if (!isAdiDatasheetDoc(doc, url) && /assembly|install|brochure|user manual|msds|instruction/i.test(`${doc?.name ?? ""} ${doc?.documentType ?? ""} ${url}`)) continue;
+    hits.push({
+      url,
+      title: `${detail?.name || product.name || model} — ${doc?.name || "Datasheet"}`,
+      domain: safeDomain(url) || safeDomain(origin),
+      score: isAdiDatasheetDoc(doc, url) ? 93 : 82,
+      source: "adi",
+    });
+  }
+  return hits;
+}
+
+async function adiProductDetail(origin: string, product: AdiProduct): Promise<AdiProduct | null> {
+  if (product.id) {
+    const json = await adiJson(origin, `/api/v1/products/${product.id}?expand=documents`);
+    const detail = json?.product ?? json;
+    if (detail?.id && Array.isArray(detail.documents) && detail.documents.length > 0) {
+      return normalizeAdiProduct(detail);
+    }
+  }
+  const part = adiPartNumber(product);
+  if (!part) return null;
+  const listed = (await adiSearchProducts(origin, part)).find((item) => compact(adiPartNumber(item)) === compact(part) && item.id);
+  if (!listed?.id || listed.id === product.id) return null;
+  const json = await adiJson(origin, `/api/v1/products/${listed.id}?expand=documents`);
+  const detail = json?.product ?? json;
+  return detail?.id ? normalizeAdiProduct(detail) : null;
+}
+
+async function adiJson(origin: string, path: string): Promise<any | null> {
+  let res = await adiFetch(origin, path);
+  if (!res || !isJsonResponse(res)) {
+    await adiWarmup(origin);
+    res = await adiFetch(origin, path);
+  }
+  if (!res || !isJsonResponse(res)) return null;
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function adiFetch(origin: string, path: string): Promise<Response | null> {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 12000);
-    const res = await fetch(`${origin}/api/v1/products/${product.id}?expand=documents`, {
+    const headers: Record<string, string> = {
+      ...BROWSER_HEADERS,
+      Accept: "application/json",
+      Referer: `${origin}/`,
+    };
+    const cookie = cookieHeader(origin);
+    if (cookie) headers.Cookie = cookie;
+    const res = await fetch(`${origin}${path}`, {
       signal: ctrl.signal,
-      headers: BROWSER_HEADERS,
+      headers,
       redirect: "follow",
     });
     clearTimeout(timer);
-    if (!res.ok) return [];
-    const json = await res.json();
-    const detail = json?.product ?? json;
-    const docs = Array.isArray(detail?.documents) ? detail.documents : [];
-    const hits: AdiHit[] = [];
-    for (const doc of docs) {
-      const url = adiAbsolutePdfUrl(doc?.fileUrl || doc?.filePath, origin);
-      if (!url) continue;
-      if (!isAdiDatasheetDoc(doc, url) && /assembly|install|brochure|user manual|msds|instruction/i.test(`${doc?.name ?? ""} ${doc?.documentType ?? ""} ${url}`)) continue;
-      hits.push({
-        url,
-        title: `${product.name || model} — ${doc?.name || "Datasheet"}`,
-        domain: safeDomain(url) || safeDomain(origin),
-        score: isAdiDatasheetDoc(doc, url) ? 93 : 82,
-        source: "adi",
-      });
-    }
-    return hits;
+    rememberCookies(origin, res);
+    return res;
   } catch {
-    return [];
+    return null;
   }
+}
+
+async function adiWarmup(origin: string): Promise<void> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(`${origin}/`, {
+      signal: ctrl.signal,
+      headers: {
+        "User-Agent": BROWSER_HEADERS["User-Agent"],
+        Accept: "text/html,application/xhtml+xml",
+        "Accept-Language": BROWSER_HEADERS["Accept-Language"],
+      },
+      redirect: "follow",
+    });
+    clearTimeout(timer);
+    rememberCookies(origin, res);
+  } catch {
+    // Catalogue calls still run without the homepage cookies.
+  }
+}
+
+function rememberCookies(origin: string, res: Response) {
+  const jar = adiCookiesByOrigin.get(origin) ?? new Map<string, string>();
+  const setCookies = typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [];
+  for (const cookie of setCookies) {
+    const pair = cookie.split(";")[0];
+    const eq = pair.indexOf("=");
+    if (eq <= 0) continue;
+    jar.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
+  }
+  adiCookiesByOrigin.set(origin, jar);
+}
+
+function cookieHeader(origin: string): string {
+  const jar = adiCookiesByOrigin.get(origin);
+  if (!jar || jar.size === 0) return "";
+  return [...jar.entries()].map(([key, value]) => `${key}=${value}`).join("; ");
+}
+
+function isJsonResponse(res: Response): boolean {
+  return res.ok && /json/i.test(res.headers.get("content-type") || "");
 }
 
 type AdiProduct = {
@@ -469,18 +598,75 @@ type AdiProduct = {
   name?: string;
   modelNumber?: string;
   manufacturerItem?: string;
+  erpNumber?: string;
   urlSegment?: string;
+  sku?: string;
+  documents?: Array<{ name?: string; documentType?: string; fileTypeString?: string; fileUrl?: string; filePath?: string }>;
   properties?: Record<string, string>;
 };
 
+function normalizeAdiProduct(raw: any): AdiProduct {
+  return {
+    id: raw?.id,
+    name: raw?.name || raw?.productTitle || raw?.shortDescription || "",
+    modelNumber: raw?.modelNumber || raw?.properties?.updated_Model_Number || "",
+    manufacturerItem: raw?.manufacturerItem || raw?.manufacturerItemNumber || "",
+    erpNumber: raw?.erpNumber || "",
+    urlSegment: raw?.urlSegment || raw?.erpNumber || "",
+    sku: raw?.sku || "",
+    documents: Array.isArray(raw?.documents) ? raw.documents : [],
+    properties: raw?.properties,
+  };
+}
+
+function uniqueById(products: AdiProduct[]): AdiProduct[] {
+  const seen = new Set<string>();
+  return products.filter((product) => {
+    const key = String(product.id || adiPartNumber(product) || product.name || "").toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function adiPartNumber(product: AdiProduct): string {
+  return product.erpNumber || product.manufacturerItem || product.urlSegment || product.sku || "";
+}
+
+function adiIdentityKeys(product: AdiProduct): string[] {
+  return uniqueStrings([
+    product.modelNumber,
+    product.properties?.updated_Model_Number,
+    product.manufacturerItem,
+    product.erpNumber,
+    product.urlSegment,
+    product.sku,
+  ].map((value) => compact(value || "")).filter((value) => value.length >= 4));
+}
+
 function adiProductMatches(product: AdiProduct, model: string): boolean {
   const modelKey = compact(model);
-  if (!modelKey || !product?.id) return false;
-  const modelNumber = compact(product.modelNumber || product.properties?.updated_Model_Number || "");
-  if (modelNumber && (modelNumber === modelKey || (modelKey.length >= 5 && modelNumber.includes(modelKey)))) return true;
+  if (!modelKey || !(product?.id || adiPartNumber(product))) return false;
+  const keys = adiIdentityKeys(product);
+  if (keys.some((key) => key === modelKey || (modelKey.length >= 5 && key.includes(modelKey)) || (key.length >= 5 && modelKey.includes(key)))) {
+    return true;
+  }
   const name = product.name || "";
   if (isAccessoryName(name)) return false;
   return compact(name).includes(modelKey);
+}
+
+function adiMatchRank(product: AdiProduct, model: string): number {
+  const modelKey = compact(model);
+  const keys = adiIdentityKeys(product);
+  if (keys.includes(modelKey)) return 3;
+  if (keys.some((key) => key.includes(modelKey) || modelKey.includes(key))) return 2;
+  if (isAccessoryName(product.name || "")) return 0;
+  return 1;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function isAccessoryName(name: string): boolean {
