@@ -4,7 +4,7 @@ import { jsPDF } from 'jspdf';
 import { CheckCircle, Loader2 } from 'lucide-react';
 import { SignaturePad } from '../components/SignaturePad';
 import { SchemaForm } from '../components/SchemaForm';
-import { FormLetterhead, WorksheetField } from '../components/FormLetterhead';
+import { FormLetterhead, WorksheetField, PACIFIC_LOGO_SRC } from '../components/FormLetterhead';
 import { fetchPublicContractorBrand, formatContractorAddress, formatContractorContact, imageUrlToDataUrl, type ContractorBrand } from '../lib/contractorBrand';
 import { getPublicHandoverForm, saveHandoverFormDraft, submitPublicHandoverForm } from '../lib/handoverFormsApi';
 import { getHandoverFormTemplate, type HandoverFormField } from '../lib/handoverFormTemplates';
@@ -24,10 +24,6 @@ const worksheetInputClass = 'w-full border-0 px-3 py-2 text-sm bg-white focus:ou
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
-}
-
-function todayLabel(): string {
-  return new Date().toLocaleDateString('en-GB');
 }
 
 function defaultAnswers(fields: HandoverFormField[], prefill: Record<string, string>): Record<string, string | boolean> {
@@ -78,67 +74,63 @@ function drawLetterhead(
   jobRef: string,
 ): number {
   const pageWidth = doc.internal.pageSize.getWidth();
-  const company = brand?.company_name?.trim() || 'O&M Builder';
   const address = formatContractorAddress(brand);
   const contact = formatContractorContact(brand);
 
+  doc.setFillColor(192, 0, 0);
+  doc.rect(pageWidth - 18, 0, 18, 42, 'F');
+  doc.circle(pageWidth - 24, 12, 1.4, 'F');
+  doc.circle(pageWidth - 24, 17, 1.4, 'F');
+  doc.circle(pageWidth - 24, 22, 1.4, 'F');
+
   if (logoDataUrl) {
     try {
-      doc.addImage(logoDataUrl, pdfImageFormat(logoDataUrl), 14, 10, 28, 16);
+      doc.addImage(logoDataUrl, pdfImageFormat(logoDataUrl), 14, 10, 62, 16);
     } catch {
       /* logo optional */
     }
   }
 
-  const textX = logoDataUrl ? 46 : 14;
+  const textX = 14;
+  let infoY = logoDataUrl ? 30 : 16;
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.setTextColor(15, 23, 42);
-  doc.text(company, textX, 16);
+  doc.setFontSize(7);
+  doc.setTextColor(192, 0, 0);
+  doc.text('SPECIALISTS IN FIRE; EXPERTS IN SECURITY.', textX, infoY);
+  infoY += 4;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
-  doc.setTextColor(71, 85, 105);
-  let infoY = 21;
+  doc.setTextColor(64, 64, 64);
   if (address) {
-    const lines = doc.splitTextToSize(address, 90);
+    const lines = doc.splitTextToSize(address, 120);
     doc.text(lines, textX, infoY);
     infoY += lines.length * 3.2;
   }
   if (contact) {
     doc.text(contact, textX, infoY);
+    infoY += 4;
   }
 
   if (jobRef) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7);
-    doc.setTextColor(100, 116, 139);
-    doc.text('JOB / SITE REF', pageWidth - 14, 14, { align: 'right' });
+    doc.setTextColor(192, 0, 0);
+    doc.text('JOB / SITE REF', pageWidth - 22, 12, { align: 'right' });
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
-    doc.setTextColor(15, 23, 42);
-    doc.text(jobRef, pageWidth - 14, 19, { align: 'right' });
+    doc.setTextColor(64, 64, 64);
+    const jobLines = doc.splitTextToSize(jobRef, 40);
+    doc.text(jobLines, pageWidth - 22, 17, { align: 'right' });
   }
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7);
-  doc.setTextColor(100, 116, 139);
-  doc.text('DATE', pageWidth - 14, 25, { align: 'right' });
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.setTextColor(15, 23, 42);
-  doc.text(todayLabel(), pageWidth - 14, 30, { align: 'right' });
 
-  doc.setFillColor(15, 23, 42);
-  doc.rect(0, 34, pageWidth, 16, 'F');
-  doc.setTextColor(226, 232, 240);
+  infoY = Math.max(infoY, 36);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7);
-  doc.text('COMPLETION RECORD', 14, 40);
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(12);
-  const titleLines = doc.splitTextToSize(title.toUpperCase(), pageWidth - 28);
-  doc.text(titleLines, 14, 46);
-  doc.setTextColor(15, 23, 42);
-  return 56;
+  doc.setFontSize(13);
+  doc.setTextColor(192, 0, 0);
+  const titleLines = doc.splitTextToSize(title.toUpperCase(), pageWidth - 40);
+  doc.text(titleLines, 14, infoY + 4);
+  doc.setTextColor(64, 64, 64);
+  return infoY + 4 + titleLines.length * 6 + 4;
 }
 
 function addPdfLines(doc: jsPDF, lines: { label: string; value: string; image?: string }[], startY: number): number {
@@ -150,25 +142,26 @@ function addPdfLines(doc: jsPDF, lines: { label: string; value: string; image?: 
       y = 16;
     }
     if (!line.value) {
-      doc.setFillColor(15, 23, 42);
+      doc.setFillColor(192, 0, 0);
       doc.rect(14, y, pageWidth - 28, 7, 'F');
       doc.setTextColor(255, 255, 255);
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(8);
       doc.text(line.label.toUpperCase(), 16, y + 4.8);
-      doc.setTextColor(15, 23, 42);
+      doc.setTextColor(64, 64, 64);
       y += 9;
       continue;
     }
-    doc.setDrawColor(15, 23, 42);
+    doc.setDrawColor(64, 64, 64);
     doc.setLineWidth(0.3);
     const valueLines = doc.splitTextToSize(line.value || '—', pageWidth - 34);
     const boxHeight = Math.max(12, 6 + valueLines.length * 4.2);
     doc.rect(14, y, pageWidth - 28, boxHeight);
-    doc.setFillColor(241, 245, 249);
+    doc.setFillColor(217, 217, 217);
     doc.rect(14, y, pageWidth - 28, 5, 'F');
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7);
+    doc.setTextColor(64, 64, 64);
     doc.text(line.label.toUpperCase(), 16, y + 3.6);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
@@ -201,7 +194,7 @@ async function buildSignedPdf(opts: {
   jobRef?: string;
 }): Promise<{ fileName: string; pdfBase64: string }> {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
-  const logoDataUrl = opts.brand?.logo_url ? await imageUrlToDataUrl(opts.brand.logo_url) : null;
+  const logoDataUrl = await imageUrlToDataUrl(`${window.location.origin}${PACIFIC_LOGO_SRC}`);
   let y = drawLetterhead(doc, opts.brand, logoDataUrl, opts.title, opts.jobRef ?? '');
 
   doc.setFont('helvetica', 'italic');
@@ -233,7 +226,7 @@ async function buildSignedPdf(opts: {
       y = 16;
     }
     const pageWidth = doc.internal.pageSize.getWidth();
-    doc.setFillColor(15, 23, 42);
+    doc.setFillColor(192, 0, 0);
     doc.rect(14, y, pageWidth - 28, 7, 'F');
     doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
@@ -466,15 +459,14 @@ export default function PublicHandoverFormPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-400 py-6 sm:py-10">
+    <div className="min-h-screen bg-[#e8e8e8] py-6 sm:py-10">
       <div className="max-w-[210mm] mx-auto px-3 sm:px-4">
-        <div className="bg-white border-2 border-slate-900 shadow-2xl overflow-hidden">
+        <div className="bg-white border border-[#404040] shadow-2xl overflow-hidden">
           <FormLetterhead
             brand={displayBrand}
             title={documentTitle}
             subtitle={schema?.title || template.description}
             jobRef={jobRef}
-            dateLabel={todayLabel()}
           />
 
           <form onSubmit={submit} className="p-4 sm:p-6 space-y-4">
@@ -530,9 +522,9 @@ export default function PublicHandoverFormPage() {
                     )}
                   </WorksheetField>
                 ))}
-                <section className="border-2 border-slate-900 overflow-hidden">
-                  <h2 className="bg-slate-900 text-white text-xs font-bold uppercase tracking-wider px-3 py-2">
-                    Lead engineer / sign-off
+                <section className="border border-[#404040] overflow-hidden">
+                  <h2 className="bg-[#C00000] text-white text-xs font-bold uppercase tracking-wider px-3 py-2">
+                    Sign-off
                   </h2>
                   <div className="p-3 space-y-2">
                     <p className="text-xs text-slate-600">
@@ -554,7 +546,7 @@ export default function PublicHandoverFormPage() {
                 type="button"
                 onClick={() => void saveDraft()}
                 disabled={savingDraft || submitting}
-                className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 border-2 border-slate-900 text-slate-800 font-semibold uppercase tracking-wide text-sm disabled:opacity-50"
+                className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 border-2 border-[#C00000] text-[#C00000] font-semibold uppercase tracking-wide text-sm disabled:opacity-50"
               >
                 {savingDraft ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                 Save draft
@@ -562,7 +554,7 @@ export default function PublicHandoverFormPage() {
               <button
                 type="submit"
                 disabled={submitting}
-                className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 bg-slate-900 text-white font-semibold uppercase tracking-wide text-sm hover:bg-slate-800 disabled:opacity-50"
+                className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 bg-[#C00000] text-white font-semibold uppercase tracking-wide text-sm hover:bg-[#a00000] disabled:opacity-50"
               >
                 {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                 {submitting ? 'Saving…' : 'Complete and save'}
