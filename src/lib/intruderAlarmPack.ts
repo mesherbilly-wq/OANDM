@@ -1,7 +1,11 @@
-import type { SchemaCatalogue, SchemaField, SchemaSection, SchemaShowWhen } from './schemaForm';
+import type { SchemaCatalogue, SchemaField, SchemaSection } from './schemaForm';
 
 export const INTRUDER_PACK_STATUS = 'DRAFT — NOT VALIDATED FOR NSI COMPLIANCE';
 export const INTRUDER_PACK_REVISION = '01';
+
+const WORK_OPTIONS = ['new', 'takeover', 'upgrade', 'extension'];
+const TOPIC_STATUS = ['done', 'outstanding', 'not_applicable'];
+const PRESENCE = ['present', 'pending', 'not_applicable'];
 
 function form(title: string, sections: SchemaSection[]): SchemaCatalogue {
   return {
@@ -59,25 +63,18 @@ function header(): SchemaSection {
 function engineerSignOff(title: string, declaration: string): SchemaSection {
   return section('engineer_signoff', title, [
     area('declaration', declaration),
-    signature('engineer_signature', 'Engineer name and signature', true),
-    date('signed_at', 'Date', true),
+    text('engineer_name', 'Engineer name', true),
+    signature('engineer_signature', 'Engineer signature / signed-record reference', true),
+    date('signed_at', 'Date / time', true),
   ]);
 }
 
 function reviewerSignOff(title = 'Technical reviewer sign-off'): SchemaSection {
   return section('reviewer_signoff', title, [
     area('review_notes', 'Review notes, conditions and standards register reference'),
-    signature('reviewer_signature', 'Technical reviewer name and signature', true),
-    date('reviewed_at', 'Review date', true),
+    signature('reviewer_signature', 'Technical reviewer / signature', true),
+    date('reviewed_at', 'Date', true),
   ]);
-}
-
-function whenField(sectionId: string, field: string, values: string[]): SchemaShowWhen {
-  return { fieldEquals: { section: sectionId, field, values } };
-}
-
-function whenChecked(sectionId: string, field: string): SchemaShowWhen {
-  return { checkboxTrue: { section: sectionId, field } };
 }
 
 export const IA01_AS_FITTED = form('IA01 As-fitted system record and equipment schedule', [
@@ -85,48 +82,50 @@ export const IA01_AS_FITTED = form('IA01 As-fitted system record and equipment s
   section('customer', 'Customer and premises', [
     text('customer_organisation', 'Customer organisation', true),
     text('customer_representative', 'Customer representative'),
-    area('installation_address', 'Installation address (site address, not billing)', true),
+    area('installation_address', 'Installation address (site address, not billing address)', true),
     text('simpro_job_id', 'Simpro company / job ID'),
     text('quote_id', 'Quote ID / baseline snapshot'),
     text('as_fitted_reference', 'As-fitted reference / revision', true),
     date('final_verification_date', 'Date of final verification', true),
   ]),
   section('basis', 'Work and design basis', [
-    select('work_type', 'Work type', ['new_installation', 'takeover', 'upgrade', 'extension'], true),
+    select('work_type', 'Work: new / takeover / upgrade / extension', WORK_OPTIONS, true),
     text('design_risk_reference', 'Design / risk assessment reference'),
     text('existing_stated_grade', 'Existing stated grade / unknown'),
     text('verified_grade', 'Verified grade / evidence reference'),
     area('applicable_standards', 'Applicable standards, editions, amendments and environmental classifications', true),
     area('agreed_scope', 'Agreed scope, protected areas, exclusions and source quote sections', true),
-    area('quote_note', 'Quote / quantity note', false),
   ]),
-  section('devices', 'Device schedule', [
+  section('schedule_meta', 'Schedule identity', [
     text('schedule_reference', 'Schedule reference / continuation number'),
     text('linked_quote', 'Linked quote / agreed variation'),
-    area('firmware_drawing_refs', 'Firmware, connection type, serial-number schedule or drawing references'),
-  ], { repeatable: false }),
-  section('device_rows', 'Installed equipment and zone schedule', [
+    area('schedule_note', 'Record actual installed devices. Retain original quoted quantities in the change record. Use asset IDs to link readings and tests; record old equipment separately where removed or replaced.'),
+  ]),
+  section('device_rows', 'Device schedule', [
     text('asset_zone', 'Asset / zone', true),
     text('location', 'Location / area', true),
     text('type_make_model', 'Type / make / model', true),
     text('grade_class', 'Grade / class'),
-    text('qty_serial', 'Actual qty / serial ref', true),
-    text('quoted_qty', 'Quoted qty (baseline only — not installed proof)'),
-    area('notes', 'Notes / old equipment removed or replaced'),
+    text('qty_serial', 'Qty / serial ref', true),
   ], { repeatable: true }),
+  section('schedule_close', 'Schedule references', [
+    area('firmware_drawing_refs', 'Firmware, connection type, serial-number schedule or associated drawing references'),
+    text('confirmed_by', 'Confirmed by'),
+    date('confirmed_revision', 'Date / revision'),
+  ]),
   section('arrangements', 'Actual system arrangements', [
     text('panel_model', 'Panel / control equipment model', true),
     text('panel_location', 'Panel location / asset reference', true),
     area('setting_unsetting', 'Areas / partitions, setting and unsetting methods, entry / exit routes', true),
     area('confirmation_monitoring', 'Alarm confirmation, monitoring, hold-up and interface arrangements'),
-    text('power_record_ref', 'Power / battery record reference (IA02)'),
-    text('signalling_record_ref', 'Signalling record reference (IA04)'),
+    text('power_record_ref', 'Power / battery record reference IA02'),
+    text('signalling_record_ref', 'Signalling record reference IA04'),
     area('drawing_refs', 'Drawing / zone plan references and revisions; user-manual references'),
     area('changes_limitations', 'Changes from quote / design and limitations (link IA05)'),
   ]),
   engineerSignOff(
     'Engineer verification',
-    'I confirm this record describes the installed system within the recorded scope. Unknown and unverified items are identified. A quote is a proposed baseline only; quoted quantity is not installed proof. Customer acceptance of changes is recorded separately on IA05/IA07.',
+    'This record describes the installed system within the recorded scope. Unknown and unverified items are identified. Customer acceptance of changes is recorded separately.',
   ),
 ]);
 
@@ -136,7 +135,7 @@ export const IA02_READINGS = form('IA02 Parameters and electrical readings', [
     date('test_date', 'Test date', true),
     text('engineer_name', 'Engineer', true),
     text('instrument_id', 'Instrument ID / verification reference'),
-    area('method_note', 'Use the approved procedure and applicable acceptance limits. Record actual readings. Do not use a tick as a substitute for a reading.'),
+    area('method_note', 'Use the approved procedure and applicable acceptance limits. Record actual readings and conditions. Identify omitted measurements and reasons; do not use a tick as a substitute for a reading.'),
   ]),
   section('detection', 'Detection and interconnection record', [
     text('zone_asset', 'Zone / asset', true),
@@ -144,7 +143,7 @@ export const IA02_READINGS = form('IA02 Parameters and electrical readings', [
     text('resistance_ohm', 'Resistance (ohm)'),
     text('device_volts_dc', 'Device volts DC'),
     text('coverage_range', 'Coverage / range'),
-    area('wireless_readings', 'Wireless readings / units / limits, test conditions and evidence'),
+    area('wireless_readings', 'Wireless readings / units / limits, test conditions and referenced evidence'),
     area('exceptions', 'Exceptions and linked issue / retest references'),
   ], { repeatable: true }),
   section('supply', 'Supply readings (one sheet per supply)', [
@@ -164,8 +163,9 @@ export const IA02_READINGS = form('IA02 Parameters and electrical readings', [
     area('calculation', 'Calculation method, applicable clause, derating / recharge assumptions and evidence ref', true),
     ...check('capacity_adequate', 'Calculated capacity adequate for applicable duty'),
     ...check('mains_battery_faults', 'Mains failure / restoration and battery / supply faults verified'),
-    area('instrument_conditions', 'Instrument / conditions, issues / retest references'),
-  ]),
+    area('instrument_conditions', 'Instrument / conditions'),
+    area('issues_retest', 'Issues / retest references'),
+  ], { repeatable: true }),
   section('warning', 'Warning devices', [
     text('asset_location', 'Asset / location', true),
     text('power_type', 'Power type'),
@@ -179,16 +179,17 @@ export const IA02_READINGS = form('IA02 Parameters and electrical readings', [
     text('confirmation_time', 'Confirmation time / units'),
     text('sounder_duration', 'Sounder duration (minutes)'),
     text('sounder_delay', 'Sounder delay (minutes)'),
-    select('hold_up_warning', 'Hold-up local warning', ['silent', 'audible', 'not_fitted']),
-    select('unconfirmed_reset', 'Unconfirmed reset', ['user', 'engineer', 'not_applicable']),
-    select('confirmed_reset', 'Confirmed reset', ['user', 'engineer', 'not_applicable']),
+    select('hold_up_warning', 'Hold-up local warning: silent / audible', ['silent', 'audible', 'not_fitted']),
+    select('unconfirmed_reset', 'Unconfirmed reset: user / engineer', ['user', 'engineer', 'not_applicable']),
+    select('confirmed_reset', 'Confirmed reset: user / engineer', ['user', 'engineer', 'not_applicable']),
     text('setting_reset_procedure', 'Setting / reset procedure reference'),
     area('settings_by_area', 'Settings by area, acceptance limits, exceptions and evidence refs'),
   ]),
-  engineerSignOff(
-    'Engineer sign-off',
-    'I confirm these readings and settings were taken under the recorded conditions and that omitted measurements are identified with reasons. Technical measurements are the engineer’s and company’s responsibility.',
-  ),
+  engineerSignOff('Engineer name / signature', 'I confirm these readings and settings were taken under the recorded conditions and that omitted measurements are identified with reasons.'),
+  section('customer_ack', 'Customer acknowledgement / signature', [
+    signature('customer_signature', 'Customer acknowledgement / signature', false),
+    date('customer_signed_at', 'Date'),
+  ]),
 ]);
 
 export const IA03_COMMISSIONING = form('IA03 Commissioning and verification checks', [
@@ -224,12 +225,12 @@ export const IA03_COMMISSIONING = form('IA03 Commissioning and verification chec
     ...check('datetime_events', 'Correct date / time and applicable event records verified'),
     ...check('test_modes_cleared', 'Test modes cleared; final status and residual isolations recorded'),
     area('detailed_results', 'Detailed test records, expected / actual results and supporting attachments'),
-    select('final_state', 'Final state', ['normal', 'restricted', 'faulty'], true),
+    select('final_state', 'Final state: normal / restricted / faulty', ['normal', 'restricted', 'faulty'], true),
     area('outstanding_issues', 'Outstanding issue references'),
   ]),
   engineerSignOff(
     'Engineer sign-off',
-    'I confirm the results reflect the work and tests performed within the stated scope. This checklist must be used with the approved detailed procedures and applicable standards. Commissioning tests are the engineer’s and company’s responsibility.',
+    'I confirm the results reflect the work and tests performed within the stated scope. This checklist must be used with the approved detailed procedures and applicable standards.',
   ),
 ]);
 
@@ -243,6 +244,7 @@ export const IA04_ARC = form('IA04 ARC signalling and response verification', [
     text('engineer_name', 'Engineer'),
     date('test_date', 'Date', true),
     text('arc_booking', 'ARC test booking / operator reference'),
+    area('signals_note', 'List signals required for this system. Record the actual triggering function, receipt and ARC acknowledgement. Include intruder, hold-up, confirmation, tamper, faults and setting signals where applicable.'),
   ]),
   section('signals', 'Required signals', [
     text('signal_trigger', 'Signal / trigger', true),
@@ -264,17 +266,14 @@ export const IA04_ARC = form('IA04 ARC signalling and response verification', [
   section('response', 'Response and live service', [
     area('confirmation_evidence', 'Confirmation method / evidence'),
     text('police_force_policy', 'Police force / policy edition'),
-    select('response_status', 'Response', ['active', 'pending', 'suspended', 'not_applicable'], true),
+    select('response_status', 'Response: active / pending / suspended / NA', ['active', 'pending', 'suspended', 'not_applicable'], true),
     text('urn_restricted_ref', 'URN / restricted record reference'),
     select('final_monitoring_state', 'Final monitoring state', ['live', 'pending', 'not_applicable', 'suspended'], true),
     text('test_mode_ended', 'Test mode ended: time / ARC ref'),
     area('outstanding_actions', 'Outstanding activation actions, owner, due date and customer notification'),
     area('restricted_note', 'Keep keyholder personal details and signalling secrets in the authorised restricted record. A successful signal test alone does not prove police response has been granted.'),
   ]),
-  engineerSignOff(
-    'Engineer sign-off',
-    'I confirm the signalling tests recorded above. Signalling tests and compatibility with the ARC are the engineer’s and company’s responsibility.',
-  ),
+  engineerSignOff('Engineer sign-off', 'I confirm the signalling tests recorded above.'),
 ]);
 
 export const IA05_CHANGES = form('IA05 Changes, defects and remedial actions', [
@@ -283,35 +282,19 @@ export const IA05_CHANGES = form('IA05 Changes, defects and remedial actions', [
     text('issue_reference', 'Issue / change reference', true),
     date('raised_date', 'Date'),
     text('raised_by', 'Raised by'),
-    select('issue_type', 'Type', [
-      'design_change',
-      'defect',
-      'disconnected_or_reduced_protection',
-      'limitation_or_incomplete_test',
-      'other',
-    ], true),
-    select('status', 'Status', ['open', 'action', 'retest', 'closed'], true),
+    select('issue_type', 'Type: design change / defect / departure', ['design_change', 'defect', 'departure'], true),
+    select('status', 'Status: open / action / retest / closed', ['open', 'action', 'retest', 'closed'], true),
     area('description', 'Description, affected assets and quoted versus installed quantities / scope', true),
     area('operational_effect', 'Operational effect and applicable design / standards reference'),
     area('required_action', 'Required action and temporary protection / isolations', true),
     text('responsible_person', 'Responsible person'),
     date('due_date', 'Due date'),
     text('customer_notified', 'Customer notified / date'),
+    text('approval_ack_ref', 'Approval / acknowledgement reference'),
     area('technical_disposition', 'Technical disposition and closure / retest evidence'),
     area('note', 'Customer acknowledgement does not establish technical compliance or close a failed test. Preserve the original issue and record the corrective action and retest.'),
   ]),
   reviewerSignOff(),
-  section('customer_acceptance', 'Customer acceptance of limitation or change', [
-    area('acceptance_scope', 'Customer is asked to accept: changes from the agreed design, equipment left disconnected or protection reduced, and/or other limitations or incomplete tests.', true),
-    signature('customer_signature', 'Customer name and signature', true),
-    date('customer_signed_at', 'Date', true),
-  ], {
-    showWhen: whenField('issue', 'issue_type', [
-      'design_change',
-      'disconnected_or_reduced_protection',
-      'limitation_or_incomplete_test',
-    ]),
-  }),
 ]);
 
 export const IA06_TRAINING = form('IA06 Customer demonstration and training', [
@@ -323,17 +306,16 @@ export const IA06_TRAINING = form('IA06 Customer demonstration and training', [
   ]),
   section('topics', 'Topics demonstrated or explained', [
     text('topic', 'Topic', true),
-    select('status', 'Status', ['done', 'outstanding', 'not_applicable'], true),
+    select('status', 'Status', TOPIC_STATUS, true),
     area('notes', 'Notes / instruction reference'),
   ], { repeatable: true }),
   section('follow_up', 'Outstanding training', [
     area('outstanding_training', 'Outstanding training and user instructions supplied (reference / revision)'),
-    area('note', 'Customer acknowledgement of the demonstration and training is recorded once on IA07. This sheet is the engineer/trainer record.'),
+    area('ack_text', 'I acknowledge the instruction recorded above and receipt of the referenced user information. Outstanding topics and limitations are identified in this record.'),
+    signature('trainee_signature', 'Trainee signature', false),
+    date('trainee_signed_at', 'Trainee date'),
   ]),
-  engineerSignOff(
-    'Trainer / engineer record',
-    'I confirm the instruction recorded above was given. Outstanding topics and limitations are identified in this record.',
-  ),
+  engineerSignOff('Trainer signature / date', 'I confirm the instruction recorded above was given.'),
 ]);
 
 export const IA07_HANDOVER = form('IA07 Completion and handover acceptance', [
@@ -343,32 +325,30 @@ export const IA07_HANDOVER = form('IA07 Completion and handover acceptance', [
     date('commissioning_date', 'Commissioning date', true),
     text('as_fitted_reference', 'As-fitted reference / revision', true),
     text('completion_scope', 'Completion scope / work type', true),
-    select('system_state', 'System state', ['operational', 'limited', 'not_live'], true),
-    select('signalling_state', 'Signalling state', ['live', 'pending', 'not_applicable'], true),
-    area('outstanding_work', 'Outstanding work, variations, limitations and document references'),
   ]),
   section('receipt', 'Items received and demonstrated', [
-    ...check('demonstration_training', 'Operation demonstrated and user instruction provided (IA06)'),
+    ...check('demonstration_training', 'Operation demonstrated and user instruction provided'),
     ...check('credentials', 'Operating fobs / keys / credentials transferred securely'),
     ...check('user_information', 'Complete user operating information supplied'),
     ...check('logbook_maintenance', 'System logbook and maintenance / emergency contacts supplied'),
-    ...check('as_fitted_docs', 'Referenced as-fitted record and handover documents identified'),
-    ...check('operating_status', 'System’s stated operating and monitoring status explained'),
+    select('system_state', 'System state: operational / limited / not live', ['operational', 'limited', 'not_live'], true),
+    select('signalling_state', 'Signalling state: live / pending / NA', ['live', 'pending', 'not_applicable'], true),
+    area('outstanding_work', 'Outstanding work, variations, limitations and document references'),
   ]),
   section('customer_acceptance', 'Customer acknowledgement', [
     area(
       'acknowledgement_text',
-      'The customer acknowledges the demonstration and training recorded, receipt of instructions, logbook and maintenance information, the referenced as-fitted record and handover documents, and the system’s stated operating and monitoring status.',
+      'I acknowledge the system and information received, the demonstration, and the recorded condition and outstanding items. Agreed changes are identified in the referenced records.',
     ),
-    signature('customer_signature', 'Customer name and signature', true),
+    signature('customer_signature', 'Customer name / signature', true),
     date('customer_signed_at', 'Date', true),
   ]),
   section('installer_declaration', 'Installer declaration', [
     area(
       'installer_text',
-      'This record accurately describes the handover within the stated scope. The separate NSI Certificate of Compliance, if issued, is recorded in the O&M index. This form is not that certificate.',
+      'This record accurately describes the handover within the stated scope. The separate NSI Certificate of Compliance is recorded in the O&M index.',
     ),
-    signature('installer_signature', 'Installer name and signature', true),
+    signature('installer_signature', 'Installer name / signature', true),
     date('installer_signed_at', 'Date', true),
   ]),
 ]);
@@ -409,12 +389,12 @@ export const IA09_SUPPORT = form('IA09 Maintenance and support information', [
     text('quick_guide_logbook', 'Quick guide / logbook reference'),
     area('warranty', 'Warranty period, start date, scope and provider'),
     area('user_checks', 'User checks and false-alarm guidance reference'),
-    area('advice', 'Keep routes clear and follow the supplied operating instructions. Report faults promptly and record activations in the logbook. Arrange changes through the maintainer.'),
+    area('advice', 'Keep routes clear and follow the supplied operating instructions. Report faults promptly and record activations in the logbook. Arrange changes to operation or protection through the maintainer; follow site procedures in an emergency.'),
+    text('issued_by', 'Issued by'),
+    date('issued_at', 'Issued date'),
+    text('customer_receipt', 'Customer receipt'),
+    date('customer_receipt_date', 'Customer receipt date'),
   ]),
-  engineerSignOff(
-    'Issued by',
-    'I confirm this support information was issued with the handover pack. Customer receipt of this information is acknowledged on IA07.',
-  ),
 ]);
 
 export const IA10_RELEASE = form('IA10 O&M document index and technical release', [
@@ -422,20 +402,22 @@ export const IA10_RELEASE = form('IA10 O&M document index and technical release'
   section('pack', 'Pack identity', [
     text('pack_reference', 'Pack reference / revision', true),
     text('reviewer_name', 'Reviewer'),
-    date('review_date', 'Review date'),
+    date('review_date', 'Date'),
   ]),
   section('manifest', 'Document manifest', [
     text('document_name', 'Document / attachment', true),
     text('reference_revision', 'Reference / revision'),
-    select('presence', 'Present / pending / NA', ['present', 'pending', 'not_applicable'], true),
+    select('presence', 'Present / pending / NA', PRESENCE, true),
   ], { repeatable: true }),
   section('release', 'Release', [
     area('missing', 'Missing documents, technical blockers and responsible person / due date'),
-    select('release_type', 'Release', ['return', 'interim', 'final'], true),
+    select('release_type', 'Release: return / interim / final', ['return', 'interim', 'final'], true),
     text('exception_ref', 'Signed acceptance / exception reference'),
     area('note', 'Final release requires the company technical review and applicable evidence. An interim pack must identify its limitations. Attach the official issued certificate; this index is not a substitute certificate.'),
+    signature('reviewer_signature', 'Reviewer signature', true),
+    date('release_date', 'Release date'),
+    text('recipient', 'Recipient'),
   ]),
-  reviewerSignOff('Technical release'),
 ]);
 
 export const IA11_TAKEOVER = form('IA11 Takeover survey and condition record', [
@@ -456,25 +438,18 @@ export const IA11_TAKEOVER = form('IA11 Takeover survey and condition record', [
     text('linked_records', 'Linked test and issue records'),
   ]),
   section('verification', 'Takeover verification', [
-    select('engineering_access', 'Engineering access', ['available', 'partial', 'none'], true),
+    select('engineering_access', 'Engineering access: available / partial / no', ['available', 'partial', 'none'], true),
     text('remote_owner', 'Remote / cloud access owner'),
     area('cloud_transfer', 'Service-mode / cloud transfer process, timescale and charge basis'),
     area('testing_performed', 'Testing performed, exclusions, actual condition and supporting records'),
     area('remedial_scope', 'Remedial scope, temporary arrangements and customer notification'),
-    text('transfer_ref', 'Monitoring / maintenance transfer ref (IA13)'),
+    text('transfer_ref', 'Monitoring / maintenance transfer ref IA13'),
     date('responsibility_starts', 'Incoming responsibility starts'),
-    select('decision', 'Decision', ['proceed', 'conditional', 'remediate'], true),
-    area('note', 'Existing paperwork and equipment markings are evidence to assess, not automatic confirmation of system compliance.'),
+    select('decision', 'Decision: proceed / conditional / remediate', ['proceed', 'conditional', 'remediate'], true),
+    text('customer_ack_ref', 'Customer acknowledgement ref'),
+    area('note', 'Existing paperwork and equipment markings are evidence to assess, not automatic confirmation of system compliance. Record the basis and limits of the takeover decision.'),
   ]),
-  engineerSignOff(
-    'Survey engineer sign-off',
-    'I confirm the basis and limits of the takeover decision recorded above.',
-  ),
-  section('customer_acceptance', 'Customer acceptance of takeover limitations', [
-    area('acceptance_scope', 'Customer agreement is required because the takeover is conditional, protection is reduced, or limitations / incomplete tests remain.', true),
-    signature('customer_signature', 'Customer name and signature', true),
-    date('customer_signed_at', 'Date', true),
-  ], { showWhen: whenField('verification', 'decision', ['conditional', 'remediate']) }),
+  engineerSignOff('Survey engineer sign-off', 'I confirm the basis and limits of the takeover decision recorded above.'),
 ]);
 
 export const IA12_UPGRADE = form('IA12 Upgrade and extension record', [
@@ -484,10 +459,9 @@ export const IA12_UPGRADE = form('IA12 Upgrade and extension record', [
     date('work_date', 'Work date', true),
     text('engineer_name', 'Engineer', true),
     area('reason_scope', 'Reason, agreed work and pre-work system record reference', true),
-    { id: 'customer_acceptance_required', label: 'Changes from agreed design, disconnected equipment or incomplete tests need customer agreement', type: 'checkbox' },
   ]),
   section('scope', 'Scope reconciliation', [
-    text('action_status', 'Action / status', true),
+    select('action_status', 'Action / status', ['added', 'retained', 'removed', 'replaced', 'not_applicable'], true),
     text('equipment_location', 'Equipment / location / source line', true),
     text('quoted_qty', 'Quoted qty'),
     text('actual_qty', 'Actual qty', true),
@@ -496,18 +470,10 @@ export const IA12_UPGRADE = form('IA12 Upgrade and extension record', [
     area('compatibility', 'Compatibility and effect on grade, standby duty, signalling and operation'),
     area('regression', 'Affected existing devices / interfaces and regression test references'),
     text('updated_as_fitted', 'Updated as-fitted revision'),
-    text('issue_refs', 'Issues / IA05 references'),
+    text('issue_refs', 'Issues / customer change acceptance ref'),
   ]),
-  engineerSignOff(
-    'Engineer sign-off',
-    'I confirm the upgrade/extension work and retesting recorded above. Compatibility assessments are the engineer’s and company’s responsibility.',
-  ),
-  reviewerSignOff(),
-  section('customer_acceptance', 'Customer acceptance of design change or limitation', [
-    area('acceptance_scope', 'Customer agreement is required for changes from the agreed design, equipment left disconnected or protection reduced, or incomplete tests.', true),
-    signature('customer_signature', 'Customer name and signature', true),
-    date('customer_signed_at', 'Date', true),
-  ], { showWhen: whenChecked('work', 'customer_acceptance_required') }),
+  engineerSignOff('Engineer signature / date', 'I confirm the upgrade/extension work and retesting recorded above.'),
+  reviewerSignOff('Technical review / date'),
 ]);
 
 export const IA13_TRANSFER = form('IA13 Maintenance and monitoring transfer', [
@@ -515,9 +481,8 @@ export const IA13_TRANSFER = form('IA13 Maintenance and monitoring transfer', [
   section('parties', 'Transfer parties', [
     text('outgoing_provider', 'Outgoing provider'),
     text('incoming_provider', 'Incoming provider', true),
-    date('effective_date', 'Transfer effective date', true),
+    date('effective_date', 'Transfer effective date / time', true),
     text('customer_authority_ref', 'Customer authority reference'),
-    { id: 'customer_acceptance_required', label: 'Service interruption, reduced protection or incomplete tests need customer agreement', type: 'checkbox' },
   ]),
   section('boundary', 'Responsibilities', [
     area('responsibility_boundary', 'Responsibility boundary, services transferred and contract references', true),
@@ -529,21 +494,17 @@ export const IA13_TRANSFER = form('IA13 Maintenance and monitoring transfer', [
     area('interruption', 'Service interruption / temporary protection and customer notification'),
     area('verification', 'Verification tests, final live state and unresolved actions / owner / due date'),
   ]),
-  engineerSignOff(
-    'Incoming engineer sign-off',
-    'I confirm the transfer arrangements and verification tests recorded above.',
-  ),
-  section('customer_acceptance', 'Customer acceptance of interruption or limitation', [
-    area('acceptance_scope', 'Customer agreement is required because of a service interruption, reduced protection, or other limitation during transfer.', true),
-    signature('customer_signature', 'Customer name and signature', true),
-    date('customer_signed_at', 'Date', true),
-  ], { showWhen: whenChecked('parties', 'customer_acceptance_required') }),
+  engineerSignOff('Incoming engineer signature / date', 'I confirm the transfer arrangements and verification tests recorded above.'),
+  section('customer_ack', 'Customer acknowledgement / date', [
+    signature('customer_signature', 'Customer acknowledgement', false),
+    date('customer_signed_at', 'Date'),
+  ]),
 ]);
 
 export const IA14_MAINTENANCE = form('IA14 Maintenance and corrective work record', [
   header(),
   section('visit', 'Visit', [
-    select('visit_type', 'Visit', ['preventive', 'corrective', 'remote'], true),
+    select('visit_type', 'Visit: preventive / corrective / remote', ['preventive', 'corrective', 'remote'], true),
     text('engineer_name', 'Engineer', true),
     date('visit_date', 'Date', true),
     text('arrival', 'Arrival'),
@@ -570,17 +531,18 @@ export const IA14_MAINTENANCE = form('IA14 Maintenance and corrective work recor
     text('retest_result', 'Functional retest / result'),
   ], { repeatable: true }),
   section('close', 'Close-out', [
-    area('outstanding', 'Outstanding faults / untested items and follow-up'),
+    area('outstanding', 'Outstanding faults / untested items, customer agreement and follow-up'),
     select('final_state', 'Final system state', ['normal', 'restricted', 'faulty', 'isolated'], true),
     text('isolations_restored', 'Test mode / isolations restored or ref'),
     text('next_action', 'Next action owner / due date'),
     text('arc_ack', 'ARC final service acknowledgement'),
-    area('note', 'Replacement and modified equipment must be tested to the extent necessary for the affected system. Routine customer signature is not required on this visit record.'),
+    area('note', 'Replacement and modified equipment must be tested to the extent necessary for the affected system. Record the actual result and any restriction on service.'),
   ]),
-  engineerSignOff(
-    'Engineer sign-off',
-    'I confirm this is an accurate record of attendance, work and system condition.',
-  ),
+  engineerSignOff('Engineer signature / date', 'I confirm this is an accurate record of attendance, work and system condition.'),
+  section('customer_ack', 'Customer acknowledgement / date', [
+    signature('customer_signature', 'Customer acknowledgement', false),
+    date('customer_signed_at', 'Date'),
+  ]),
 ]);
 
 export interface IntruderPackForm {

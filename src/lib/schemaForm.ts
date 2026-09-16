@@ -177,25 +177,24 @@ const IA10_MANIFEST_SEEDS = [
 ];
 
 const CV07_TOPIC_SEEDS = [
-  'Authorised use, privacy and footage handling',
-  'Live viewing, PTZ and selected camera views',
-  'Playback, time search and agreed export method',
-  'User access levels and audit / operator functions',
-  'Faults, storage warnings and who to call',
-  'Logbook, support and maintenance arrangements',
-  'Remote / app access and secure credential receipt',
+  'Live view, camera selection and PTZ',
+  'Search and playback by camera / time',
+  'Export and replay on another device',
+  'Fault reporting and service arrangements',
+  'Authorised accounts and secure access',
+  'Privacy masks, audio and retention controls',
+  'Monitoring / analytics operation where fitted',
 ];
 
 const CV11_MANIFEST_SEEDS = [
-  'As-fitted record, camera schedule and drawings',
-  'Camera, infrastructure and commissioning results',
-  'Recording, export and monitoring evidence',
-  'Changes, defects and retest evidence',
-  'Training and handover acceptance',
-  'User instructions and logbook',
-  'Maintenance / warranty information',
-  'Takeover / upgrade records',
-  'Official NSI certificate (number / date)',
+  'Survey / risk / user needs / test plan',
+  'As-fitted / image / infrastructure results',
+  'Commissioning / recording / export results',
+  'Monitoring results where applicable',
+  'Training / customer test sign-off / handover',
+  'User instructions / history / support',
+  'Changes / takeover / upgrade records',
+  'Official certificate where applicable',
 ];
 
 export function emptyAnswers(schema: SchemaCatalogue): FormAnswers {

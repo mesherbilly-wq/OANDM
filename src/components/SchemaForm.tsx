@@ -291,7 +291,7 @@ export function SchemaForm({
                   onClick={() => onChange({ ...answers, [section.id]: [...rows, emptyRow(section)] })}
                   className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-white/90 hover:text-white"
                 >
-                  <Plus className="w-3.5 h-3.5" />Add
+                  <Plus className="w-3.5 h-3.5" />Add record
                 </button>
               </div>
               <div className="p-3 space-y-3 bg-white">

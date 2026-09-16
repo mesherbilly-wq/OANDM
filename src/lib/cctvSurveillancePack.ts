@@ -3,6 +3,10 @@ import type { SchemaCatalogue, SchemaField, SchemaSection, SchemaShowWhen } from
 export const CCTV_PACK_STATUS = 'DRAFT — NOT VALIDATED FOR NSI COMPLIANCE';
 export const CCTV_PACK_REVISION = '01';
 
+const WORK_OPTIONS = ['new', 'takeover', 'upgrade', 'extension'];
+const TOPIC_STATUS = ['done', 'outstanding', 'not_applicable'];
+const PRESENCE = ['present', 'pending', 'not_applicable'];
+
 function form(title: string, sections: SchemaSection[]): SchemaCatalogue {
   return {
     schemaVersion: '1.0.0',
@@ -59,16 +63,17 @@ function header(): SchemaSection {
 function engineerSignOff(title: string, declaration: string): SchemaSection {
   return section('engineer_signoff', title, [
     area('declaration', declaration),
-    signature('engineer_signature', 'Engineer name and signature', true),
-    date('signed_at', 'Date', true),
+    text('engineer_name', 'Engineer name', true),
+    signature('engineer_signature', 'Engineer signature / signed-record reference', true),
+    date('signed_at', 'Date / time', true),
   ]);
 }
 
-function reviewerSignOff(title = 'Technical reviewer sign-off'): SchemaSection {
+function reviewerSignOff(title = 'Technical reviewer / signature'): SchemaSection {
   return section('reviewer_signoff', title, [
     area('review_notes', 'Review notes, conditions and standards register reference'),
-    signature('reviewer_signature', 'Technical reviewer name and signature', true),
-    date('reviewed_at', 'Review date', true),
+    signature('reviewer_signature', 'Technical reviewer / signature', true),
+    date('reviewed_at', 'Date', true),
   ]);
 }
 
@@ -76,239 +81,257 @@ function whenField(sectionId: string, field: string, values: string[]): SchemaSh
   return { fieldEquals: { section: sectionId, field, values } };
 }
 
-export const CV01_AS_FITTED = form('CV01 As-fitted system record and camera schedule', [
+export const CV01_AS_FITTED = form('CV01 User requirements and as-fitted system record', [
   header(),
-  section('customer', 'Customer and premises', [
-    text('customer_organisation', 'Customer organisation', true),
-    text('customer_representative', 'Customer representative'),
-    area('installation_address', 'Installation address (site address, not billing)', true),
+  section('customer', 'Customer, premises and agreed requirements', [
+    text('customer_organisation', 'Customer / responsible organisation', true),
+    text('customer_representative', 'Authorised representative'),
+    area('installation_address', 'Installation address (site, not billing address)', true),
     text('simpro_job_id', 'Simpro company / job ID'),
-    text('quote_id', 'Quote ID / baseline snapshot'),
-    text('as_fitted_reference', 'As-fitted reference / revision', true),
-    date('final_verification_date', 'Date of final verification', true),
+    text('quote_id', 'Quote ID / agreed baseline snapshot'),
+    text('as_fitted_reference', 'CV01 reference / revision', true),
+    select('work_type', 'Work: new / takeover / upgrade / extension', WORK_OPTIONS, true),
   ]),
-  section('basis', 'Work and design basis', [
-    select('work_type', 'Work type', ['new_installation', 'takeover', 'upgrade', 'extension'], true),
-    text('design_risk_reference', 'Design / risk assessment / operational requirement reference'),
-    area('applicable_standards', 'Applicable standards, editions, amendments and environmental classifications', true),
-    area('agreed_scope', 'Agreed scope, areas of coverage, exclusions and source quote sections', true),
-    area('quote_note', 'Quote / quantity note', false),
-    select('monitoring_applicable', 'Detector-activated / remotely monitored system (CV05)', ['yes', 'no', 'not_applicable'], true),
+  section('requirements', 'Agreed operational requirements', [
+    area('purpose_tasks', 'Purpose, risks, protected areas, users and required camera tasks', true),
+    text('cv16_revision', 'CV16 / user-requirements revision'),
+    text('customer_agreement_ref', 'Customer agreement reference / date'),
+    area('applicable_standards', 'Applicable standards / editions, monitoring route and project requirements', true),
+    area('scope_limits', 'Scope limits, excluded areas and quote variations'),
   ]),
-  section('cameras', 'Installed cameras', [
-    text('camera_id', 'Camera / asset ID', true),
-    text('location', 'Location / area / view', true),
+  section('schedule_meta', 'Schedule identity', [
+    text('schedule_reference', 'Schedule reference / continuation number'),
+    text('drawing_revisions', 'As-fitted drawings / revisions'),
+    area('schedule_note', 'Confirm actual equipment and quantities. Link camera IDs to CV02; identify recorders, storage, switches, power supplies and monitors. Record removed items in CV06 / CV13 rather than presenting them as installed.'),
+  ]),
+  section('equipment', 'Equipment schedule', [
+    text('asset_id', 'Asset ID', true),
+    text('location_use', 'Location / use', true),
     text('type_make_model', 'Type / make / model', true),
-    text('lens_fov', 'Lens / FoV / resolution'),
-    text('lighting', 'Lighting / IR / WDR'),
-    text('qty_serial', 'Actual qty / serial ref', true),
-    text('quoted_qty', 'Quoted qty (baseline only — not installed proof)'),
-    area('notes', 'Notes / old equipment removed or replaced'),
+    text('qty_serial', 'Qty / serial ref', true),
+    text('firmware_config_ref', 'Firmware / config ref'),
   ], { repeatable: true }),
-  section('recorders', 'Recorders, display and infrastructure', [
-    text('recorder_id', 'Recorder / NVR / VMS asset ID', true),
-    text('location', 'Location', true),
-    text('type_make_model', 'Type / make / model', true),
-    text('channels_storage', 'Channels / storage arrangement'),
-    text('qty_serial', 'Actual qty / serial ref', true),
-    text('quoted_qty', 'Quoted qty (baseline only)'),
-    area('notes', 'Notes / firmware / licence'),
-  ], { repeatable: true }),
+  section('schedule_close', 'Schedule references', [
+    area('serial_drawing_refs', 'Serial / firmware register, cabling and network drawing references'),
+    text('verified_by', 'Verified by'),
+    date('verification_date', 'Verification date'),
+  ]),
   section('arrangements', 'Actual system arrangements', [
-    text('recorder_model', 'Primary recorder / VMS', true),
-    text('recorder_location', 'Recorder location / asset reference', true),
-    area('network_power', 'Network, PoE, power and UPS arrangements', true),
-    area('recording_export', 'Recording, retention, export and evidence-handling arrangements', true),
-    area('viewing_access', 'Live viewing, user access and remote-access owner', true),
-    area('monitoring_interfaces', 'Detector activation, remote monitoring and interface arrangements, or NA'),
-    text('camera_record_ref', 'Camera / performance record reference (CV02)'),
-    text('recording_record_ref', 'Recording / export record reference (CV04)'),
-    text('monitoring_record_ref', 'Monitoring record reference (CV05) or NA'),
-    area('drawing_refs', 'Drawing / camera plan references and revisions; user-manual references'),
-    area('changes_limitations', 'Changes from quote / design and limitations (link CV06 / CV15)'),
+    area('recorder_vms', 'Recorder / VMS, storage architecture, licences and camera allocation', true),
+    area('viewing_access', 'Viewing, remote access, alarm integration and monitoring arrangements', true),
+    text('retention_requirement', 'Retention requirement / source'),
+    text('recording_export_ref', 'Recording / export tests CV04 reference'),
+    area('network_power', 'Network / power architecture and relevant interface responsibilities'),
+    area('privacy_roles', 'Authorised privacy masks, audio, access roles and policy reference'),
+    text('user_instructions', 'User instructions / drawing revisions'),
+    text('cv06_ref', 'CV06 changes / limitations reference'),
   ]),
   engineerSignOff(
     'Engineer verification',
-    'I confirm this record describes the installed CCTV system within the recorded scope. Unknown and unverified items are identified. A quote is a proposed baseline only; quoted quantity is not installed proof. Customer acceptance of changes is recorded separately on CV08/CV15. Do not record passwords or personal footage on this form.',
+    'I confirm this is the actual system record for the stated scope. Unverified items and differences from the agreed design are identified. No passwords or access secrets are recorded here.',
   ),
 ]);
 
-export const CV02_CAMERAS = form('CV02 Camera, image and infrastructure record', [
+export const CV02_CAMERAS = form('CV02 Camera performance and infrastructure readings', [
   header(),
   section('meta', 'Test identity', [
-    date('test_date', 'Test date', true),
+    text('cv02_reference', 'CV02 reference / revision'),
+    date('test_date', 'Engineer / test date', true),
     text('engineer_name', 'Engineer', true),
-    text('instrument_id', 'Instrument / test-chart / verification reference'),
-    area('method_note', 'Use the approved procedure and applicable image / identification criteria. Record actual results. Do not use a tick as a substitute for a result. NCP 104 Issue 3 (Nov 2017) is the documented NSI CCTV Codes of Practice baseline; apply the current BS EN IEC 62676-4 edition where it is the specified performance standard.'),
+    area('method_note', 'Complete a row per camera. Record the agreed viewing task and target area; use a referenced acceptance method from the applicable standard and user requirements. Settings alone do not prove image performance.'),
   ]),
-  section('camera_rows', 'Camera image and siting', [
-    text('camera_id', 'Camera / asset', true),
-    text('location_view', 'Location / intended view', true),
-    text('purpose', 'Purpose / operational requirement (observe / recognise / identify)'),
-    text('image_result', 'Image result / evidence ref'),
-    text('focus_fov', 'Focus / FoV / masking'),
-    text('day_night', 'Day / night / IR result'),
-    area('exceptions', 'Obstructions, lighting shortfalls, exceptions and linked issue / retest references'),
+  section('camera_settings', 'Camera schedule and settings', [
+    text('camera_location', 'Camera / location', true),
+    text('required_task', 'Required task / target', true),
+    text('lens_view_aim', 'Lens / view / aim'),
+    text('pixels_fps', 'Recorded pixels / fps'),
+    text('codec_rate_mode', 'Codec / rate / mode'),
   ], { repeatable: true }),
-  section('infrastructure', 'Cable, network and power', [
-    ...check('cabling_supports', 'Cabling, supports, containment and segregation verified'),
-    ...check('network_poe', 'Network / PoE / switch loading and link integrity verified'),
-    ...check('power_ups', 'Mains, PSU, camera power and applicable UPS / standby verified'),
-    ...check('time_sync', 'Date / time source and recorder / camera time sync verified'),
-    ...check('cyber_hardening', 'Default accounts changed and unused services disabled as applicable'),
-    area('infrastructure_notes', 'Infrastructure notes, test conditions and evidence refs'),
+  section('settings_refs', 'Configuration references', [
+    area('privacy_ptz_analytics', 'Privacy-mask, audio, PTZ preset and analytics configuration references'),
+    area('acceptance_criteria', 'Acceptance criteria / applicable edition and test target method'),
   ]),
-  engineerSignOff(
-    'Engineer sign-off',
-    'I confirm these camera and infrastructure results were taken under the recorded conditions and that omitted measurements are identified with reasons. Technical measurements are the engineer’s and company’s responsibility.',
-  ),
+  section('performance', 'Actual performance and evidence', [
+    text('camera_asset_id', 'Camera / asset ID', true),
+    text('test_datetime_engineer', 'Test date / time / engineer'),
+    text('task_location_distance', 'Required task / location / distance'),
+    text('target_method_ref', 'Target / method / acceptance reference'),
+  ]),
+  section('conditions', 'Conditions tested', [
+    text('condition', 'Condition', true),
+    { id: 'live_image_result', label: 'Observed live image / result', type: 'test_result', required: true },
+    { id: 'playback_result', label: 'Recorded playback / result', type: 'test_result', required: true },
+    text('evidence_ref', 'Evidence reference'),
+  ], { repeatable: true }),
+  section('performance_close', 'Measured result and limitations', [
+    area('measured_result', 'Measured result / units, target detail, scene lighting and achieved task'),
+    area('obstructions', 'Obstructions, image limitations, failures and retest references'),
+    text('cv03_cv06_refs', 'CV03 result / CV06 issue references'),
+    text('engineer_verification_date', 'Engineer verification / date'),
+    area('condition_note', 'Include the applicable day, night, backlight, motion and lighting conditions. If a condition cannot be tested, record it as not tested and arrange completion; do not infer a night result from a daytime image.'),
+  ]),
+  section('infra_meta', 'Network, power and electrical readings', [
+    text('switch_psu_asset', 'Switch / PSU / UPS / link asset'),
+    text('location_engineer_date', 'Location / engineer / date'),
+  ]),
+  section('infra_tests', 'Measurements and evidence', [
+    text('item_test', 'Item / test', true),
+    text('acceptance_limit', 'Acceptance limit / method'),
+    text('actual_reading', 'Actual reading / units'),
+    { id: 'result', label: 'Result', type: 'test_result', required: true },
+    text('evidence', 'Evidence'),
+  ], { repeatable: true }),
+  section('infra_close', 'Load, UPS and certificates', [
+    text('design_measured_load', 'Design load / measured load / units'),
+    text('ups_duty', 'UPS duty required / demonstrated'),
+    text('instrument_cal', 'Instrument / calibration reference'),
+    text('electrical_certificate', 'Electrical certificate / edition'),
+    area('exceptions', 'Exceptions, battery details, capacity calculations and retest references'),
+    text('cv08_receipt_ref', 'Receipt / test sign-off reference CV08'),
+  ]),
+  engineerSignOff('Engineer signature / date', 'I confirm these camera and infrastructure results were taken under the recorded conditions.'),
 ]);
 
-export const CV03_COMMISSIONING = form('CV03 Commissioning and verification checks', [
+export const CV03_COMMISSIONING = form('CV03 Commissioning and system validation', [
   header(),
   section('meta', 'Test identity', [
+    text('cv03_reference', 'CV03 reference / revision'),
     text('engineer_name', 'Engineer', true),
     date('test_date', 'Test date', true),
-    text('procedure_revision', 'Approved procedure / revision'),
-    text('standard_profile', 'Applicable standard / operational-requirement profile'),
-    text('as_fitted_revision', 'As-fitted record revision'),
+    text('user_as_fitted_revision', 'User requirements / as-fitted revision'),
+    text('procedure_edition', 'Approved test procedure / edition'),
   ]),
-  section('installation', 'Installation and operation', [
-    ...check('scope_reconciled', 'Installed scope reconciled with agreed design and as-fitted record'),
-    ...check('compatibility', 'Equipment compatibility, environment and mounting verified'),
-    ...check('cameras_views', 'All applicable cameras, views and image criteria tested (CV02)'),
-    ...check('recording_export', 'Recording, playback and export verified (CV04)'),
-    ...check('displays_workstations', 'Displays, workstations and authorised live viewing verified'),
-    ...check('user_access', 'User access levels and audit / operator functions verified'),
-    ...check('faults_indications', 'Fault indications, storage warnings and restoration verified'),
-    ...check('privacy_masking', 'Privacy masking, blanking and authorised views verified where required'),
-    area('failures_exclusions', 'Failures, exclusions, untested items and evidence / issue references'),
+  section('installation', 'Installation and image tests', [
+    ...check('scope_reconciled', 'Installed equipment and coverage reconciled with agreed requirements'),
+    ...check('mounting_cabling', 'Mounting, cabling, supports and electrical evidence checked'),
+    ...check('camera_identity', 'Camera identity, view, focus and required task verified'),
+    ...check('day_night_cv02', 'Recorded day / night and applicable scene tests evidenced in CV02'),
+    ...check('privacy_audio', 'Privacy masks, authorised audio and excluded areas checked'),
+    ...check('ptz_analytics', 'PTZ, presets and analytics tested against their agreed purpose'),
+    ...check('monitor_views', 'Monitor / display image quality and operator views verified'),
+    ...check('interfaces', 'Interfaces and affected retained equipment tested end to end'),
+    area('detailed_results', 'Detailed procedures, expected / actual results and test evidence references'),
+    area('failures', 'Failures, untested conditions and linked CV06 issues'),
   ]),
-  section('remaining', 'Remaining applicable tests', [
-    ...check('motion_analytics', 'Motion detection / analytics configured and tested where required'),
-    ...check('audio', 'Audio capture tested or confirmed not fitted / not authorised'),
-    ...check('monitoring', 'Remote monitoring / detector activation tested (CV05) or marked NA'),
-    ...check('interfaces', 'Interfaces tested end to end with authorised parties'),
-    ...check('remote_access', 'Remote / app / client access and access-owner responsibilities verified'),
-    ...check('regression', 'Affected retained equipment retested following changes'),
-    ...check('datetime_events', 'Correct date / time and applicable event records verified'),
-    ...check('test_modes_cleared', 'Test modes cleared; final status and residual isolations recorded'),
-    area('detailed_results', 'Detailed test records, expected / actual results and supporting attachments'),
-    select('final_state', 'Final state', ['normal', 'restricted', 'faulty'], true),
-    area('outstanding_issues', 'Outstanding issue references'),
+  section('verification', 'System verification', [
+    ...check('recording_modes', 'Recording modes, schedules and camera allocations verified'),
+    ...check('playback_export_cv04', 'Playback, search and export independently tested (CV04)'),
+    ...check('retention_capacity', 'Retention / capacity evidence supports the agreed requirement'),
+    ...check('datetime_sync', 'Date, time, synchronisation and time-zone handling checked'),
+    ...check('user_roles', 'User roles, authentication and remote-access responsibilities verified'),
+    ...check('video_loss_recovery', 'Video loss, storage / power faults and recovery tested'),
+    ...check('monitoring_cv05', 'Required monitoring functions tested with receiving centre (CV05)'),
+    ...check('test_modes_cleared', 'Test modes cleared and final operating state recorded'),
+    area('test_reports', 'Test reports, exceptions and retest evidence'),
+    select('final_state', 'Final state: operational / limited / not live', ['operational', 'limited', 'not_live'], true),
+    text('cv06_cv15_ref', 'CV06 unresolved items / CV15 agreement'),
   ]),
   engineerSignOff(
-    'Engineer sign-off',
-    'I confirm the results reflect the work and tests performed within the stated scope. This checklist must be used with the approved detailed procedures and applicable standards. Commissioning tests are the engineer’s and company’s responsibility.',
+    'Engineer declaration',
+    'These results accurately record the tests I performed. Untested work and failures are identified. Customer sign-off of the referenced results is recorded on CV08.',
   ),
 ]);
 
 export const CV04_RECORDING = form('CV04 Recording, retention and export verification', [
   header(),
   section('recorder', 'Recorder identity', [
-    text('recorder_asset', 'Recorder / VMS asset', true),
-    text('make_model', 'Make / model / software revision'),
-    text('engineer_name', 'Engineer', true),
-    date('test_date', 'Date', true),
-    text('storage_arrangement', 'Storage arrangement / RAID / spare'),
-    text('channel_count', 'Configured channels / cameras recorded'),
+    text('cv04_reference', 'CV04 reference / revision'),
+    text('recorder_asset', 'Recorder / VMS / storage asset', true),
+    text('required_retention', 'Required retention / requirement reference', true),
+    text('recording_mode', 'Recording mode / schedule / camera count'),
   ]),
-  section('retention', 'Retention and overwrite', [
-    text('required_retention', 'Required retention period', true),
-    text('achieved_retention', 'Achieved / calculated retention'),
-    text('frame_rate_codec', 'Frame rate / codec / quality profile'),
-    select('overwrite_mode', 'Overwrite / lock mode', ['overwrite', 'stop_when_full', 'mixed', 'not_applicable'], true),
-    ...check('storage_health', 'Storage health, remaining capacity and warning thresholds verified'),
-    ...check('continuous_or_event', 'Continuous / scheduled / event recording matches the agreed design'),
-    area('calculation_evidence', 'Retention calculation method, assumptions and evidence reference'),
+  section('capacity', 'Capacity and recording', [
+    text('usable_capacity', 'Usable recording capacity / units'),
+    text('codec_bitrate', 'Codec / bitrate basis / recording duty'),
+    area('capacity_method', 'Capacity method, assumptions, overheads and supporting calculation'),
+    text('calculated_retention', 'Calculated retention / conditions'),
+    text('oldest_newest', 'Oldest / newest accessible footage'),
+    text('check_datetime', 'Date / time of actual check'),
+    text('evidence_period', 'Evidence period since commissioning'),
+    ...check('cameras_recording', 'All intended cameras recording at agreed settings'),
+    ...check('playback_gaps', 'Playback available without unexplained gaps in checked interval'),
+    ...check('storage_fault', 'Storage fault / full-disk / overwrite behaviour verified'),
+    area('retention_vs_forecast', 'Observed retention versus forecast; gaps, untested duration and follow-up'),
   ]),
-  section('export', 'Playback and export', [
-    ...check('live_playback', 'Live view and playback of recorded images verified'),
-    ...check('time_search', 'Time / event search functions verified'),
-    ...check('export_native', 'Native export completed and playable on independent player'),
-    ...check('export_standard', 'Standard / evidential export format completed where required'),
-    ...check('watermark_audit', 'Watermark, checksum or audit trail verified where provided'),
-    ...check('authorised_export', 'Export rights restricted to authorised users'),
-    area('export_refs', 'Export file references, player version and test limitations'),
-    area('note', 'Customer acknowledgement of demonstrated playback and export is recorded on CV08. Do not attach personal footage to this pack.'),
+  section('export', 'Evidence handling checks', [
+    text('engineer_name', 'Engineer'),
+    date('test_date', 'Test date', true),
+    text('test_clip_id', 'Test clip ID / cameras / event time'),
+    ...check('search_playback', 'Search / playback retrieves the selected camera and time'),
+    ...check('export_clip', 'Export produces the intended clip and required metadata'),
+    ...check('independent_replay', 'Export replayed on an independent authorised device / player'),
+    ...check('datetime_agrees', 'Date / time / time zone agree with the known test event'),
+    ...check('image_detail', 'Image detail remains suitable in playback and export'),
+    ...check('export_permissions', 'Export permissions, audit trail and authorised access verified'),
+    area('export_format', 'Export format, player/version, destination and independent playback result'),
+    area('integrity_refs', 'Timestamp offset / integrity checks / evidence references and limitations'),
+    area('note', 'Use authorised test images and approved storage. Record references to evidence rather than adding unnecessary personal footage to the general O&M pack.'),
+    text('cv08_ref', 'Customer results sign-off CV08 ref'),
   ]),
-  engineerSignOff(
-    'Engineer sign-off',
-    'I confirm the recording, retention and export tests recorded above. Technical measurements are the engineer’s and company’s responsibility.',
-  ),
+  engineerSignOff('Engineer signature / date', 'I confirm the recording, retention and export tests recorded above.'),
 ]);
 
-export const CV05_MONITORING = form('CV05 Remote monitoring and detector-activated verification', [
+export const CV05_MONITORING = form('CV05 Remote monitoring and alarm verification', [
   header(),
   section('applicability', 'Applicability', [
-    select('monitoring_type', 'Monitoring type', ['detector_activated', 'remote_video_response', 'bs_8418', 'other_monitored', 'not_applicable'], true),
-    area('applicability_note', 'Use this form only where the system is remotely monitored, detector-activated, or BS 8418 applies. Mark not_applicable and do not complete the tests if monitoring is not in scope.'),
+    select('applicable', 'Applicable only to monitored systems', ['yes', 'not_applicable'], true),
+    area('applicability_note', 'Use this form only where the system is remotely monitored, detector-activated, or BS 8418 applies. A working remote-view app does not establish detector-activated monitoring or police response.'),
   ]),
   section('connection', 'Connection', [
-    text('rvrc_arc', 'RVRC / ARC / monitoring provider', true),
-    text('monitoring_account', 'Monitoring account reference'),
-    text('transmitter_model', 'Transmitter / encoder / asset'),
-    text('transmission_paths', 'Transmission category / paths'),
-    text('engineer_name', 'Engineer'),
-    date('test_date', 'Date', true),
-    text('booking_ref', 'Test booking / operator reference'),
-  ], { showWhen: whenField('applicability', 'monitoring_type', ['detector_activated', 'remote_video_response', 'bs_8418', 'other_monitored']) }),
-  section('signals', 'Required signals and images', [
-    text('signal_trigger', 'Signal / trigger / camera', true),
-    text('sent_time', 'Sent time'),
-    text('received_time', 'Received time'),
-    text('operator_ack', 'Operator acknowledgement'),
+    text('cv05_reference', 'CV05 reference / revision'),
+    text('receiving_centre', 'Receiving centre / account reference', true),
+    text('standard_profile', 'Applicable standard / monitoring profile'),
+    text('engineer_operator_booking', 'Engineer / centre operator / test booking'),
+  ], { showWhen: whenField('applicability', 'applicable', ['yes']) }),
+  section('signals', 'Alarm and transmission functions', [
+    text('trigger_device', 'Trigger / device', true),
+    text('expected_response', 'Expected response / image'),
+    text('receipt_time', 'Receipt time / operator ref'),
     { id: 'result', label: 'Result', type: 'test_result', required: true },
-    text('result_ref', 'Reference'),
-  ], {
-    repeatable: true,
-    showWhen: whenField('applicability', 'monitoring_type', ['detector_activated', 'remote_video_response', 'bs_8418', 'other_monitored']),
-  }),
-  section('paths', 'Each transmission path', [
-    text('path_provider', 'Path / provider', true),
-    text('failure_restore', 'Failure / restore trigger'),
-    text('time_limit', 'Time / expected limit'),
-    area('actual_result', 'Actual result / operator ref'),
-  ], {
-    repeatable: true,
-    showWhen: whenField('applicability', 'monitoring_type', ['detector_activated', 'remote_video_response', 'bs_8418', 'other_monitored']),
-  }),
-  section('response', 'Response and live service', [
-    area('confirmation_evidence', 'Image quality, detector cause and operator instruction evidence'),
-    select('final_monitoring_state', 'Final monitoring state', ['live', 'pending', 'not_applicable', 'suspended'], true),
-    text('test_mode_ended', 'Test mode ended: time / operator ref'),
-    area('outstanding_actions', 'Outstanding activation actions, owner, due date and customer notification'),
-    area('restricted_note', 'Keep signalling secrets and personal footage in the authorised restricted record. A successful signal test alone does not prove police or keyholder response has been granted.'),
-  ], { showWhen: whenField('applicability', 'monitoring_type', ['detector_activated', 'remote_video_response', 'bs_8418', 'other_monitored']) }),
+    text('evidence', 'Evidence'),
+  ], { repeatable: true, showWhen: whenField('applicability', 'applicable', ['yes']) }),
+  section('alignment', 'Detection alignment', [
+    area('detection_alignment', 'Detection / analytics alignment, alarm image coverage and verification procedure'),
+    area('missing_functions', 'Missing functions, failed signals and retest references'),
+  ], { showWhen: whenField('applicability', 'applicable', ['yes']) }),
+  section('paths', 'Paths and service state', [
+    text('path_fault_restore', 'Path / fault / restore', true),
+    text('required_response', 'Required response / limit'),
+    area('actual_result', 'Actual result / centre ref'),
+  ], { repeatable: true, showWhen: whenField('applicability', 'applicable', ['yes']) }),
+  section('response', 'Monitoring service and response arrangements', [
+    area('site_procedures', 'Site operating / arming procedures'),
+    area('audio_challenge', 'Audio challenge / response arrangements'),
+    text('police_force_policy', 'Police force / applicable policy'),
+    text('urn_evidence', 'Response / URN evidence or NA'),
+    select('final_service', 'Final service: live / pending / restricted', ['live', 'pending', 'restricted', 'not_applicable'], true),
+    text('test_mode_ended', 'Test mode ended: date / centre ref'),
+    area('outstanding', 'Outstanding activation / coverage limits, owner, due date and customer notice'),
+    area('restricted_note', 'Keep keyholder data and access secrets in the restricted service record. Do not record response as active without supporting evidence.'),
+  ], { showWhen: whenField('applicability', 'applicable', ['yes']) }),
   engineerSignOff(
     'Engineer sign-off',
-    'I confirm the monitoring tests recorded above, or that remote monitoring is not applicable. Monitoring tests and compatibility with the RVRC/ARC are the engineer’s and company’s responsibility.',
+    'I confirm the monitoring tests recorded above, or that remote monitoring is not applicable.',
   ),
 ]);
 
 export const CV06_CHANGES = form('CV06 Changes, defects and remedial actions', [
   header(),
   section('issue', 'Issue / change', [
-    text('issue_reference', 'Issue / change reference', true),
+    text('issue_reference', 'Issue reference / revision', true),
     date('raised_date', 'Date'),
     text('raised_by', 'Raised by'),
-    select('issue_type', 'Type', [
-      'design_change',
-      'defect',
-      'disconnected_or_reduced_coverage',
-      'limitation_or_incomplete_test',
-      'other',
-    ], true),
-    select('status', 'Status', ['open', 'action', 'retest', 'closed'], true),
-    area('description', 'Description, affected cameras / recorders and quoted versus installed quantities / scope', true),
-    area('operational_effect', 'Operational effect and applicable design / standards reference'),
-    area('required_action', 'Required action and temporary coverage / isolations', true),
+    select('issue_type', 'Type: change / defect / untested / restriction', ['change', 'defect', 'untested', 'restriction'], true),
+    select('status', 'Status: open / action / retest / closed', ['open', 'action', 'retest', 'closed'], true),
+    area('description', 'Description, affected cameras / assets and original versus actual scope', true),
+    area('operational_effect', 'Effect on coverage, image task, recording, privacy or monitoring'),
+    area('required_action', 'Required action, temporary arrangements and acceptance criterion', true),
     text('responsible_person', 'Responsible person'),
     date('due_date', 'Due date'),
     text('customer_notified', 'Customer notified / date'),
-    text('cv15_ref', 'Customer acceptance reference (CV15) if a change or limitation needs agreement'),
-    area('technical_disposition', 'Technical disposition and closure / retest evidence'),
-    area('note', 'Customer acknowledgement does not establish technical compliance or close a failed test. Preserve the original issue and record the corrective action and retest. Use CV15 for customer acceptance of design changes, reduced coverage or incomplete tests.'),
+    text('cv15_ref', 'Specific agreement CV15 ref or NA'),
+    area('technical_disposition', 'Technical disposition, retest evidence and closure'),
+    area('note', 'Customer agreement does not turn a failed technical test into a pass or waive a required standard. Retain the original finding and linked corrective evidence.'),
   ]),
   reviewerSignOff(),
 ]);
@@ -316,61 +339,59 @@ export const CV06_CHANGES = form('CV06 Changes, defects and remedial actions', [
 export const CV07_TRAINING = form('CV07 Customer demonstration and training', [
   header(),
   section('session', 'Training session', [
-    text('trainee_name_role', 'Trainee name / role', true),
-    text('trainer_name', 'Trainer', true),
-    date('training_date', 'Date', true),
+    text('cv07_reference', 'CV07 reference / revision'),
+    text('event_reference', 'Event reference / date'),
+    text('trainee_name_role', 'Trainees / roles or attendance-list ref', true),
+    text('trainer_name', 'Trainer name', true),
   ]),
-  section('topics', 'Topics demonstrated or explained', [
+  section('topics', 'Demonstration and practice', [
     text('topic', 'Topic', true),
-    select('status', 'Status', ['done', 'outstanding', 'not_applicable'], true),
-    area('notes', 'Notes / instruction reference'),
+    select('status', 'Status', TOPIC_STATUS, true),
+    area('notes', 'Notes / reference'),
   ], { repeatable: true }),
   section('follow_up', 'Outstanding training', [
-    area('outstanding_training', 'Outstanding training and user instructions supplied (reference / revision)'),
-    area('note', 'Customer acknowledgement of the demonstration and training is recorded once on CV08. This sheet is the engineer/trainer record. Do not request a repeat trainee signature on this form.'),
+    area('outstanding_training', 'User-manual references, outstanding training and responsible person'),
+    area('note', 'I confirm the attendance and instruction recorded. The customer acknowledges the applicable training and handover on CV08 for this event; no repeat trainee signature is requested here.'),
+    text('cv08_ref', 'Current-event CV08 reference'),
   ]),
-  engineerSignOff(
-    'Trainer / engineer record',
-    'I confirm the instruction recorded above was given. Outstanding topics and limitations are identified in this record.',
-  ),
+  engineerSignOff('Trainer signature / date', 'I confirm the attendance and instruction recorded.'),
 ]);
 
-export const CV08_HANDOVER = form('CV08 Completion and handover acceptance', [
+export const CV08_HANDOVER = form('CV08 Customer test sign-off and handover', [
   header(),
   section('handover', 'Handover identity', [
     text('customer_name_role', 'Customer name / authorised role', true),
-    date('commissioning_date', 'Commissioning date', true),
-    text('as_fitted_reference', 'As-fitted reference / revision', true),
-    text('completion_scope', 'Completion scope / work type', true),
-    select('system_state', 'System state', ['operational', 'limited', 'not_live'], true),
-    select('monitoring_state', 'Monitoring state', ['live', 'pending', 'not_applicable'], true),
-    area('outstanding_work', 'Outstanding work, variations, limitations and document references'),
+    date('commissioning_date', 'Event / commissioning date', true),
+    text('cv08_reference', 'CV08 event / handover reference', true),
+    text('completion_scope', 'Scope / areas / stage covered', true),
   ]),
-  section('receipt', 'Items received and demonstrated', [
-    ...check('demonstration_training', 'Operation demonstrated and user instruction provided (CV07)'),
-    ...check('live_playback_export', 'Live view, playback and agreed export method demonstrated (CV04)'),
-    ...check('credentials', 'Authorised access / credentials transferred securely — do not write passwords here'),
-    ...check('user_information', 'Complete user operating information supplied'),
-    ...check('logbook_maintenance', 'System logbook and maintenance / emergency contacts supplied'),
-    ...check('as_fitted_docs', 'Referenced as-fitted record and handover documents identified'),
-    ...check('operating_status', 'System’s stated operating and monitoring status explained'),
-    ...check('privacy_use', 'Authorised use, privacy and footage-handling responsibilities explained'),
+  section('documents', 'Documents — reference and revision or NA', [
+    text('cv01_ref', 'CV01 user needs / as-fitted record'),
+    text('cv02_ref', 'CV02 image / infrastructure results'),
+    text('cv03_ref', 'CV03 commissioning results'),
+    text('cv04_ref', 'CV04 recording / export results'),
+    text('cv05_ref', 'CV05 monitoring results or NA'),
+    text('cv07_cv10_ref', 'CV07 training / CV10 support records'),
+    text('cv11_ref', 'CV11 document index / user manuals'),
+    select('system_state', 'System state: operational / limited / not live', ['operational', 'limited', 'not_live'], true),
+    select('monitoring_state', 'Monitoring: live / pending / NA', ['live', 'pending', 'not_applicable'], true),
+    text('cv15_ref', 'CV15 changes / restrictions ref or none'),
   ]),
-  section('customer_acceptance', 'Customer acknowledgement', [
+  section('customer_acceptance', 'Customer sign-off', [
     area(
       'acknowledgement_text',
-      'The customer acknowledges the demonstration and training recorded, receipt of instructions, logbook and maintenance information, the referenced as-fitted record and handover documents, and the system’s stated operating and monitoring status. This is the routine customer signature for the CCTV pack.',
+      'I confirm the identified test results were presented and explained to me and sign off those results for the stated scope, subject to CV15. I acknowledge the applicable training, documents and secure access handover recorded in this pack. This signature does not certify the accuracy of engineer measurements or assume the installer technical responsibilities.',
     ),
-    signature('customer_signature', 'Customer name and signature', true),
-    date('customer_signed_at', 'Date', true),
+    signature('customer_signature', 'Customer signature', true),
+    date('customer_signed_at', 'Date / time', true),
   ]),
-  section('installer_declaration', 'Installer declaration', [
+  section('installer_declaration', 'Engineer', [
     area(
       'installer_text',
-      'This record accurately describes the handover within the stated scope. The separate NSI Certificate of Compliance, if issued, is recorded in the O&M index. This form is not that certificate. NCP 120 is an intruder-alarm code and is not used as the CCTV baseline.',
+      'I confirm the stated results and handover record are accurate. Changes and unresolved items are identified above. Technical responsibility remains with the company and its appointed personnel.',
     ),
-    signature('installer_signature', 'Installer name and signature', true),
-    date('installer_signed_at', 'Date', true),
+    signature('installer_signature', 'Engineer name / signature', true),
+    date('installer_signed_at', 'Date / time', true),
   ]),
 ]);
 
@@ -379,43 +400,42 @@ export const CV09_LOG = form('CV09 System history and event log', [
   section('log_meta', 'Log identity', [
     text('maintainer_telephone', 'Maintainer / service telephone'),
     text('log_reference', 'Log reference / continuation number'),
-    area('instruction', 'Record activations, faults, maintenance, repairs, footage requests and alterations. Include the person recording the event and the linked work sheet. Do not write passwords, PINs or personal footage references in this log.'),
+    area('instruction', 'Record faults, visits, configuration changes, repairs and relevant incidents. Identify affected cameras / assets and associated work records. Keep personal footage and access secrets in authorised separate storage.'),
   ]),
-  section('events', 'Events and visits', [
+  section('events', 'Events and actions', [
     text('event_datetime', 'Date / time', true),
-    area('event_area', 'Event / affected cameras or recorder', true),
-    text('action_ref', 'Action / report reference'),
+    area('event_area', 'Event / assets affected', true),
+    text('action_ref', 'Action / evidence reference'),
     text('recorded_by', 'Recorded by', true),
   ], { repeatable: true }),
-  section('open', 'Current unresolved items', [
-    area('unresolved', 'Current unresolved items / next action'),
+  section('open', 'Unresolved items', [
+    area('unresolved', 'Unresolved items and next actions'),
   ]),
 ]);
 
 export const CV10_SUPPORT = form('CV10 Maintenance and support information', [
   header(),
-  section('service', 'Service arrangements', [
-    text('maintenance_provider', 'Maintenance provider', true),
-    text('agreement_ref', 'Agreement reference / effective date'),
+  section('service', 'Service contacts', [
+    text('maintenance_provider', 'Maintaining company', true),
+    text('agreement_ref', 'Agreement / effective date'),
     text('service_telephone', 'Service telephone', true),
-    text('emergency_telephone', 'Emergency / out-of-hours telephone'),
+    text('emergency_telephone', 'Out-of-hours / emergency support'),
     text('support_email', 'Support email'),
-    text('monitoring_provider', 'Monitoring provider / support reference or NA'),
-    text('visit_frequency', 'Visit frequency / method'),
-    date('first_service_due', 'First planned service due'),
-    area('coverage', 'Coverage, attendance arrangements, exclusions and agreement attachment'),
+    text('monitoring_provider', 'Monitoring centre / reference or NA'),
+    text('visit_frequency', 'Planned visit frequency / method'),
+    date('first_service_due', 'First service due'),
+    area('coverage', 'Service coverage, attendance arrangements and exclusions'),
   ]),
-  section('documents', 'User documents and warranty', [
-    text('user_manual_ref', 'User manual reference / revision'),
-    text('quick_guide_logbook', 'Quick guide / logbook reference'),
-    area('warranty', 'Warranty period, start date, scope and provider'),
-    area('user_checks', 'User checks, privacy, footage requests and fault-reporting guidance'),
-    area('advice', 'Keep cameras and views clear and follow the supplied operating instructions. Report faults promptly and record events in the logbook. Arrange changes through the maintainer. Do not store passwords on this sheet.'),
+  section('documents', 'Documents, licences and warranty', [
+    text('user_manual_ref', 'User manual / quick guide references'),
+    text('cv08_ref', 'Training / current-event CV08 ref'),
+    area('licences', 'Licence / subscription owner, expiry / renewal and support responsibilities'),
+    area('warranty', 'Warranty provider, start date, period and limitations'),
+    area('advice', 'Report image loss, recording faults and changes to camera views promptly. Follow the supplied operating instructions and authorised retention / export procedures. Keep the system record current after alterations.'),
+    text('issued_by', 'Issued by'),
+    date('issued_at', 'Issued date'),
+    text('delivery_receipt_ref', 'Delivery / receipt reference'),
   ]),
-  engineerSignOff(
-    'Issued by',
-    'I confirm this support information was issued with the handover pack. Customer receipt of this information is acknowledged on CV08.',
-  ),
 ]);
 
 export const CV11_RELEASE = form('CV11 O&M document index and technical release', [
@@ -423,88 +443,85 @@ export const CV11_RELEASE = form('CV11 O&M document index and technical release'
   section('pack', 'Pack identity', [
     text('pack_reference', 'Pack reference / revision', true),
     text('reviewer_name', 'Reviewer'),
-    date('review_date', 'Review date'),
+    date('review_date', 'Date'),
   ]),
   section('manifest', 'Document manifest', [
     text('document_name', 'Document / attachment', true),
     text('reference_revision', 'Reference / revision'),
-    select('presence', 'Present / pending / NA', ['present', 'pending', 'not_applicable'], true),
+    select('presence', 'Present / pending / NA', PRESENCE, true),
   ], { repeatable: true }),
   section('release', 'Release', [
-    area('missing', 'Missing documents, technical blockers and responsible person / due date'),
-    select('release_type', 'Release', ['return', 'interim', 'final'], true),
-    text('exception_ref', 'Signed acceptance / exception reference (CV15)'),
-    area('note', 'Final release requires the company technical review and applicable evidence. An interim pack must identify its limitations. Attach the official issued certificate; this index is not a substitute certificate. These company forms are not NSI-issued.'),
+    area('missing', 'Missing evidence, certificate number / issuer / date or applicability decision'),
+    select('release_type', 'Decision: return / interim / final', ['return', 'interim', 'final'], true),
+    text('exception_ref', 'CV08 / CV15 acceptance references'),
+    area('note', 'An interim pack must identify its limitations. Confirm applicable technical tests and customer sign-off before final release. Attach the official issued certificate where required; this index is not a certificate.'),
+    signature('reviewer_signature', 'Reviewer signature', true),
+    date('release_date', 'Release date'),
+    text('recipient', 'Recipient'),
   ]),
-  reviewerSignOff('Technical release'),
 ]);
 
-export const CV12_TAKEOVER = form('CV12 Takeover survey and condition record', [
+export const CV12_TAKEOVER = form('CV12 Takeover and provider transfer record', [
   header(),
   section('survey', 'Survey', [
     text('survey_engineer', 'Survey engineer', true),
     date('survey_date', 'Date', true),
     text('previous_provider', 'Previous provider / unknown'),
-    text('existing_stated_standard', 'Existing stated standard / evidence'),
-    text('verified_standard', 'Verified standard / not verified'),
+    text('existing_stated_standard', 'Existing standard / certificate evidence'),
+    text('user_requirements_ref', 'Current user-requirements reference'),
   ]),
-  section('records', 'Records and equipment', [
-    area('existing_records', 'Existing certificate, drawings, camera schedule, manuals and service history references'),
-    area('missing_records', 'Missing records and actions to establish current as-fitted information'),
-    area('retained_equipment', 'Retained recorders, cameras, network and equipment; compatibility / supportability'),
-    area('inherited_faults', 'Inherited faults, inaccessible cameras, unverified views and limitations'),
-    area('scope_inspected', 'Scope / areas inspected'),
-    text('linked_records', 'Linked test and issue records'),
+  section('records', 'Condition and records', [
+    area('existing_records', 'Existing plans, equipment lists, manuals, commissioning and service history'),
+    area('retained_equipment', 'Panel / recorder / VMS, camera compatibility, support and licence ownership'),
+    area('existing_condition', 'Existing image / recording condition, missing footage and unresolved faults'),
+    area('inaccessible', 'Inaccessible assets, missing records and unverified performance / restrictions'),
+    area('scope_inspected', 'Survey scope / areas inspected'),
+    text('linked_records', 'CV02-05 tests / CV06 issue references'),
   ]),
-  section('verification', 'Takeover verification', [
-    select('engineering_access', 'Engineering access', ['available', 'partial', 'none'], true),
-    text('remote_owner', 'Remote / cloud / VMS access owner'),
-    area('cloud_transfer', 'Remote-access / cloud transfer process, timescale and charge basis'),
-    area('testing_performed', 'Testing performed, exclusions, actual condition and supporting records'),
-    area('remedial_scope', 'Remedial scope, temporary arrangements and customer notification'),
-    text('cv15_ref', 'Customer acceptance reference (CV15) if the takeover is conditional or limited'),
-    date('responsibility_starts', 'Incoming responsibility starts'),
-    select('decision', 'Decision', ['proceed', 'conditional', 'remediate'], true),
-    area('note', 'Existing paperwork and equipment markings are evidence to assess, not automatic confirmation of system compliance. Extra customer signature is on CV15 only where required.'),
+  section('verification', 'Transfer and verification', [
+    text('incoming_provider', 'Incoming provider / effective date'),
+    text('customer_authority_ref', 'Customer authority / event reference'),
+    area('access_transfer', 'Access and account ownership, remote services, licences and secure transfer refs'),
+    area('outgoing_review', 'Outgoing access review, records / footage custody and retention instructions'),
+    text('monitoring_transfer_ref', 'Monitoring transfer / CV05 reference'),
+    text('interruption_ref', 'Interruption / temporary coverage ref'),
+    area('responsibilities', 'Responsibilities, transfer verification and outstanding actions / due dates'),
+    select('decision', 'Decision: proceed / conditional / remediate', ['proceed', 'conditional', 'remediate'], true),
+    text('cv08_cv15_ref', 'Current-event CV08 / CV15 reference'),
+    area('note', 'Record the technical evidence and limits of the takeover. Prior certification or a live camera image alone does not establish the current system performance or recording capability.'),
   ]),
-  engineerSignOff(
-    'Survey engineer sign-off',
-    'I confirm the basis and limits of the takeover decision recorded above.',
-  ),
+  engineerSignOff('Survey engineer sign-off', 'I confirm the basis and limits of the takeover decision recorded above.'),
 ]);
 
 export const CV13_UPGRADE = form('CV13 Upgrade and extension record', [
   header(),
   section('work', 'Work', [
-    text('quote_variation', 'Quote / variation / agreed baseline', true),
+    text('quote_variation', 'Quote / agreed variation / baseline', true),
     date('work_date', 'Work date', true),
     text('engineer_name', 'Engineer', true),
-    area('reason_scope', 'Reason, agreed work and pre-work system record reference', true),
-    text('cv15_ref', 'Customer acceptance reference (CV15) if design, coverage or tests change'),
+    area('reason_scope', 'Reason, agreed work and pre-work system record revision', true),
   ]),
   section('scope', 'Scope reconciliation', [
-    text('action_status', 'Action / status', true),
-    text('equipment_location', 'Equipment / location / source line', true),
+    select('action_status', 'Action / status', ['added', 'retained', 'removed', 'replaced', 'not_applicable'], true),
+    text('equipment_location', 'Camera / asset / quote line', true),
     text('quoted_qty', 'Quoted qty'),
     text('actual_qty', 'Actual qty', true),
   ], { repeatable: true }),
   section('effect', 'Compatibility and retesting', [
-    area('compatibility', 'Compatibility and effect on coverage, recording, storage, network and operation'),
-    area('regression', 'Affected existing cameras / recorders / interfaces and regression test references'),
+    area('compatibility', 'Compatibility, VMS / licence impact, network / power and storage assessment'),
+    area('regression', 'Affected views, recording, privacy / interfaces and regression test references'),
     text('updated_as_fitted', 'Updated as-fitted revision'),
-    text('issue_refs', 'Issues / CV06 references'),
+    text('issue_refs', 'CV06 issues / CV15 change acceptance'),
   ]),
-  engineerSignOff(
-    'Engineer sign-off',
-    'I confirm the upgrade/extension work and retesting recorded above. Compatibility assessments are the engineer’s and company’s responsibility.',
-  ),
-  reviewerSignOff(),
+  engineerSignOff('Engineer signature / date', 'I confirm the upgrade/extension work and retesting recorded above.'),
+  reviewerSignOff('Technical reviewer / date'),
 ]);
 
 export const CV14_MAINTENANCE = form('CV14 Maintenance and corrective work record', [
   header(),
   section('visit', 'Visit', [
-    select('visit_type', 'Visit', ['preventive', 'corrective', 'remote'], true),
+    select('visit_type', 'Visit type', ['preventive', 'corrective', 'remote'], true),
+    text('visit_reference', 'Visit reference'),
     text('engineer_name', 'Engineer', true),
     date('visit_date', 'Date', true),
     text('arrival', 'Arrival'),
@@ -512,85 +529,99 @@ export const CV14_MAINTENANCE = form('CV14 Maintenance and corrective work recor
     text('work_order', 'Agreement / work-order reference'),
     select('state_on_arrival', 'System state on arrival', ['normal', 'fault', 'isolated', 'offline', 'not_checked', 'not_applicable'], true),
   ]),
-  section('checks', 'Applicable checks and results', [
-    ...check('as_fitted_available', 'As-fitted information available and changes identified'),
-    ...check('camera_views', 'Camera siting, views and image performance checked'),
-    ...check('recording_export', 'Recording, playback and export functions checked'),
-    ...check('storage_time', 'Storage health, retention and date / time checked'),
-    ...check('network_power', 'Network, PoE and power condition checked'),
-    ...check('monitoring', 'Required monitoring / detector signals checked or marked NA'),
-    ...check('logbook_updated', 'System logbook and maintenance record updated'),
-    area('reported_problem', 'Reported problem, customer consultation and test limitations'),
+  section('checks', 'Applicable checks', [
+    ...check('user_needs_reviewed', 'User needs, scene changes and as-fitted information reviewed'),
+    ...check('cameras_inspected', 'Cameras, housings, mounts and accessible cabling inspected'),
+    ...check('views_privacy', 'Views, focus, image tasks and authorised privacy masks checked'),
+    ...check('day_night', 'Applicable day / night evidence and lighting condition assessed'),
+    ...check('recording_export', 'Recording, accessible retention, playback and export checked'),
+    ...check('time_storage', 'Time, storage / power faults and recovery verified'),
+    ...check('monitoring', 'Remote services / monitoring tested where included in scope'),
+    ...check('firmware_licences', 'Relevant firmware / licences / access responsibilities reviewed'),
+    area('reported_problem', 'Customer-reported problem, inaccessible equipment and test limitations'),
   ]),
-  section('work', 'Work completed and final state', [
-    area('diagnosis', 'Diagnosis and corrective work carried out'),
+  section('work', 'Work, retest and final state', [
+    area('diagnosis', 'Diagnosis, configuration changes and corrective work'),
   ]),
   section('parts', 'Parts replaced or modified', [
-    text('part', 'Part replaced / modified'),
-    text('asset_location', 'Asset / location'),
-    text('retest_result', 'Functional retest / result'),
+    text('part', 'Part / setting changed'),
+    text('asset_location', 'Camera / asset / location'),
+    text('retest_result', 'Retest / actual result'),
   ], { repeatable: true }),
   section('close', 'Close-out', [
-    area('outstanding', 'Outstanding faults / untested items and follow-up'),
-    select('final_state', 'Final system state', ['normal', 'restricted', 'faulty', 'isolated'], true),
-    text('isolations_restored', 'Test mode / isolations restored or ref'),
+    area('outstanding', 'Remaining faults / untested items, operational effect and customer agreement'),
+    select('final_state', 'Final system / monitoring state', ['normal', 'restricted', 'faulty', 'isolated'], true),
+    text('isolations_restored', 'Test modes / temporary changes cleared'),
     text('next_action', 'Next action owner / due date'),
-    text('monitoring_ack', 'Monitoring final service acknowledgement or NA'),
-    area('note', 'Replacement and modified equipment must be tested to the extent necessary for the affected system. Routine customer signature for a completed visit is recorded on CV08, not on this sheet.'),
+    text('cv08_cv15_ref', 'Current-visit receipt / CV15 ref'),
+    text('work_report_ref', 'Evidence / work-report reference'),
+    area('note', 'Test modified equipment and affected functions. For preventive maintenance, obtain current-visit customer acknowledgment on CV08 or an approved equivalent referencing this record. Do not reuse the installation signature.'),
   ]),
-  engineerSignOff(
-    'Engineer sign-off',
-    'I confirm this is an accurate record of attendance, work and system condition.',
-  ),
+  engineerSignOff('Engineer signature / date', 'I confirm this is an accurate record of attendance, work and system condition.'),
 ]);
 
-export const CV15_ACCEPTANCE = form('CV15 Customer acceptance of change, restriction or incomplete work', [
+export const CV15_ACCEPTANCE = form('CV15 Conditional customer acceptance', [
   header(),
   section('reason', 'Reason for extra customer acceptance', [
-    select('acceptance_type', 'Acceptance type', [
-      'design_change',
-      'disconnected_or_reduced_coverage',
-      'limitation_or_incomplete_test',
-      'conditional_takeover',
-      'other',
-    ], true),
-    text('linked_record', 'Linked record (CV06 / CV12 / CV13 / CV16)', true),
-    date('raised_date', 'Date', true),
-    area('acceptance_scope', 'The customer is asked to accept the recorded change from the agreed design, equipment left disconnected or coverage reduced, and/or other limitations or incomplete tests.', true),
-    area('operational_effect', 'Operational effect, remaining risk and temporary arrangements'),
-    area('outstanding_actions', 'Outstanding actions, owner and due date'),
-    area('note', 'Use this form only where a change, restriction or incomplete work needs customer agreement. Routine handover acknowledgement remains on CV08. Customer acknowledgement does not establish technical compliance or close a failed test.'),
+    text('acceptance_reference', 'Acceptance reference / revision', true),
+    text('cv08_ref', 'Current event / CV08 reference'),
+    select('acceptance_type', 'Type: design change / restriction / untested', ['design_change', 'restriction', 'untested'], true),
+    text('cv06_items', 'CV06 items / document revisions', true),
+    area('acceptance_scope', 'Specific change, unavailable camera / recording, untested work or exception', true),
+    area('operational_effect', 'Effect on image task, coverage, recording, monitoring or authorised privacy controls'),
+    area('agreed_action', 'Agreed action, temporary arrangements, responsible person and due date'),
+    date('effective_at', 'Effective date / time'),
+    date('restoration_due', 'Restoration / retest / review due'),
+    area('note', 'I specifically agree to the identified changes and acknowledge the stated restrictions or incomplete work and their explained effects. This acceptance applies only to the listed items and revisions. It does not certify technical accuracy, waive required compliance or convert an unresolved test into a pass.'),
   ]),
   section('customer_acceptance', 'Customer acceptance', [
-    signature('customer_signature', 'Customer name and signature', true),
+    text('customer_name_role', 'Customer name / authorised role', true),
+    signature('customer_signature', 'Customer signature / date', true),
     date('customer_signed_at', 'Date', true),
   ]),
   engineerSignOff(
-    'Engineer / reviewer record',
+    'Engineer name / signature',
     'I confirm the limitation or change described above has been explained to the customer. Technical disposition remains the company’s responsibility.',
   ),
 ]);
 
-export const CV16_SURVEY = form('CV16 Survey and test plan', [
+export const CV16_SURVEY = form('CV16 Site survey, risk review and agreed test plan', [
   header(),
-  section('plan', 'Plan identity', [
-    text('planner_name', 'Planner / survey engineer', true),
+  section('plan', 'Survey and security risk review', [
+    text('cv16_reference', 'CV16 reference / revision'),
+    text('surveyor_contact', 'Surveyor / date / customer contact', true),
     date('plan_date', 'Date', true),
-    select('work_type', 'Work type', ['new_installation', 'takeover', 'upgrade', 'extension', 'maintenance'], true),
-    text('operational_requirement_ref', 'Operational requirement / design reference'),
-    area('scope', 'Proposed survey / test scope, areas and cameras', true),
+    text('risk_assessment_ref', 'Customer risk assessment reference or none'),
+    text('site_plan_refs', 'Site plan / area references'),
   ]),
-  section('method', 'Method and resources', [
-    area('methods', 'Approved procedures, image criteria, recording tests and monitoring tests to be used'),
-    area('access_equipment', 'Access, permits, isolation and test equipment required'),
-    area('exclusions', 'Known exclusions, constraints and customer-agreed limitations'),
-    area('evidence_method', 'Customer agreement method / evidence (meeting record, email, signed instruction) — do not request a second signature solely to repeat CV08/CV15 approval'),
+  section('requirements', 'Requirements and site conditions', [
+    area('purpose', 'Purpose, incidents / threats, assets at risk and required operator response', true),
+    area('areas_tasks', 'Areas, camera tasks, target activity and operational hours', true),
+    area('lighting', 'Lighting by time, glare, obstructions, weather and environment'),
+    area('infrastructure', 'Infrastructure, mounting / access, communications and recording constraints'),
+    area('privacy', 'Privacy / audio restrictions, customer decisions and approved requirement refs'),
+    text('reviewed_with_customer', 'Reviewed with customer / date'),
+    text('agreed_requirement_evidence', 'Agreed requirement / approval evidence'),
   ]),
-  engineerSignOff(
-    'Planner / engineer sign-off',
-    'I confirm this plan describes the intended survey and tests. Results are recorded on the applicable CV sheets after the work is done.',
-  ),
-  reviewerSignOff(),
+  section('method', 'Test plan and acceptance criteria', [
+    text('test_plan_revision', 'Test-plan reference / revision'),
+    text('user_requirements_revision', 'User requirements / design revision'),
+    area('plan_note', 'Identify each requirement, test method, applicable edition, conditions and pass criterion before testing. Include representative illumination across the operational period, recording and export, power / network recovery, access and monitoring where applicable.'),
+  ]),
+  section('tests', 'Agreed verification plan', [
+    text('requirement_camera', 'Requirement / camera', true),
+    text('test_method', 'Test method / conditions', true),
+    text('pass_criterion', 'Pass criterion / source'),
+    text('planned_time_owner', 'Planned time / owner'),
+  ], { repeatable: true }),
+  section('agreement', 'Plan agreement', [
+    area('evidence_naming', 'Reference image naming, evidence storage and linked result records'),
+    text('plan_agreed_date', 'Plan agreed with customer / date'),
+    text('agreement_method', 'Agreement method / evidence reference'),
+    text('reviewer_name', 'Engineer / technical reviewer'),
+    date('procedure_revision_date', 'Date / procedure revision'),
+    area('note', 'Approval can reference an already agreed design / test plan; do not request another signature solely to repeat that approval. Obtain agreement to material changes before using revised criteria.'),
+  ]),
 ]);
 
 export interface CctvPackForm {
