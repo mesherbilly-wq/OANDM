@@ -3,8 +3,8 @@ import { supabase } from '../lib/supabase';
 import {
   confirmEndUserFromInvite,
   isEmailNotConfirmedError,
-  isEmailRateLimitError,
   registerEndUserFromInvite,
+  registerStaffUser,
 } from '../lib/projectEndUserAccess';
 import {
   Shield, Building2, Mail, Lock, Eye, EyeOff, ArrowRight,
@@ -253,23 +253,19 @@ function RegisterForm({ onSwitch }: { onSwitch: () => void }) {
     setError('');
     setLoading(true);
 
-    // Create Supabase auth account
-    const { data: authData, error: authErr } = await supabase.auth.signUp({
-      email: form.email.trim(),
-      password,
-    });
-
-    if (authErr) {
-      setError(
-        isEmailRateLimitError(authErr.message)
-          ? 'Too many confirmation emails have been sent from this project. Wait about an hour, then try again. Invited clients should open their invite link instead of registering a company.'
-          : authErr.message,
-      );
+    try {
+      await registerStaffUser(form.email.trim(), password);
+      const signIn = await supabase.auth.signInWithPassword({
+        email: form.email.trim(),
+        password,
+      });
+      if (signIn.error) throw signIn.error;
+    } catch (registerErr: unknown) {
+      setError(registerErr instanceof Error ? registerErr.message : 'Account could not be created. Try signing in.');
       setLoading(false);
       return;
     }
 
-    // Save contractor profile
     const profile = {
       company_name: form.company_name,
       address_line1: form.address_line1,
@@ -286,11 +282,8 @@ function RegisterForm({ onSwitch }: { onSwitch: () => void }) {
       other_certifications: form.other_certifications,
     };
 
-    // Check if a profile already exists — update it; otherwise insert
     const { data: existing } = await supabase.from('contractor_profile').select('id').limit(1).maybeSingle();
-    if (existing) {
-      await supabase.from('contractor_profile').update(profile).eq('id', existing.id);
-    } else {
+    if (!existing) {
       await supabase.from('contractor_profile').insert(profile);
     }
 
@@ -325,8 +318,8 @@ function RegisterForm({ onSwitch }: { onSwitch: () => void }) {
       {step === 1 && (
         <div className="space-y-4">
           <div>
-            <h3 className="text-base font-bold text-slate-900">Create your account</h3>
-            <p className="text-xs text-slate-500 mt-0.5">Your company name will appear on all generated documents</p>
+            <h3 className="text-base font-bold text-slate-900">Create your staff account</h3>
+            <p className="text-xs text-slate-500 mt-0.5">No confirmation email is sent. Clients should use a project invite, not this form.</p>
           </div>
           <InputGroup lbl="Company Name" icon={Building2}>
             <input type="text" value={form.company_name} onChange={f('company_name')} className={ic} placeholder="Pacific Fire & Security" required />

@@ -179,6 +179,23 @@ export async function registerEndUserFromInvite(token: string, password: string)
   }
 }
 
+export async function registerStaffUser(email: string, password: string): Promise<void> {
+  const { data, error } = await supabase.rpc('register_staff_user', {
+    user_email: email.trim().toLowerCase(),
+    new_password: password,
+  });
+  if (error) {
+    if (/does not exist|schema cache|register_staff_user/i.test(error.message)) {
+      throw new Error('Run 033 in the Supabase SQL Editor, then try again. Staff accounts do not need a confirmation email.');
+    }
+    throw new Error(error.message);
+  }
+  const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+  if (parsed && parsed.ok === false) {
+    throw new Error('This account could not be created. Try signing in.');
+  }
+}
+
 export function isEmailNotConfirmedError(message: string): boolean {
   return /email not confirmed|email_not_confirmed/i.test(message);
 }

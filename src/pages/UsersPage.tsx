@@ -99,7 +99,7 @@ export function UsersPage() {
           <h1 className="text-2xl font-bold text-slate-900">Users</h1>
         </div>
         <p className="text-slate-500 ml-[52px]">
-          New people register from a project invite, or you change Staff/Admin here. End users only see projects they were invited to.
+          New people: staff use Register on the sign-in page; clients use a project invite. Change Admin/Staff/End user here.
         </p>
       </div>
 
