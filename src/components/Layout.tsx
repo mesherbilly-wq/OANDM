@@ -42,7 +42,7 @@ export function Layout({ companyName, userEmail, onSignOut }: {
   const showUsers = canManageUsers(role);
   const endUser = isEndUser(role);
   const visibleModules = endUser
-    ? PROJECT_MODULES.filter(mod => mod.slug === 'om-builder')
+    ? PROJECT_MODULES.filter(mod => mod.slug === 'om-builder').map(mod => ({ ...mod, name: 'O&M Pack' }))
     : PROJECT_MODULES;
 
   const projectMatch = location.pathname.match(/^\/projects\/(\d+)/);

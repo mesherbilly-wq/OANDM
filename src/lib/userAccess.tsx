@@ -5,6 +5,7 @@ import { isAppRole, type AppRole } from './appRoles';
 
 interface UserAccessValue {
   role: AppRole;
+  userId: string;
   roleLoading: boolean;
   profilesReady: boolean;
   refreshRole: () => Promise<void>;
@@ -73,8 +74,8 @@ export function UserAccessProvider({ user, children }: { user: User; children: R
   }, [user]);
 
   const value = useMemo(
-    () => ({ role, roleLoading, profilesReady, refreshRole }),
-    [role, roleLoading, profilesReady, refreshRole],
+    () => ({ role, userId: user.id, roleLoading, profilesReady, refreshRole }),
+    [role, user.id, roleLoading, profilesReady, refreshRole],
   );
 
   return <UserAccessContext.Provider value={value}>{children}</UserAccessContext.Provider>;

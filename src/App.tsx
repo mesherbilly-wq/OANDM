@@ -26,6 +26,7 @@ import { ImportReviewPage } from './pages/ImportReviewPage';
 import AsBuiltDrawingsPage from './pages/AsBuiltDrawingsPage';
 import PublicHandoverFormPage from './pages/PublicHandoverFormPage';
 import { UsersPage } from './pages/UsersPage';
+import { ProjectInvitePage } from './pages/ProjectInvitePage';
 import { UserAccessProvider, useUserAccess } from './lib/userAccess';
 import { defaultHomePath, isEndUser } from './lib/appRoles';
 import { RequireAccess } from './components/RequireAccess';
@@ -61,6 +62,7 @@ function App() {
   };
 
   const isPublicFormPath = typeof window !== 'undefined' && window.location.pathname.startsWith('/f/');
+  const isInvitePath = typeof window !== 'undefined' && window.location.pathname.startsWith('/i/');
 
   if (isPublicFormPath) {
     return (
@@ -82,6 +84,16 @@ function App() {
   }
 
   if (!session) {
+    if (isInvitePath) {
+      return (
+        <BrowserRouter>
+          <Routes>
+            <Route path="/i/:token" element={<ProjectInvitePage />} />
+            <Route path="*" element={<AuthPage />} />
+          </Routes>
+        </BrowserRouter>
+      );
+    }
     return <AuthPage />;
   }
 
@@ -124,6 +136,7 @@ function AuthedApp({
     <BrowserRouter>
       <Routes>
         <Route path="/f/:token" element={<PublicHandoverFormPage />} />
+        <Route path="/i/:token" element={<ProjectInvitePage />} />
         <Route path="/" element={<Layout companyName={companyName} userEmail={userEmail} onSignOut={onSignOut} />}>
           <Route index element={<Navigate to={defaultHomePath(role)} replace />} />
           <Route path="dashboard" element={<RequireAccess><DashboardPage /></RequireAccess>} />

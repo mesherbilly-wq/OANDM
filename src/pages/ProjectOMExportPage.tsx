@@ -13,6 +13,9 @@ import { FALLBACK_DOCUMENT_DEFINITIONS, titleForLegacyDocumentId } from '../lib/
 import { matchEquipmentInputToProduct } from '../integrations/core/productMatching';
 import { useProject } from './ProjectLayout';
 import type { Device, CommissioningRecord, HandoverDocument, Datasheet, ProjectSystemRecord } from '../types';
+import { isEndUser } from '../lib/appRoles';
+import { useUserAccess } from '../lib/userAccess';
+import { OmClientInvitePanel } from '../components/OmClientInvitePanel';
 import {
   Printer, BookOpen, FileText, ClipboardCheck, Award, Wrench,
   Upload, X, CheckCircle, AlertCircle, ExternalLink, ChevronRight,
@@ -106,6 +109,20 @@ const SECTIONS: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: 'user_manuals',     label: 'User Manuals',        icon: BookMarked },
 ];
 
+const PRINT_SECTION_ANCHOR: Record<Section, string> = {
+  index: 'print-section-toc',
+  cover: 'print-section-cover',
+  scope: 'print-section-scope',
+  schedule: 'print-section-schedule',
+  technical_docs: 'print-section-technical_docs',
+  maintenance_plan: 'print-section-maintenance_plan',
+  commissioning: 'print-section-commissioning',
+  handover: 'print-section-handover',
+  as_fitted: 'print-section-as_fitted',
+  datasheets: 'print-section-datasheets',
+  user_manuals: 'print-section-user_manuals',
+};
+
 const SYS_ICONS: Partial<Record<SystemType, React.ElementType>> = {
   'CCTV': Camera, 'Access Control': Lock, 'Intruder': ShieldAlert,
   'Intercom': PhoneCall, 'ANPR': ScanLine, 'Perimeter Detection': Radar, 'Networking': Network,
@@ -184,6 +201,9 @@ function systemsWithTechImport(
 export function ProjectOMExportPage() {
   const { id } = useParams<{ id: string }>();
   const { project, productModels, datasheets } = useProject();
+  const { role } = useUserAccess();
+  const packReadOnly = isEndUser(role);
+  const [selectedSections, setSelectedSections] = useState<Section[]>(() => SECTIONS.map(s => s.id));
 
   const [activeSection, setActiveSection] = useState<Section>('cover');
   const [devices, setDevices] = useState<DeviceWithDatasheet[]>([]);
@@ -323,7 +343,7 @@ export function ProjectOMExportPage() {
     const missingPlans = activeSystemsList.filter(
       sys => !(docData ?? []).some(d => d.document_type === `maintenance_plan_${sys}`)
     );
-    if (missingPlans.length > 0) {
+    if (missingPlans.length > 0 && !packReadOnly) {
       await Promise.all(missingPlans.map(sys => {
         const template = MAINT_TEMPLATE[sys] ?? DEFAULT_TEMPLATE;
         planMap[sys] = template;
@@ -340,7 +360,7 @@ export function ProjectOMExportPage() {
 
     // Auto-generate scope when there is no existing content — use Claude if possible
     const existingScope = (docData ?? []).find(d => d.document_type === 'scope_of_works');
-    if ((!existingScope || !existingScope.content?.trim()) && activeSystemsList.length > 0) {
+    if ((!existingScope || !existingScope.content?.trim()) && activeSystemsList.length > 0 && !packReadOnly) {
       setScopeContent('');
       setScopeRegenerating(true);
       // Fire-and-forget so the rest of the page loads immediately
@@ -377,7 +397,7 @@ export function ProjectOMExportPage() {
     setMaintPlanContent(planMap);
 
     setLoading(false);
-  }, [pid, productModels, datasheets, project]);
+  }, [pid, productModels, datasheets, project, packReadOnly]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -595,7 +615,7 @@ export function ProjectOMExportPage() {
 
   const [generatingPdf, setGeneratingPdf] = useState(false);
 
-  const handleDownloadPdf = async () => {
+  const handleDownloadPdf = async (only?: Section[]) => {
     if (generatingPdf || printRendering) return;
     setGeneratingPdf(true);
     try {
@@ -633,9 +653,22 @@ export function ProjectOMExportPage() {
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
       // ── Collect sections (skip page-break divs) ───────────────────────────
-      const pageEls = (Array.from(printRoot.children) as HTMLElement[]).filter(
-        el => !el.classList.contains('page-break')
-      );
+      const allowedAnchors = only && only.length > 0
+        ? new Set(only.map(sectionId => PRINT_SECTION_ANCHOR[sectionId]))
+        : null;
+
+      const pageEls = (Array.from(printRoot.children) as HTMLElement[]).filter(el => {
+        if (el.classList.contains('page-break')) return false;
+        if (!allowedAnchors) return true;
+        const anchorId = el.id || el.querySelector('[id]')?.id || '';
+        return allowedAnchors.has(anchorId);
+      });
+
+      if (pageEls.length === 0) {
+        printRoot.style.cssText = savedStyles;
+        alert('Select at least one section to download.');
+        return;
+      }
 
       // ── PASS 1: Render all sections, calculate real page numbers ──────────
       type RenderedSection = {
@@ -860,8 +893,12 @@ export function ProjectOMExportPage() {
       {/* ── Screen toolbar ── */}
       <div className="flex items-center justify-between mb-5 print:hidden">
         <div>
-          <h2 className="text-lg font-semibold text-slate-900">O&M Pack Builder</h2>
-          <p className="text-sm text-slate-500 mt-0.5">{completeSections}/{SECTIONS.length} sections complete · Ready to print and send to customer</p>
+          <h2 className="text-lg font-semibold text-slate-900">{packReadOnly ? 'O&M Pack' : 'O&M Pack Builder'}</h2>
+          <p className="text-sm text-slate-500 mt-0.5">
+            {packReadOnly
+              ? 'Read only. Tick sections, then download the full pack or the selected pages.'
+              : `${completeSections}/${SECTIONS.length} sections complete · Ready to print and send to customer`}
+          </p>
         </div>
         <div className="flex items-center gap-3">
           {printRendering && (
@@ -869,19 +906,36 @@ export function ProjectOMExportPage() {
               <Loader2 className="w-3.5 h-3.5 animate-spin" />Preparing PDFs for print…
             </span>
           )}
-          <button onClick={handlePrint} disabled={printRendering}
-            className="inline-flex items-center gap-2 bg-slate-700 text-white px-4 py-2.5 rounded-xl hover:bg-slate-600 transition-colors font-medium text-sm shadow-sm disabled:opacity-50 disabled:cursor-wait">
-            <Printer className="w-4 h-4" />Print
-          </button>
-          <button onClick={handleDownloadPdf} disabled={printRendering || generatingPdf}
+          {!packReadOnly && (
+            <button onClick={handlePrint} disabled={printRendering}
+              className="inline-flex items-center gap-2 bg-slate-700 text-white px-4 py-2.5 rounded-xl hover:bg-slate-600 transition-colors font-medium text-sm shadow-sm disabled:opacity-50 disabled:cursor-wait">
+              <Printer className="w-4 h-4" />Print
+            </button>
+          )}
+          <button onClick={() => void handleDownloadPdf()} disabled={printRendering || generatingPdf}
             className="inline-flex items-center gap-2 bg-cyan-600 text-white px-5 py-2.5 rounded-xl hover:bg-cyan-700 transition-colors font-medium text-sm shadow-sm disabled:opacity-50 disabled:cursor-wait">
             {generatingPdf
               ? <><Loader2 className="w-4 h-4 animate-spin" />Generating PDF…</>
-              : <><Download className="w-4 h-4" />Download PDF</>
+              : <><Download className="w-4 h-4" />{packReadOnly ? 'Download full PDF' : 'Download PDF'}</>
             }
           </button>
+          {packReadOnly && (
+            <button
+              onClick={() => void handleDownloadPdf(selectedSections)}
+              disabled={printRendering || generatingPdf || selectedSections.length === 0}
+              className="inline-flex items-center gap-2 bg-slate-900 text-white px-4 py-2.5 rounded-xl hover:bg-slate-800 transition-colors font-medium text-sm shadow-sm disabled:opacity-50"
+            >
+              <Download className="w-4 h-4" />Download selected
+            </button>
+          )}
         </div>
       </div>
+
+      {!packReadOnly && pid ? (
+        <div className="mb-5 print:hidden">
+          <OmClientInvitePanel projectId={pid} />
+        </div>
+      ) : null}
 
       {/* ── Layout: sidebar + content ── */}
       <div className="flex gap-5 print:hidden">
@@ -896,6 +950,21 @@ export function ProjectOMExportPage() {
                   className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors text-sm ${
                     i > 0 ? 'border-t border-slate-100' : ''
                   } ${isActive ? 'bg-cyan-50 text-cyan-700' : 'text-slate-600 hover:bg-slate-50'}`}>
+                  {packReadOnly && (
+                    <input
+                      type="checkbox"
+                      checked={selectedSections.includes(s.id)}
+                      onClick={event => event.stopPropagation()}
+                      onChange={event => {
+                        setSelectedSections(current =>
+                          event.target.checked
+                            ? [...current, s.id]
+                            : current.filter(id => id !== s.id),
+                        );
+                      }}
+                      className="rounded border-slate-300"
+                    />
+                  )}
                   <s.icon className={`w-4 h-4 flex-shrink-0 ${isActive ? 'text-cyan-600' : 'text-slate-400'}`} />
                   <span className="flex-1 font-medium truncate">{s.label}</span>
                   {st === 'complete' && <span className="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0" />}
@@ -906,7 +975,9 @@ export function ProjectOMExportPage() {
             })}
           </div>
           <div className="mt-3 px-1">
-            <p className="text-xs text-slate-400">Green = ready · Amber = partial · Grey = missing</p>
+            <p className="text-xs text-slate-400">
+              {packReadOnly ? 'Tick sections to include in Download selected.' : 'Green = ready · Amber = partial · Grey = missing'}
+            </p>
           </div>
         </div>
 
@@ -1031,6 +1102,7 @@ export function ProjectOMExportPage() {
               regenerating={scopeRegenerating}
               activeSystems={activeSystems}
               isAiGenerated={!!projectDocs.find(d => d.document_type === 'scope_of_works' && d.generated_by === 'ai')}
+              readOnly={packReadOnly}
             />
           )}
           {activeSection === 'schedule' && <ScheduleSection systemGroups={systemGroups} />}
@@ -1044,6 +1116,7 @@ export function ProjectOMExportPage() {
               onChange={(sys, val) => setMaintPlanContent(prev => ({ ...prev, [sys]: val }))}
               onSave={handleSaveMaintPlan}
               saving={maintPlanSaving}
+              readOnly={packReadOnly}
             />
           )}
           {activeSection === 'commissioning' && (
@@ -1057,6 +1130,7 @@ export function ProjectOMExportPage() {
               onRemove={handleRemoveUpload}
               fallbackContent={commRecords.length > 0 ? <CommSummary records={commRecords} /> : null}
               fallbackLabel={`${commRecords.length} commissioning test records in database`}
+              readOnly={packReadOnly}
             />
           )}
           {activeSection === 'handover' && (
@@ -1066,6 +1140,7 @@ export function ProjectOMExportPage() {
               handoverDocs={handoverDocs}
               scHandoverDocs={scHandoverDocs}
               documentSystems={documentSystems}
+              readOnly={packReadOnly}
             />
           )}
           {activeSection === 'as_fitted' && (
@@ -1081,6 +1156,7 @@ export function ProjectOMExportPage() {
               pid={pid!}
               projectManuals={projectManuals}
               onRefresh={load}
+              readOnly={packReadOnly}
             />
           )}
         </div>
@@ -1448,10 +1524,11 @@ interface ProjectManual {
   manual: { title: string; description: string | null; manufacturer: string | null; model_number: string | null; file_name: string | null; file_url: string | null; link_url: string | null };
 }
 
-function UserManualsSection({ pid, projectManuals, onRefresh }: {
+function UserManualsSection({ pid, projectManuals, onRefresh, readOnly }: {
   pid: number;
   projectManuals: ProjectManual[];
   onRefresh: () => void;
+  readOnly?: boolean;
 }) {
   const [allManuals, setAllManuals] = useState<(ProjectManual['manual'] & { id: number })[]>([]);
   const [search, setSearch] = useState('');
@@ -1549,6 +1626,7 @@ function UserManualsSection({ pid, projectManuals, onRefresh }: {
           <BookMarked className="w-4 h-4 text-slate-400" />
           <h3 className="font-semibold text-slate-800">User Manuals</h3>
           <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full ml-1">{projectManuals.length}</span>
+          {!readOnly && (
           <div className="ml-auto flex gap-2">
             <button onClick={() => { setShowLibrary(l => !l); setShowAdd(false); }}
               className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">
@@ -1559,10 +1637,12 @@ function UserManualsSection({ pid, projectManuals, onRefresh }: {
               <Plus className="w-3.5 h-3.5" />Add Manual
             </button>
           </div>
+          )}
         </div>
 
         {/* Add form */}
-        {showAdd && (
+        {/* Add form */}
+        {!readOnly && showAdd && (
           <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 space-y-4">
             <div className="flex items-center justify-between">
               <p className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Add Manual</p>
@@ -1640,7 +1720,7 @@ function UserManualsSection({ pid, projectManuals, onRefresh }: {
         )}
 
         {/* Library search */}
-        {showLibrary && (
+        {!readOnly && showLibrary && (
           <div className="px-6 py-4 border-b border-slate-100 bg-slate-50">
             <p className="text-xs font-semibold text-slate-700 uppercase tracking-wide mb-3">Manual Library</p>
             <div className="relative mb-3">
@@ -1702,10 +1782,12 @@ function UserManualsSection({ pid, projectManuals, onRefresh }: {
                     className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 transition-colors">
                     <ExternalLink className="w-3 h-3" />{isLinkManual(pm.manual) ? 'Open' : 'View'}
                   </a>
+                  {!readOnly && (
                   <button onClick={() => handleRemove(pm.id)}
                     className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
+                  )}
                 </div>
               </div>
             ))
@@ -1811,11 +1893,12 @@ function InfoRow({ icon: Icon, label, value }: { icon: React.ElementType; label:
   );
 }
 
-function ScopeSection({ content, onChange, onSave, onRegenerate, saving, regenerating, isAiGenerated, activeSystems }: {
+function ScopeSection({ content, onChange, onSave, onRegenerate, saving, regenerating, isAiGenerated, activeSystems, readOnly }: {
   content: string; onChange: (v: string) => void; onSave: () => void;
   onRegenerate: () => void; saving: boolean; regenerating: boolean; isAiGenerated: boolean; activeSystems: string[];
+  readOnly?: boolean;
 }) {
-  const [preview, setPreview] = useState(false);
+  const [preview, setPreview] = useState(!!readOnly);
 
   const missingSystems = activeSystems.filter(sys => !content.includes(sys));
 
@@ -1825,6 +1908,7 @@ function ScopeSection({ content, onChange, onSave, onRegenerate, saving, regener
         <FileText className="w-4 h-4 text-slate-400" />
         <h3 className="font-semibold text-slate-800">Scope of Works</h3>
         {isAiGenerated && <span className="text-xs text-cyan-600 bg-cyan-50 px-2 py-0.5 rounded-full font-medium ml-1">AI Generated</span>}
+        {!readOnly && (
         <div className="ml-auto flex items-center gap-2">
           <button onClick={() => setPreview(p => !p)} disabled={regenerating}
             className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 rounded-lg border border-slate-200 hover:border-slate-300 transition-colors disabled:opacity-40">
@@ -1835,9 +1919,10 @@ function ScopeSection({ content, onChange, onSave, onRegenerate, saving, regener
             {saving ? 'Saving…' : 'Save'}
           </button>
         </div>
+        )}
       </div>
 
-      {missingSystems.length > 0 && !regenerating && (
+      {missingSystems.length > 0 && !regenerating && !readOnly && (
         <div className="mb-4 flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
           <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
@@ -1868,13 +1953,13 @@ function ScopeSection({ content, onChange, onSave, onRegenerate, saving, regener
         </div>
       )}
 
-      {!content && !preview && missingSystems.length === 0 && !regenerating && (
+      {!content && !preview && !readOnly && missingSystems.length === 0 && !regenerating && (
         <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
           No Scope of Works found. You can type it below, or use Create Project (upload your quote/proposal) to auto-generate it.
         </div>
       )}
 
-      {preview ? (
+      {preview || readOnly ? (
         <div className="min-h-64 p-4 border border-slate-200 rounded-lg bg-slate-50 prose prose-sm max-w-none"
           dangerouslySetInnerHTML={{ __html: content ? renderMarkdown(content) : '<p class="text-slate-400 text-sm">Nothing to preview.</p>' }} />
       ) : (
@@ -2192,15 +2277,16 @@ function buildAutoScope(
   return doc;
 }
 
-function MaintenancePlanSection({ systemGroups, content, onChange, onSave, saving }: {
+function MaintenancePlanSection({ systemGroups, content, onChange, onSave, saving, readOnly }: {
   systemGroups: { system: SystemType; devices: DeviceWithDatasheet[] }[];
   content: Record<string, string>;
   onChange: (system: string, value: string) => void;
   onSave: (system: string) => void;
   saving: string | null;
+  readOnly?: boolean;
 }) {
   const [activeSystem, setActiveSystem] = useState<string>(systemGroups[0]?.system ?? '');
-  const [preview, setPreview] = useState(false);
+  const [preview, setPreview] = useState(!!readOnly);
 
   if (systemGroups.length === 0) {
     return <EmptyState icon={CalendarCheck} message="No systems in this project yet. Add devices to systems first." />;
@@ -2236,7 +2322,8 @@ function MaintenancePlanSection({ systemGroups, content, onChange, onSave, savin
       {/* Editor */}
       <div className="px-6 py-4">
         <div className="flex items-center justify-between mb-3">
-          <p className="text-xs text-slate-500">{activeSystem} — edit the maintenance schedule for this system type</p>
+          <p className="text-xs text-slate-500">{activeSystem}{readOnly ? '' : ' — edit the maintenance schedule for this system type'}</p>
+          {!readOnly && (
           <div className="flex items-center gap-2">
             {!currentContent && (
               <button onClick={() => onChange(activeSystem, template)}
@@ -2253,9 +2340,10 @@ function MaintenancePlanSection({ systemGroups, content, onChange, onSave, savin
               {saving === activeSystem ? 'Saving…' : 'Save'}
             </button>
           </div>
+          )}
         </div>
 
-        {preview ? (
+        {preview || readOnly ? (
           <div className="min-h-48 p-4 border border-slate-200 rounded-lg bg-slate-50"
             dangerouslySetInnerHTML={{ __html: currentContent ? renderMarkdown(currentContent) : '<p class="text-slate-400 text-sm">Nothing to preview.</p>' }} />
         ) : (
@@ -2275,7 +2363,7 @@ function MaintenancePlanSection({ systemGroups, content, onChange, onSave, savin
 
 // ─── Handover Pack Section (screen) ──────────────────────────────────────────
 
-function HandoverPackSection({ uploads, onRemove, handoverDocs, scHandoverDocs, documentSystems }: {
+function HandoverPackSection({ uploads, onRemove, handoverDocs, scHandoverDocs, documentSystems, readOnly }: {
   uploads: OmUpload[];
   onRemove: (u: OmUpload) => void;
   handoverDocs: HandoverDocument[];
@@ -2291,6 +2379,7 @@ function HandoverPackSection({ uploads, onRemove, handoverDocs, scHandoverDocs, 
     project_system_id?: number | null;
   }[];
   documentSystems: ProjectSystem[];
+  readOnly?: boolean;
 }) {
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
@@ -2382,10 +2471,12 @@ function HandoverPackSection({ uploads, onRemove, handoverDocs, scHandoverDocs, 
                             {isExpanded ? <X className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                             {isExpanded ? 'Close' : 'View PDF'}
                           </button>
+                          {!readOnly && (
                           <button onClick={() => onRemove(upload)}
                             className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
                             <X className="w-3.5 h-3.5" />
                           </button>
+                          )}
                         </div>
                       </div>
                       {isExpanded && (
@@ -2481,9 +2572,10 @@ function PrintHandoverDocs({ uploads, pageImages }: {
   );
 }
 
-function UploadSection({ sectionId, title, description, upload, uploading, onUpload, onRemove, fallbackContent, fallbackLabel }: {
+function UploadSection({ sectionId, title, description, upload, uploading, onUpload, onRemove, fallbackContent, fallbackLabel, readOnly }: {
   onUpload: () => void; onRemove: (u: OmUpload) => void;
   fallbackContent: React.ReactNode; fallbackLabel: string;
+  readOnly?: boolean;
 }) {
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
@@ -2506,10 +2598,18 @@ function UploadSection({ sectionId, title, description, upload, uploading, onUpl
             className="text-xs font-medium text-emerald-700 hover:underline flex items-center gap-1">
             <ExternalLink className="w-3 h-3" />View
           </a>
+          {!readOnly && (
           <button onClick={() => onRemove(upload)} className="p-1.5 text-emerald-600 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
             <X className="w-4 h-4" />
           </button>
+          )}
         </div>
+      ) : readOnly ? (
+        fallbackContent ? (
+          <div className="mb-5">{fallbackContent}</div>
+        ) : (
+          <div className="text-center py-4 text-slate-400 text-sm mb-5">No commissioning PDF in this pack yet.</div>
+        )
       ) : (
         <div onClick={onUpload}
           className="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center cursor-pointer hover:border-cyan-400 hover:bg-cyan-50 transition-colors mb-5 group">
@@ -2529,7 +2629,7 @@ function UploadSection({ sectionId, title, description, upload, uploading, onUpl
       )}
 
       {/* Fallback: show DB data if no PDF uploaded */}
-      {!upload && fallbackContent && (
+      {!readOnly && !upload && fallbackContent && (
         <div>
           <div className="flex items-center gap-2 mb-3">
             <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
@@ -2538,7 +2638,7 @@ function UploadSection({ sectionId, title, description, upload, uploading, onUpl
           {fallbackContent}
         </div>
       )}
-      {!upload && !fallbackContent && (
+      {!readOnly && !upload && !fallbackContent && (
         <div className="text-center py-4 text-slate-400 text-sm">No data found in database either. Upload a PDF or complete this section in the platform first.</div>
       )}
     </div>

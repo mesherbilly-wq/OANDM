@@ -8,7 +8,7 @@ import { useUserAccess } from '../lib/userAccess';
 
 export function ProjectsPage() {
   const navigate = useNavigate();
-  const { role } = useUserAccess();
+  const { role, userId } = useUserAccess();
   const canEdit = canEditOperations(role);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -19,10 +19,28 @@ export function ProjectsPage() {
 
   useEffect(() => {
     fetchProjects();
-  }, []);
+  }, [userId, canEdit]);
 
   const fetchProjects = async () => {
     setLoading(true);
+    if (!canEdit) {
+      const { data: access } = await supabase
+        .from('project_end_user_access')
+        .select('project_id')
+        .eq('user_id', userId)
+        .not('accepted_at', 'is', null);
+      const ids = (access ?? []).map(row => row.project_id);
+      if (ids.length === 0) {
+        setProjects([]);
+        setLoading(false);
+        return;
+      }
+      const { data } = await supabase.from('projects').select('*').in('id', ids).order('created_at', { ascending: false });
+      setProjects(data ?? []);
+      setLoading(false);
+      return;
+    }
+
     const { data, error } = await supabase
       .from('projects')
       .select('*')
@@ -87,8 +105,10 @@ export function ProjectsPage() {
     <div className="max-w-6xl mx-auto">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Projects</h1>
-          <p className="text-slate-500 mt-1">Manage your security integration projects</p>
+          <h1 className="text-2xl font-bold text-slate-900">{canEdit ? 'Projects' : 'Your O&M packs'}</h1>
+          <p className="text-slate-500 mt-1">
+            {canEdit ? 'Manage your security integration projects' : 'Open a pack you have been invited to'}
+          </p>
         </div>
         {canEdit && (
         <button
@@ -123,7 +143,7 @@ export function ProjectsPage() {
           <h3 className="text-lg font-medium text-slate-900 mb-2">No projects found</h3>
           <p className="text-slate-500 mb-6">
             {projects.length === 0
-              ? (canEdit ? 'Create your first project to get started' : 'No projects are available yet')
+              ? (canEdit ? 'Create your first project to get started' : 'You have not been invited to a project yet')
               : 'Try adjusting your search'}
           </p>
           {projects.length === 0 && canEdit && (
