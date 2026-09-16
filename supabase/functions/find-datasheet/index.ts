@@ -57,37 +57,50 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const aiHits = await findWithClaude(manufacturer, model);
-    const discovered: Array<{ url: string; title: string; domain: string; score: number | null }> = [];
+    const [aiHits, adiHits] = await Promise.all([
+      findWithClaude(manufacturer, model),
+      searchAdiDatasheets(manufacturer, model),
+    ]);
+    const discovered: Array<{ url: string; title: string; domain: string; score: number | null }> = [...adiHits];
 
-  for (const hit of aiHits) {
-    if (/\.pdf(\?|#|$)/i.test(hit.url)) discovered.push(hit);
-  }
-
-  const pagesToScrape = [
-    ...aiHits.filter((hit) => !/\.pdf(\?|#|$)/i.test(hit.url)).map((hit) => hit.url),
-    ...manufacturerPages(manufacturer, model),
-  ];
-  const scraped = await Promise.all(
-    uniqueStrings(pagesToScrape).slice(0, 6).map((page) => scrapeDatasheetPdfUrls(page, model)),
-  );
-  for (const urls of scraped) {
-    for (const url of urls) {
-      discovered.push({
-        url,
-        title: `${manufacturer} ${model} datasheet`,
-        domain: safeDomain(url),
-        score: /datasheet|data-sheet/i.test(url) ? 94 : 80,
-      });
+    for (const hit of aiHits) {
+      if (/\.pdf(\?|#|$)/i.test(hit.url)) discovered.push(hit);
     }
-  }
 
-  const webHits = await webSearchPdfs(manufacturer, model);
-  discovered.push(...webHits.map((hit) => ({ ...hit, score: null })));
+    const pagesToScrape = [
+      ...aiHits.filter((hit) => !/\.pdf(\?|#|$)/i.test(hit.url)).map((hit) => hit.url),
+      ...manufacturerPages(manufacturer, model),
+    ];
+    const scraped = await Promise.all(
+      uniqueStrings(pagesToScrape).slice(0, 6).map((page) => scrapeDatasheetPdfUrls(page, model)),
+    );
+    for (const urls of scraped) {
+      for (const url of urls) {
+        discovered.push({
+          url,
+          title: `${manufacturer} ${model} datasheet`,
+          domain: safeDomain(url),
+          score: /datasheet|data-sheet/i.test(url) ? 94 : 80,
+        });
+      }
+    }
+
+    const adiPages = uniqueStrings(aiHits.map((hit) => hit.url).filter((url) => adiProductSegment(url))).slice(0, 4);
+    for (const page of adiPages) {
+      discovered.push(...await adiDocumentsFromProductUrl(page, model));
+    }
+
+    const webHits = await webSearchPdfs(manufacturer, model);
+    discovered.push(...webHits.map((hit) => ({ ...hit, score: null })));
+    for (const hit of webHits) {
+      if (adiProductSegment(hit.url)) {
+        discovered.push(...await adiDocumentsFromProductUrl(hit.url, model));
+      }
+    }
 
   const uniqueSeeds = uniqueByUrl(discovered);
   const checked: Candidate[] = await Promise.all(
-    uniqueSeeds.slice(0, 12).map(async (c) => {
+    uniqueSeeds.slice(0, 16).map(async (c) => {
       const verifiedPdf = await verify(c.url);
       return {
         url: c.url,
@@ -129,10 +142,10 @@ Model: ${model}
 Your task:
 1. Return direct PDF download URLs you know with confidence from your training data
 2. Include the official manufacturer product/datasheet page
-3. Include major distributor pages (RS Components, Farnell, Digi-Key, Anixter, etc.) if you know them
-4. Prefer URLs ending in .pdf when possible
+3. Include major distributor pages, especially ADI Global Distribution UK (adiglobaldistribution.co.uk), plus RS Components, Farnell, Digi-Key and Anixter if you know them
+4. Prefer URLs ending in .pdf when possible. ADI datasheets are often named Product-Data-Sheet.pdf on cdn.adiglobaldistribution.co.uk
 5. Return ONLY URLs you are highly confident actually exist — do NOT invent or guess URLs
-6. Do NOT invent Axis /dam/public hash paths or other hashed CDN URLs. If you are not sure of the live PDF, return the official product or support page instead
+6. Do NOT invent Axis /dam/public hash paths, ADI PIM folder numbers, or other hashed CDN URLs. If you are not sure of the live PDF, return the official product, support, or ADI product page instead
 7. Give each hit a score from 0 to 100 for how likely it is the official datasheet for THIS exact manufacturer and model. Use 90+ only when you are highly confident it is the correct model PDF.
 
 Return ONLY a JSON array, no explanation:
@@ -240,9 +253,10 @@ async function scrapeDatasheetPdfUrls(pageUrl: string, model: string): Promise<s
       }
       if (!/\.pdf(\?|#|$)/i.test(url)) continue;
       const compactUrl = compact(url);
-      if (modelKey && !compactUrl.includes(modelKey)) continue;
-      if (/datasheet|data-sheet/i.test(url)) datasheets.push(url);
-      else if (!/install|drill|dimension|declaration|mtbf|comparison|discontinu/i.test(url)) others.push(url);
+      const adiCdn = /adiglobaldistribution/i.test(url);
+      if (modelKey && !compactUrl.includes(modelKey) && !adiCdn) continue;
+      if (/datasheet|data-sheet|product-data-sheet/i.test(url)) datasheets.push(url);
+      else if (!/install|drill|dimension|declaration|mtbf|comparison|discontinu|assembly|brochure/i.test(url)) others.push(url);
     }
     return uniqueStrings([...datasheets, ...others]).slice(0, 5);
   } catch {
@@ -294,29 +308,181 @@ async function webSearchPdfs(
   manufacturer: string,
   model: string,
 ): Promise<Array<{ url: string; title: string; domain: string }>> {
-  const query = encodeURIComponent(`${manufacturer} ${model} datasheet filetype:pdf`);
-  try {
-    const res = await fetch(`https://html.duckduckgo.com/html/?q=${query}`, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; DatasheetFinder/1.0)" },
-    });
-    if (!res.ok) return [];
-    const html = await res.text();
-    const hits: Array<{ url: string; title: string; domain: string }> = [];
-    const matches = html.matchAll(/uddg=([^&"]+)/g);
-    for (const match of matches) {
-      let url = "";
-      try {
-        url = decodeURIComponent(match[1]);
-      } catch {
-        continue;
+  const queries = [
+    `${manufacturer} ${model} datasheet filetype:pdf`,
+    `site:adiglobaldistribution.co.uk ${manufacturer} ${model}`,
+  ];
+  const hits: Array<{ url: string; title: string; domain: string }> = [];
+  for (const query of queries) {
+    try {
+      const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; DatasheetFinder/1.0)" },
+      });
+      if (!res.ok) continue;
+      const html = await res.text();
+      const matches = html.matchAll(/uddg=([^&"]+)/g);
+      for (const match of matches) {
+        let url = "";
+        try {
+          url = decodeURIComponent(match[1]);
+        } catch {
+          continue;
+        }
+        if (!/^https?:\/\//i.test(url)) continue;
+        if (hits.some((hit) => hit.url === url)) continue;
+        hits.push({ url, title: `${manufacturer} ${model} datasheet`, domain: safeDomain(url) });
+        if (hits.length >= 8) break;
       }
-      if (!/^https?:\/\//i.test(url)) continue;
-      if (hits.some((hit) => hit.url === url)) continue;
-      hits.push({ url, title: `${manufacturer} ${model} datasheet`, domain: safeDomain(url) });
-      if (hits.length >= 5) break;
+    } catch {
+      // Try the next query.
+    }
+  }
+  return hits;
+}
+
+const ADI_ORIGINS = [
+  "https://www.adiglobaldistribution.co.uk",
+  "https://www.adiglobaldistribution.com",
+];
+
+const BROWSER_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  Accept: "application/json,text/html;q=0.9,*/*;q=0.8",
+};
+
+type AdiHit = { url: string; title: string; domain: string; score: number | null };
+
+async function searchAdiDatasheets(manufacturer: string, model: string): Promise<AdiHit[]> {
+  const hits: AdiHit[] = [];
+  for (const origin of ADI_ORIGINS) {
+    hits.push(...await searchAdiOrigin(origin, manufacturer, model));
+    if (hits.some((hit) => isAdiDatasheetUrl(hit.url))) break;
+  }
+  return uniqueByUrl(hits);
+}
+
+async function searchAdiOrigin(origin: string, manufacturer: string, model: string): Promise<AdiHit[]> {
+  const products = await adiSearchProducts(origin, `${manufacturer} ${model}`);
+  const matched = products.filter((product) => adiProductMatches(product, model)).slice(0, 3);
+  const hits: AdiHit[] = [];
+  for (const product of matched) {
+    hits.push(...await adiDocumentsForProduct(origin, product, model));
+  }
+  return hits;
+}
+
+async function adiDocumentsFromProductUrl(pageUrl: string, model: string): Promise<AdiHit[]> {
+  const origin = adiOriginFromUrl(pageUrl);
+  const segment = adiProductSegment(pageUrl);
+  if (!origin || !segment) return [];
+  const products = (await adiSearchProducts(origin, segment))
+    .filter((product) => adiProductMatches(product, model) || compact(product.urlSegment || "") === compact(segment));
+  const hits: AdiHit[] = [];
+  for (const product of products.slice(0, 2)) {
+    hits.push(...await adiDocumentsForProduct(origin, product, model));
+  }
+  return hits;
+}
+
+async function adiSearchProducts(origin: string, query: string): Promise<AdiProduct[]> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 12000);
+    const res = await fetch(
+      `${origin}/api/v1/products?query=${encodeURIComponent(query)}&pageSize=12`,
+      { signal: ctrl.signal, headers: BROWSER_HEADERS, redirect: "follow" },
+    );
+    clearTimeout(timer);
+    if (!res.ok) return [];
+    const json = await res.json();
+    return Array.isArray(json?.products) ? json.products : [];
+  } catch {
+    return [];
+  }
+}
+
+async function adiDocumentsForProduct(origin: string, product: AdiProduct, model: string): Promise<AdiHit[]> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 12000);
+    const res = await fetch(`${origin}/api/v1/products/${product.id}?expand=documents`, {
+      signal: ctrl.signal,
+      headers: BROWSER_HEADERS,
+      redirect: "follow",
+    });
+    clearTimeout(timer);
+    if (!res.ok) return [];
+    const json = await res.json();
+    const detail = json?.product ?? json;
+    const docs = Array.isArray(detail?.documents) ? detail.documents : [];
+    const hits: AdiHit[] = [];
+    for (const doc of docs) {
+      const url = String(doc?.fileUrl || doc?.filePath || "");
+      if (!/^https?:\/\//i.test(url) || !/\.pdf(\?|#|$)/i.test(url)) continue;
+      if (!isAdiDatasheetDoc(doc, url) && /assembly|install|brochure|user manual|msds|instruction/i.test(`${doc?.name ?? ""} ${doc?.documentType ?? ""} ${url}`)) continue;
+      hits.push({
+        url,
+        title: `${product.name || model} — ${doc?.name || "Datasheet"}`,
+        domain: safeDomain(url) || safeDomain(origin),
+        score: isAdiDatasheetDoc(doc, url) ? 93 : 82,
+      });
     }
     return hits;
   } catch {
     return [];
+  }
+}
+
+type AdiProduct = {
+  id?: string;
+  name?: string;
+  modelNumber?: string;
+  manufacturerItem?: string;
+  urlSegment?: string;
+  properties?: Record<string, string>;
+};
+
+function adiProductMatches(product: AdiProduct, model: string): boolean {
+  const modelKey = compact(model);
+  if (!modelKey || !product?.id) return false;
+  const modelNumber = compact(product.modelNumber || product.properties?.updated_Model_Number || "");
+  if (modelNumber && modelNumber === modelKey) return true;
+  const name = product.name || "";
+  if (isAccessoryName(name)) return false;
+  return compact(name).includes(modelKey);
+}
+
+function isAccessoryName(name: string): boolean {
+  return /\b(bracket|mount|shield|casing|spare|injector|armature|housing|weathershield|junction box|for selected)\b/i.test(name);
+}
+
+function isAdiDatasheetDoc(doc: { name?: string; documentType?: string; fileTypeString?: string }, url: string): boolean {
+  const hay = `${doc?.name ?? ""} ${doc?.documentType ?? ""} ${doc?.fileTypeString ?? ""} ${url}`;
+  return /data[- ]?sheet|product manual|product-data-sheet/i.test(hay);
+}
+
+function isAdiDatasheetUrl(url: string): boolean {
+  return /product-data-sheet|datasheet|data-sheet/i.test(url);
+}
+
+function adiProductSegment(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (!/adiglobaldistribution\.(co\.uk|com)$/i.test(parsed.hostname.replace(/^www\./, ""))) return null;
+    const match = parsed.pathname.match(/\/(?:Product|product)\/([^/?#]+)/);
+    return match ? decodeURIComponent(match[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+function adiOriginFromUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (!/adiglobaldistribution\.(co\.uk|com)$/i.test(parsed.hostname.replace(/^www\./, ""))) return null;
+    return parsed.origin;
+  } catch {
+    return null;
   }
 }

@@ -60,6 +60,10 @@ export function googleDatasheetSearchUrl(manufacturer: string, model: string): s
   return `https://www.google.com/search?q=${encodeURIComponent(`${manufacturer} ${model} datasheet filetype:pdf`)}`;
 }
 
+export function adiDatasheetSearchUrl(manufacturer: string, model: string): string {
+  return `https://www.adiglobaldistribution.co.uk/search?text=${encodeURIComponent(`${manufacturer} ${model}`.trim())}`;
+}
+
 export async function searchDatasheetCandidates(
   manufacturer: string,
   model: string,

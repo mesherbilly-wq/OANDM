@@ -2,7 +2,7 @@ import React, { useRef, useState } from 'react';
 import { X, Upload, CheckCircle, AlertCircle, FileText, Info, Search, Link, ExternalLink, Loader2, Download, ShieldCheck } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Datasheet } from '../types';
-import { AI_AUTO_PLACE_SCORE, googleDatasheetSearchUrl, saveDatasheetFromUrl, searchDatasheetCandidates, type DatasheetCandidate } from '../lib/datasheetLookup';
+import { AI_AUTO_PLACE_SCORE, adiDatasheetSearchUrl, googleDatasheetSearchUrl, saveDatasheetFromUrl, searchDatasheetCandidates, type DatasheetCandidate } from '../lib/datasheetLookup';
 
 type Mode = 'search' | 'upload' | 'link';
 
@@ -219,14 +219,23 @@ export function UploadDatasheetModal({ manufacturer, modelNumber, initialMode = 
                   <div className="text-center py-6 bg-slate-50 rounded-xl border border-slate-200">
                     <Search className="w-8 h-8 text-slate-300 mx-auto mb-2" />
                     <p className="text-sm font-medium text-slate-600">No results found</p>
-                    <p className="text-xs text-slate-400 mt-1">Try the Upload or Paste URL tabs, or search Google manually.</p>
-                    <a
-                      href={googleDatasheetSearchUrl(mfr, model)}
-                      target="_blank" rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 mt-3 text-xs text-cyan-600 hover:text-cyan-700 font-medium"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />Search Google for PDF
-                    </a>
+                    <p className="text-xs text-slate-400 mt-1">Try the Upload or Paste URL tabs, or search ADI / Google manually.</p>
+                    <div className="flex items-center justify-center gap-3 mt-3">
+                      <a
+                        href={adiDatasheetSearchUrl(mfr, model)}
+                        target="_blank" rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 text-xs text-cyan-600 hover:text-cyan-700 font-medium"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />Search ADI
+                      </a>
+                      <a
+                        href={googleDatasheetSearchUrl(mfr, model)}
+                        target="_blank" rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 text-xs text-cyan-600 hover:text-cyan-700 font-medium"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />Search Google for PDF
+                      </a>
+                    </div>
                   </div>
                 )}
 

@@ -19,6 +19,7 @@ import {
   aiPlacementFromDatasheet,
   findAndSaveDatasheet,
   googleDatasheetSearchUrl,
+  adiDatasheetSearchUrl,
   saveDatasheetFromUrl,
   type DatasheetCandidate,
 } from '../lib/datasheetLookup';
@@ -428,6 +429,15 @@ export function ProjectDatasheetsPage() {
                                 >
                                   <Search className="w-3.5 h-3.5" />
                                   Find on Web
+                                </a>
+                                <a
+                                  href={adiDatasheetSearchUrl(row.manufacturer, row.model_number)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-50 text-slate-600 rounded-lg hover:bg-slate-100 border border-slate-200 transition-colors"
+                                  title="Search ADI Global Distribution UK"
+                                >
+                                  Search ADI
                                 </a>
                               )}
                             </>

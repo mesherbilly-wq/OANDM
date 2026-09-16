@@ -124,7 +124,62 @@ async function fallbackDatasheetUrls(manufacturer: string, model: string): Promi
   for (const page of pages) {
     urls.push(...await scrapeDatasheetPdfUrls(page, model));
   }
-  return urls.slice(0, 3);
+  urls.push(...await adiDatasheetUrls(manufacturer, model));
+  return [...new Set(urls)].slice(0, 6);
+}
+
+async function adiDatasheetUrls(manufacturer: string, model: string): Promise<string[]> {
+  const origins = [
+    "https://www.adiglobaldistribution.co.uk",
+    "https://www.adiglobaldistribution.com",
+  ];
+  const modelKey = compact(model);
+  const urls: string[] = [];
+  for (const origin of origins) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 12000);
+      const res = await fetch(
+        `${origin}/api/v1/products?query=${encodeURIComponent(`${manufacturer} ${model}`)}&pageSize=12`,
+        { signal: ctrl.signal, headers: { ...BROWSER_HEADERS, Accept: "application/json" }, redirect: "follow" },
+      );
+      clearTimeout(timer);
+      if (!res.ok) continue;
+      const json = await res.json();
+      const products = Array.isArray(json?.products) ? json.products : [];
+      const matched = products.filter((product: { id?: string; name?: string; modelNumber?: string }) => {
+        const number = compact(product.modelNumber || "");
+        if (number && number === modelKey) return true;
+        if (/\b(bracket|mount|shield|casing|spare|injector|armature|housing)\b/i.test(product.name || "")) return false;
+        return compact(product.name || "").includes(modelKey);
+      }).slice(0, 2);
+      for (const product of matched) {
+        const detailCtrl = new AbortController();
+        const detailTimer = setTimeout(() => detailCtrl.abort(), 12000);
+        const detailRes = await fetch(`${origin}/api/v1/products/${product.id}?expand=documents`, {
+          signal: detailCtrl.signal,
+          headers: { ...BROWSER_HEADERS, Accept: "application/json" },
+          redirect: "follow",
+        });
+        clearTimeout(detailTimer);
+        if (!detailRes.ok) continue;
+        const detailJson = await detailRes.json();
+        const docs = Array.isArray(detailJson?.product?.documents)
+          ? detailJson.product.documents
+          : Array.isArray(detailJson?.documents) ? detailJson.documents : [];
+        for (const doc of docs) {
+          const url = String(doc?.fileUrl || doc?.filePath || "");
+          if (/product-data-sheet|data[- ]?sheet/i.test(`${doc?.name ?? ""} ${url}`) && /\.pdf(\?|#|$)/i.test(url)) {
+            urls.push(url);
+          }
+        }
+      }
+      if (urls.length > 0) break;
+    } catch {
+      // Try the next ADI origin.
+    }
+  }
+  return urls;
 }
 
 async function scrapeDatasheetPdfUrls(pageUrl: string, model: string): Promise<string[]> {

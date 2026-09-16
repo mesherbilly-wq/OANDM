@@ -222,6 +222,209 @@ function systemsWithTechImport(
     .sort((a, b) => a.localeCompare(b));
 }
 
+type TechDocColumn = { key: string; display_name: string; visible: boolean; order: number };
+type TechDocPrintRow = { id: number; row_index: number; data: Record<string, string> };
+
+const TECH_DOC_PRINT_ROWS = 18;
+
+function sameSystemName(a: string | null | undefined, b: string | null | undefined): boolean {
+  return (a ?? '').trim().toLowerCase() === (b ?? '').trim().toLowerCase();
+}
+
+function asTechDocData(raw: unknown): Record<string, string> {
+  if (!raw) return {};
+  if (typeof raw === 'string') {
+    try {
+      return asTechDocData(JSON.parse(raw));
+    } catch {
+      return {};
+    }
+  }
+  if (Array.isArray(raw)) {
+    const out: Record<string, string> = {};
+    raw.forEach((value, index) => {
+      out[String(index)] = value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+    });
+    return out;
+  }
+  if (typeof raw !== 'object') return {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (value == null) out[key] = '';
+    else if (typeof value === 'object') out[key] = JSON.stringify(value);
+    else out[key] = String(value);
+  }
+  return out;
+}
+
+function normalizeTechDocKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function techDocCell(data: Record<string, string> | null | undefined, col: Pick<TechDocColumn, 'key' | 'display_name' | 'order'>): string {
+  if (!data) return '';
+  for (const candidate of [col.key, col.display_name]) {
+    const direct = data[candidate];
+    if (direct != null && String(direct).trim()) return String(direct);
+  }
+  const wanted = new Set([col.key, col.display_name].map(normalizeTechDocKey).filter(Boolean));
+  for (const [key, value] of Object.entries(data)) {
+    if (wanted.has(normalizeTechDocKey(key)) && String(value ?? '').trim()) return String(value);
+  }
+  const byIndex = data[String(col.order)];
+  if (byIndex != null && String(byIndex).trim()) return String(byIndex);
+  return '';
+}
+
+function columnsFromRowData(rows: TechDocPrintRow[]): TechDocColumn[] {
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    for (const key of Object.keys(row.data ?? {})) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+      keys.push(key);
+    }
+  }
+  return keys.map((key, order) => ({ key, display_name: key, visible: true, order }));
+}
+
+function resolveTechDocColumns(colConfig: TechDocColumn[] | undefined, rows: TechDocPrintRow[]): TechDocColumn[] {
+  const configured = (colConfig ?? []).filter(col => col.visible).sort((a, b) => a.order - b.order);
+  const sample = rows.slice(0, 30);
+  if (configured.length === 0) return columnsFromRowData(rows);
+  const matched = configured.filter(col => sample.some(row => techDocCell(row.data, col).trim())).length;
+  if (sample.length > 0 && matched < Math.max(1, Math.ceil(configured.length * 0.3))) {
+    const fromData = columnsFromRowData(rows);
+    return fromData.map((col, i) => ({
+      ...col,
+      display_name: configured[i]?.display_name || col.display_name,
+    }));
+  }
+  return configured;
+}
+
+function chunkTechDocRows<T>(rows: T[], size: number): T[][] {
+  if (rows.length === 0) return [[]];
+  const chunks: T[][] = [];
+  for (let i = 0; i < rows.length; i += size) chunks.push(rows.slice(i, i + size));
+  return chunks;
+}
+
+const TECH_DOC_PRINT_COLS = 9;
+const HTML2CANVAS_MAX_H = 1400;
+
+function canvasIsMostlyBlank(canvas: HTMLCanvasElement): boolean {
+  const ctx = canvas.getContext('2d');
+  if (!ctx || canvas.width < 2 || canvas.height < 2) return true;
+  const sampleW = Math.min(canvas.width, 240);
+  const sampleH = Math.min(canvas.height, 240);
+  const { data } = ctx.getImageData(0, 0, sampleW, sampleH);
+  let ink = 0;
+  for (let i = 0; i < data.length; i += 16) {
+    if (data[i] < 248 || data[i + 1] < 248 || data[i + 2] < 248) ink++;
+  }
+  return ink < 12;
+}
+
+function preparePrintClone(clonedDoc: Document, sourceEl: HTMLElement, clonedEl?: HTMLElement) {
+  const root = clonedDoc.getElementById('om-print-root');
+  if (root) {
+    root.classList.remove('hidden');
+    root.style.cssText = 'display:block!important;position:static;left:0;top:0;width:auto;height:auto;overflow:visible;background:white;visibility:visible;opacity:1;';
+  }
+  const node = clonedEl instanceof HTMLElement
+    ? clonedEl
+    : (sourceEl.id ? clonedDoc.getElementById(sourceEl.id) : null);
+  if (node instanceof HTMLElement) {
+    node.style.overflow = 'visible';
+    node.style.height = 'auto';
+    node.style.maxHeight = 'none';
+    node.style.transform = 'none';
+    node.style.position = 'relative';
+    node.style.left = '0';
+    node.style.top = '0';
+  }
+}
+
+async function capturePrintElement(
+  el: HTMLElement,
+  html2canvas: (element: HTMLElement, options?: Record<string, unknown>) => Promise<HTMLCanvasElement>,
+  renderW: number,
+): Promise<HTMLCanvasElement> {
+  const width = Math.max(renderW, el.scrollWidth, el.offsetWidth, 1);
+  const height = Math.max(el.scrollHeight, el.offsetHeight, 1);
+  const scale = width * height * 4 > 24_000_000 ? 1 : 2;
+
+  const run = (opts: Record<string, unknown>) => html2canvas(el, {
+    scale,
+    useCORS: true,
+    allowTaint: false,
+    backgroundColor: '#ffffff',
+    logging: false,
+    imageTimeout: 15000,
+    ...opts,
+    onclone: (clonedDoc: Document, clonedEl?: HTMLElement) => {
+      preparePrintClone(clonedDoc, el, clonedEl);
+    },
+  });
+
+  const captureFull = async (useScale: number) => run({
+    scale: useScale,
+    width,
+    windowWidth: width,
+    windowHeight: Math.max(height, 1),
+    scrollX: 0,
+    scrollY: 0,
+  });
+
+  if (height <= HTML2CANVAS_MAX_H) {
+    const canvas = await captureFull(scale);
+    if (!canvasIsMostlyBlank(canvas)) return canvas;
+    return captureFull(1);
+  }
+
+  const captureSlice = async (y: number, sliceH: number) => {
+    const canvas = await run({
+      width,
+      height: sliceH,
+      windowWidth: width,
+      windowHeight: Math.max(sliceH, 1),
+      x: 0,
+      y,
+      scrollX: 0,
+      scrollY: 0,
+    });
+    if (!canvasIsMostlyBlank(canvas)) return canvas;
+    return run({
+      scale: 1,
+      width,
+      height: sliceH,
+      windowWidth: width,
+      windowHeight: Math.max(sliceH, 1),
+      x: 0,
+      y,
+      scrollX: 0,
+      scrollY: 0,
+    });
+  };
+
+  const out = document.createElement('canvas');
+  out.width = Math.ceil(width * scale);
+  out.height = Math.ceil(height * scale);
+  const ctx = out.getContext('2d');
+  if (!ctx) return captureSlice(0, height);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, out.width, out.height);
+
+  for (let y = 0; y < height; y += HTML2CANVAS_MAX_H) {
+    const sliceH = Math.min(HTML2CANVAS_MAX_H, height - y);
+    const tile = await captureSlice(y, sliceH);
+    ctx.drawImage(tile, 0, Math.round(y * (out.height / height)));
+  }
+  return out;
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function ProjectOMExportPage() {
@@ -347,8 +550,15 @@ export function ProjectOMExportPage() {
     const documentSystems = mergeDocumentSystemNames(baseSystems, extraTechNames);
     const tdState: typeof techDocState = {};
     for (const system of documentSystems) {
-      const rows = ((techRowData ?? []).filter((r: { system_type: string }) => r.system_type === system.name));
-      const cfg = (techCfgData ?? []).find((c: { system_type: string }) => c.system_type === system.name);
+      const rows = (techRowData ?? [])
+        .filter((r: { system_type: string }) => sameSystemName(r.system_type, system.name))
+        .map((r: { id: number; row_index: number; data: unknown }) => ({
+          id: r.id,
+          row_index: r.row_index,
+          data: asTechDocData(r.data),
+        }))
+        .sort((a, b) => a.row_index - b.row_index);
+      const cfg = (techCfgData ?? []).find((c: { system_type: string }) => sameSystemName(c.system_type, system.name));
       tdState[system.name] = { rows, colConfig: (cfg?.columns ?? []) };
     }
     setTechDocState(tdState);
@@ -648,9 +858,11 @@ export function ProjectOMExportPage() {
       const savedStyles = printRoot.style.cssText;
       printRoot.style.cssText = `
         display: block !important;
-        position: fixed;
-        top: 0; left: -9999px;
+        position: absolute;
+        top: 0; left: -10000px;
         width: ${RENDER_W_PX}px;
+        height: auto;
+        overflow: visible;
         z-index: -9999;
         background: white;
         visibility: visible;
@@ -686,16 +898,7 @@ export function ProjectOMExportPage() {
       for (let i = 0; i < pageEls.length; i++) {
         const el = pageEls[i];
         const anchorId = el.id || el.querySelector('[id]')?.id || null;
-        const canvas = await html2canvas(el, {
-          scale: 2,
-          useCORS: true,
-          allowTaint: false,
-          backgroundColor: '#ffffff',
-          width: RENDER_W_PX,
-          windowWidth: RENDER_W_PX,
-          scrollX: 0, scrollY: 0,
-          logging: false,
-        });
+        const canvas = await capturePrintElement(el, html2canvas as (element: HTMLElement, options?: Record<string, unknown>) => Promise<HTMLCanvasElement>, RENDER_W_PX);
         renderedSections.push({
           canvas,
           anchorId: anchorId?.startsWith('print-section-') ? anchorId : null,
@@ -1218,18 +1421,36 @@ export function ProjectOMExportPage() {
           if (!hasTechImport && techDevices.length === 0) return null;
           if (hasTechImport) {
             const systemsWithData = importedTechSystems;
+            let firstSection = true;
             return (
               <>
-                {systemsWithData.map((sys, idx) => (
-                  <PrintSection
-                    key={sys}
-                    title={`${sys} — Technical Documentation`}
-                    anchorId={idx === 0 ? 'print-section-technical_docs' : `print-section-technical_docs_${sys.toLowerCase().replace(/\s+/g, '_')}`}
-                    forcePageBreak={idx > 0}
-                  >
-                    <PrintTechnicalDocsSystem sys={sys} state={techDocState[sys]!} />
-                  </PrintSection>
-                ))}
+                {systemsWithData.flatMap(sys => {
+                  const state = techDocState[sys]!;
+                  const columns = resolveTechDocColumns(state.colConfig, state.rows);
+                  const rowChunks = chunkTechDocRows(state.rows, TECH_DOC_PRINT_ROWS);
+                  const colChunks = chunkTechDocRows(columns, TECH_DOC_PRINT_COLS);
+                  return rowChunks.flatMap((rows, rowIdx) =>
+                    colChunks.map((cols, colIdx) => {
+                      const isFirst = firstSection;
+                      firstSection = false;
+                      const slug = sys.toLowerCase().replace(/\s+/g, '_');
+                      const continued = rowIdx > 0 || colIdx > 0;
+                      const title = continued
+                        ? `${sys} — Technical Documentation (continued)`
+                        : `${sys} — Technical Documentation`;
+                      return (
+                        <PrintSection
+                          key={`${sys}-${rowIdx}-${colIdx}`}
+                          title={title}
+                          anchorId={isFirst ? 'print-section-technical_docs' : rowIdx === 0 && colIdx === 0 ? `print-section-technical_docs_${slug}` : undefined}
+                          forcePageBreak={!isFirst}
+                        >
+                          <PrintTechnicalDocsTable columns={cols} rows={rows} />
+                        </PrintSection>
+                      );
+                    }),
+                  );
+                })}
                 <div className="page-break" />
               </>
             );
@@ -1436,7 +1657,7 @@ function TechnicalDocsSection({ devices, techDocState, documentSystems }: {
       <div className="space-y-6">
         {systemsWithImport.map(sys => {
           const state = techDocState[sys]!;
-          const visibleCols = state.colConfig.filter(c => c.visible).sort((a, b) => a.order - b.order);
+          const visibleCols = resolveTechDocColumns(state.colConfig, state.rows);
           return (
             <div key={sys} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
               <div className="flex items-center gap-2 px-6 py-4 border-b border-slate-200 bg-slate-50">
@@ -1460,7 +1681,7 @@ function TechnicalDocsSection({ devices, techDocState, documentSystems }: {
                       {state.rows.map(row => (
                         <tr key={row.id} className="hover:bg-slate-50">
                           {visibleCols.map(col => (
-                            <td key={col.key} className="px-4 py-2.5 font-mono text-xs text-slate-700">{row.data[col.key] || <span className="text-slate-300">-</span>}</td>
+                            <td key={col.key} className="px-4 py-2.5 font-mono text-xs text-slate-700">{techDocCell(row.data, col) || <span className="text-slate-300">-</span>}</td>
                           ))}
                         </tr>
                       ))}
@@ -3230,29 +3451,33 @@ function PrintCoverPage({ project, devices, systemGroups, contractor, authority 
   );
 }
 
-function PrintTechnicalDocsSystem({ sys, state }: {
-  sys: string;
-  state: { rows: { id: number; row_index: number; data: Record<string, string> }[]; colConfig: { key: string; display_name: string; visible: boolean; order: number }[] };
+function PrintTechnicalDocsTable({ columns, rows }: {
+  columns: TechDocColumn[];
+  rows: TechDocPrintRow[];
 }) {
-  const visibleCols = state.colConfig.filter(c => c.visible).sort((a, b) => a.order - b.order);
-  if (visibleCols.length === 0) return <p style={{ color: '#94a3b8', fontSize: '0.85rem', fontStyle: 'italic' }}>No columns configured.</p>;
+  if (columns.length === 0) {
+    return <p style={{ color: '#94a3b8', fontSize: '0.85rem', fontStyle: 'italic' }}>No columns configured.</p>;
+  }
+  if (rows.length === 0) {
+    return <p style={{ color: '#94a3b8', fontSize: '0.85rem', fontStyle: 'italic' }}>No technical documentation rows for this system.</p>;
+  }
   return (
-    <table style={{ width: '100%', fontSize: '0.7rem', borderCollapse: 'collapse', border: '1px solid #e2e8f0' }}>
+    <table style={{ width: '100%', tableLayout: 'fixed', fontSize: '0.58rem', borderCollapse: 'collapse', border: '1px solid #e2e8f0' }}>
       <thead>
         <tr style={{ background: '#f8fafc' }}>
-          {visibleCols.map(col => (
-            <th key={col.key} style={{ textAlign: 'left', padding: '0.5rem 0.6rem', fontSize: '0.6rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' as const, letterSpacing: '0.06em', borderBottom: '2px solid #e2e8f0', borderRight: '1px solid #f1f5f9' }}>
+          {columns.map(col => (
+            <th key={col.key} style={{ textAlign: 'left', padding: '0.35rem 0.4rem', fontSize: '0.52rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' as const, letterSpacing: '0.04em', borderBottom: '2px solid #e2e8f0', borderRight: '1px solid #f1f5f9', wordBreak: 'break-word' }}>
               {col.display_name}
             </th>
           ))}
         </tr>
       </thead>
       <tbody>
-        {state.rows.map((row, i) => (
+        {rows.map((row, i) => (
           <tr key={row.id} style={{ background: i % 2 === 0 ? 'white' : '#f8fafc' }}>
-            {visibleCols.map(col => (
-              <td key={col.key} style={{ padding: '0.45rem 0.6rem', fontFamily: 'monospace', color: '#334155', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9' }}>
-                {row.data[col.key] || '—'}
+            {columns.map(col => (
+              <td key={col.key} style={{ padding: '0.32rem 0.4rem', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: '#334155', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9', wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'normal' }}>
+                {techDocCell(row.data, col) || '—'}
               </td>
             ))}
           </tr>
