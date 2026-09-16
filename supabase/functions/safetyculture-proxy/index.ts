@@ -31,12 +31,14 @@ function normalizeIntegrationItemType(raw: string | undefined): string {
   const map: Record<string, string> = {
     TEXT: "ITEM_TYPE_TEXT",
     TEXTSINGLE: "ITEM_TYPE_TEXT",
+    TEXTBOX: "ITEM_TYPE_TEXT",
+    PARAGRAPH: "ITEM_TYPE_TEXT",
     NUMBER: "ITEM_TYPE_NUMBER",
     DATETIME: "ITEM_TYPE_DATETIME",
     CHECKBOX: "ITEM_TYPE_CHECKBOX",
     QUESTION: "ITEM_TYPE_QUESTION",
-    PARAGRAPH: "ITEM_TYPE_PARAGRAPH",
     LOCATION: "ITEM_TYPE_LOCATION",
+    ADDRESS: "ITEM_TYPE_LOCATION",
   };
   return map[up] ?? `ITEM_TYPE_${up}`;
 }
@@ -243,16 +245,53 @@ async function fetchTemplateItems(
   templateId: string,
   headers: Record<string, string>,
 ): Promise<any[]> {
+  const flatten = flattenTemplateItems;
+  const withIds = (arr: any[]) => flatten(arr).filter((item: any) => item.item_id ?? item.id);
+
   try {
     const r = await fetch(`${SC_BASE}/templates/v1/templates/${templateId}`, { headers });
-    if (!r.ok) return [];
-    const raw = await r.json().catch(() => ({}));
-    return flattenTemplateItems(
-      raw.items ?? raw.template?.items ?? raw.header_items ?? raw.data?.items ?? [],
+    if (r.ok) {
+      const raw = await r.json().catch(() => ({}));
+      const found = withIds(
+        raw.items ?? raw.template?.items ?? raw.data?.items ??
+        raw.header_items ?? raw.fields ?? raw.questions ?? [],
+      );
+      if (found.length > 0) return found;
+    }
+  } catch { /* try next */ }
+
+  try {
+    const r = await fetch(`${SC_BASE}/templates/v1/templates/${templateId}/items`, { headers });
+    if (r.ok) {
+      const raw = await r.json().catch(() => ({}));
+      const found = withIds(raw.items ?? raw.data ?? raw.fields ?? raw.questions ?? []);
+      if (found.length > 0) return found;
+    }
+  } catch { /* try next */ }
+
+  try {
+    const sr = await fetch(
+      `${SC_BASE}/audits/search?template=${encodeURIComponent(templateId)}&limit=5`,
+      { headers },
     );
-  } catch {
-    return [];
-  }
+    if (sr.ok) {
+      const sd = await sr.json().catch(() => ({}));
+      for (const audit of (sd.audits ?? sd.data ?? [])) {
+        const auditId = audit.audit_id ?? audit.id;
+        if (!auditId) continue;
+        const ar = await fetch(`${SC_BASE}/audits/${auditId}`, { headers });
+        if (!ar.ok) continue;
+        const ad = await ar.json().catch(() => ({}));
+        const found = withIds([
+          ...(ad.header_items ?? ad.audit_data?.header_items ?? []),
+          ...(ad.items ?? ad.audit_data?.items ?? []),
+        ]);
+        if (found.length > 0) return found;
+      }
+    }
+  } catch { /* ignore */ }
+
+  return [];
 }
 
 function templateItemIds(templateItems: any[]): Set<string> {
@@ -265,7 +304,9 @@ function templateItemIds(templateItems: any[]): Set<string> {
 }
 
 function filterItemsToTemplate(items: any[], validIds: Set<string>): any[] {
-  return items.filter(item => item.item_id && validIds.has(String(item.item_id)));
+  const withIds = items.filter(item => item.item_id);
+  if (validIds.size === 0) return withIds;
+  return withIds.filter(item => validIds.has(String(item.item_id)));
 }
 
 function flattenTemplateItems(arr: any[]): any[] {
@@ -418,6 +459,71 @@ async function applyInspectionDisplayName(
   }
 
   return lastOk;
+}
+
+async function applyInspectionPrefill(
+  inspectionId: string | null | undefined,
+  items: any[],
+  headers: Record<string, string>,
+): Promise<number> {
+  if (!inspectionId || items.length === 0) return 0;
+  const { inspIds, auditIds } = inspectionIdVariants(inspectionId);
+  let applied = 0;
+
+  for (const item of items) {
+    const value = item.text_item?.value;
+    if (!item.item_id || !value) continue;
+    const payload = {
+      items: [{
+        item_id: item.item_id,
+        item_type: normalizeIntegrationItemType(item.item_type),
+        text_item: { value: String(value) },
+      }],
+    };
+
+    let ok = false;
+    for (const inspId of inspIds) {
+      const putR = await fetch(`${SC_BASE}/inspections/integration/v1/inspections/${inspId}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(payload),
+      }).catch(() => null);
+      if (putR?.ok) {
+        ok = true;
+        break;
+      }
+    }
+
+    if (!ok) {
+      for (const aid of auditIds) {
+        const legacyR = await fetch(`${SC_BASE}/audits/${aid}`, {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({
+            header_items: [{
+              item_id: item.item_id,
+              type: "textsingle",
+              responses: { text: String(value) },
+            }],
+            items: [{
+              item_id: item.item_id,
+              type: "textsingle",
+              responses: { text: String(value) },
+            }],
+          }),
+        }).catch(() => null);
+        if (legacyR?.ok) {
+          ok = true;
+          break;
+        }
+      }
+    }
+
+    if (ok) applied += 1;
+  }
+
+  log("applyInspectionPrefill", `applied ${applied}/${items.length} on ${inspectionId}`);
+  return applied;
 }
 
 Deno.serve(async (req: Request) => {
@@ -789,12 +895,14 @@ Deno.serve(async (req: Request) => {
       const rename_via = inspectionName
         ? await applyInspectionDisplayName(inspection_id, inspectionName, titleItemIds, authHeaders)
         : null;
+      const prefill_applied = await applyInspectionPrefill(inspection_id, items, authHeaders);
       return json({
         ok: true,
         inspection_id,
         raw,
         created_via: via,
         rename_via,
+        prefill_applied,
         ...(createErrors.length > 0 ? { create_errors: createErrors } : {}),
       });
     };

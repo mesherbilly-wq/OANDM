@@ -320,11 +320,13 @@ export default function HandoverPage() {
         if (fieldMap[key] && value) items.push({ item_id: fieldMap[key], item_type: 'TEXT', text_item: { value } });
       };
       addText('job_number', project.job_number);
+      addText('quote_number', project.quote_number);
       addText('project_name', project.project_name);
       addText('client_name', project.client_name);
       addText('site_name', project.site_name);
       addText('site_address', project.site_address);
       addText('project_manager', project.project_manager);
+      addText('engineer', project.engineer);
 
       const inspName = buildInspectionName(activeDoc.title);
       appendInspectionTitleItem(items, inspName, fieldMap);

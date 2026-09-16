@@ -1,11 +1,13 @@
 export const PROJECT_FIELDS = [
   { key: 'inspection_title', label: 'Audit Title (inspection name)' },
   { key: 'job_number', label: 'Job Number' },
+  { key: 'quote_number', label: 'Quote Number' },
   { key: 'project_name', label: 'Project Name' },
   { key: 'client_name', label: 'Client Name' },
   { key: 'site_name', label: 'Site Name' },
   { key: 'site_address', label: 'Site Address' },
   { key: 'project_manager', label: 'Project Manager' },
+  { key: 'engineer', label: 'Engineer' },
 ] as const;
 
 export const DEVICE_FIELDS = [

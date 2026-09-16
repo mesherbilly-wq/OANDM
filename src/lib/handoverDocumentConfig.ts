@@ -21,11 +21,13 @@ export const PROJECT_WIDE_DOCUMENT_TYPE_KEY = 'project_wide';
 
 export const DEFAULT_SC_FIELD_MAPPINGS: Record<string, string> = {
   job_number: '',
+  quote_number: '',
   project_name: '',
   client_name: '',
   site_name: '',
   site_address: '',
   project_manager: '',
+  engineer: '',
   inspection_title: '',
 };
 
