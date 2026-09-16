@@ -176,14 +176,39 @@ const IA10_MANIFEST_SEEDS = [
   'Official NSI certificate (number / date)',
 ];
 
+const CV07_TOPIC_SEEDS = [
+  'Authorised use, privacy and footage handling',
+  'Live viewing, PTZ and selected camera views',
+  'Playback, time search and agreed export method',
+  'User access levels and audit / operator functions',
+  'Faults, storage warnings and who to call',
+  'Logbook, support and maintenance arrangements',
+  'Remote / app access and secure credential receipt',
+];
+
+const CV11_MANIFEST_SEEDS = [
+  'As-fitted record, camera schedule and drawings',
+  'Camera, infrastructure and commissioning results',
+  'Recording, export and monitoring evidence',
+  'Changes, defects and retest evidence',
+  'Training and handover acceptance',
+  'User instructions and logbook',
+  'Maintenance / warranty information',
+  'Takeover / upgrade records',
+  'Official NSI certificate (number / date)',
+];
+
 export function emptyAnswers(schema: SchemaCatalogue): FormAnswers {
   const answers: FormAnswers = {};
+  const isCctv = /\bCV\d{2}\b|CCTV/i.test(schema.title);
   for (const section of schema.sections) {
     if (section.repeatable) {
       if (section.id === 'topics') {
-        answers[section.id] = IA06_TOPIC_SEEDS.map(topic => ({ ...emptyRow(section), topic }));
+        const seeds = isCctv ? CV07_TOPIC_SEEDS : IA06_TOPIC_SEEDS;
+        answers[section.id] = seeds.map(topic => ({ ...emptyRow(section), topic }));
       } else if (section.id === 'manifest') {
-        answers[section.id] = IA10_MANIFEST_SEEDS.map(document_name => ({ ...emptyRow(section), document_name }));
+        const seeds = isCctv ? CV11_MANIFEST_SEEDS : IA10_MANIFEST_SEEDS;
+        answers[section.id] = seeds.map(document_name => ({ ...emptyRow(section), document_name }));
       } else {
         answers[section.id] = [emptyRow(section)];
       }

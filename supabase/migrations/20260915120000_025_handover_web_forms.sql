@@ -171,5 +171,8 @@ WHERE sc_enabled = true
     'intruder_alarm_master',
     'ia01_as_fitted', 'ia02_readings', 'ia03_commissioning', 'ia04_arc', 'ia05_changes', 'ia06_training',
     'ia07_handover', 'ia08_log', 'ia09_support', 'ia10_release', 'ia11_takeover', 'ia12_upgrade',
-    'ia13_transfer', 'ia14_maintenance'
+    'ia13_transfer', 'ia14_maintenance',
+    'cv01_as_fitted', 'cv02_cameras', 'cv03_commissioning', 'cv04_recording', 'cv05_monitoring',
+    'cv06_changes', 'cv07_training', 'cv08_handover', 'cv09_log', 'cv10_support', 'cv11_release',
+    'cv12_takeover', 'cv13_upgrade', 'cv14_maintenance', 'cv15_acceptance', 'cv16_survey'
   ));

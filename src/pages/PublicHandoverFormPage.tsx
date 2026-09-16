@@ -8,7 +8,7 @@ import { FormLetterhead, WorksheetField, PACIFIC_LOGO_SRC } from '../components/
 import { fetchPublicContractorBrand, formatContractorAddress, formatContractorContact, imageUrlToDataUrl, type ContractorBrand } from '../lib/contractorBrand';
 import { getPublicHandoverForm, saveHandoverFormDraft, submitPublicHandoverForm } from '../lib/handoverFormsApi';
 import { getHandoverFormTemplate, type HandoverFormField } from '../lib/handoverFormTemplates';
-import { getIntruderFormSchema } from '../lib/intruderAlarmPack';
+import { getPackFormSchema, packCustomerSignatureNotice } from '../lib/packFormSchemas';
 import {
   applySchemaPrefill,
   flattenAnswersForPdf,
@@ -268,7 +268,7 @@ export default function PublicHandoverFormPage() {
   const [signature, setSignature] = useState('');
 
   const template = useMemo(() => getHandoverFormTemplate(templateKey), [templateKey]);
-  const schema = useMemo(() => getIntruderFormSchema(templateKey), [templateKey]);
+  const schema = useMemo(() => getPackFormSchema(templateKey), [templateKey]);
   const isSchemaForm = Boolean(schema);
   const displayBrand: ContractorBrand = brand ?? {
     company_name: companyName,
@@ -305,8 +305,8 @@ export default function PublicHandoverFormPage() {
         setCompanyName(form.company_name);
         setTemplateKey(form.form_template_key);
         setPrefill(form.prefill ?? {});
-        if (getIntruderFormSchema(form.form_template_key)) {
-          const loaded = getIntruderFormSchema(form.form_template_key)!;
+        if (getPackFormSchema(form.form_template_key)) {
+          const loaded = getPackFormSchema(form.form_template_key)!;
           setSchemaAnswers(mergeSavedAnswers(applySchemaPrefill(loaded, form.prefill ?? {}, form.company_name), form.answers));
         } else {
           const tmpl = getHandoverFormTemplate(form.form_template_key);
@@ -475,7 +475,7 @@ export default function PublicHandoverFormPage() {
             </p>
             {isSchemaForm && schema && (
               <p className="text-[11px] text-amber-900 bg-amber-50 border border-amber-300 px-3 py-2">
-                {schema.status}. This is not an official NSI certificate. Technical measurements and tests are the engineer’s and company’s responsibility. The customer signs IA07 once, plus IA05/IA11/IA12/IA13 only where a change or limitation needs agreement.
+                {packCustomerSignatureNotice(templateKey, schema.status)}
               </p>
             )}
 
