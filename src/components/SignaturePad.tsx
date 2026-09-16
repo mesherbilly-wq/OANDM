@@ -80,7 +80,7 @@ export function SignaturePad({
     <div className="space-y-2">
       <canvas
         ref={canvasRef}
-        className="w-full h-40 rounded-xl border border-slate-300 bg-white touch-none cursor-crosshair"
+        className="w-full h-40 border border-slate-800 bg-white touch-none cursor-crosshair"
         onPointerDown={start}
         onPointerMove={move}
         onPointerUp={end}

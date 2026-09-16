@@ -14,6 +14,7 @@ import {
   upsertHandoverDocumentType,
   deleteHandoverDocumentDefinition,
   isHandoverConfigLocalOnly,
+  uniqueHandoverDocumentId,
   type HandoverDocumentDefinition,
   type HandoverDocumentType,
 } from '../lib/handoverDocumentConfig';
@@ -31,14 +32,19 @@ export default function HandoverConfigPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editingDefId, setEditingDefId] = useState<number | 'new' | null>(null);
+  const [documentIdTouched, setDocumentIdTouched] = useState(false);
   const [localConfigOnly, setLocalConfigOnly] = useState(false);
   const [formsMigrationNeeded, setFormsMigrationNeeded] = useState(false);
   const [migrationCopied, setMigrationCopied] = useState(false);
 
   const [draftDef, setDraftDef] = useState<Partial<HandoverDocumentDefinition>>({});
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const pendingMigrationSql = localConfigOnly
+    ? `${migration024Sql}\n\n${migration025Sql}\n\n${migration026Sql}`
+    : `${migration025Sql}\n\n${migration026Sql}`;
+
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     const [typeRows, defRows] = await Promise.all([
       fetchHandoverDocumentTypes(),
       fetchHandoverDocumentDefinitions(),
@@ -50,7 +56,7 @@ export default function HandoverConfigPage() {
     const { error: formsTableError } = await supabase.from('handover_form_invites').select('id').limit(1);
     setFormsMigrationNeeded(Boolean(formsTableError && /does not exist|schema cache/i.test(formsTableError.message)));
 
-    setLoading(false);
+    if (!silent) setLoading(false);
     setLocalConfigOnly(isHandoverConfigLocalOnly());
   }, []);
 
@@ -64,9 +70,11 @@ export default function HandoverConfigPage() {
   );
 
   const beginNewDefinition = () => {
+    setError(null);
     setEditingDefId('new');
+    setDocumentIdTouched(false);
     setDraftDef({
-      document_id: '',
+      document_id: uniqueHandoverDocumentId(selectedTypeKey, 'document', definitions.map(def => def.document_id)),
       type_key: selectedTypeKey,
       title: '',
       description: '',
@@ -83,35 +91,54 @@ export default function HandoverConfigPage() {
   };
 
   const beginEditDefinition = (def: HandoverDocumentDefinition) => {
+    setError(null);
     setEditingDefId(def.id);
+    setDocumentIdTouched(true);
     setDraftDef({
       ...def,
+      type_key: selectedTypeKey,
       field_mappings: { ...DEFAULT_SC_FIELD_MAPPINGS, ...def.field_mappings },
       sc_template_id: formTemplateKeyForDefinition(def),
     });
   };
 
   const saveDefinition = async () => {
-    if (!draftDef.document_id?.trim() || !draftDef.title?.trim() || !draftDef.type_key) return;
+    const title = draftDef.title?.trim() ?? '';
+    if (!title) {
+      setError('Enter a title before saving this document.');
+      return;
+    }
+
+    const existingIds = definitions
+      .filter(def => editingDefId === 'new' || def.id !== editingDefId)
+      .map(def => def.document_id);
+    let documentId = draftDef.document_id?.trim() || uniqueHandoverDocumentId(selectedTypeKey, title, existingIds);
+
     setSaving(true);
     setError(null);
 
-    const saveError = await upsertHandoverDocumentDefinition({
+    const payload = {
       id: editingDefId === 'new' ? undefined : (editingDefId as number),
-      document_id: draftDef.document_id,
-      type_key: draftDef.type_key,
-      title: draftDef.title,
+      document_id: documentId,
+      type_key: selectedTypeKey,
+      title,
       description: draftDef.description ?? null,
       icon_key: draftDef.icon_key ?? 'file',
       sc_enabled: draftDef.sc_enabled ?? false,
-      sc_template_id: draftDef.sc_enabled ? (draftDef.sc_template_id ?? inferFormTemplateKey(draftDef.title ?? '')) : null,
+      sc_template_id: draftDef.sc_enabled ? (draftDef.sc_template_id ?? inferFormTemplateKey(title)) : null,
       field_mappings: draftDef.field_mappings ?? { ...DEFAULT_SC_FIELD_MAPPINGS },
       required: draftDef.required ?? false,
       upload_only: draftDef.upload_only ?? false,
       multi: draftDef.multi ?? false,
       display_order: draftDef.display_order ?? 0,
       is_active: draftDef.is_active ?? true,
-    });
+    };
+
+    let saveError = await upsertHandoverDocumentDefinition(payload);
+    if (saveError && editingDefId === 'new' && /already exists/i.test(saveError)) {
+      documentId = uniqueHandoverDocumentId(selectedTypeKey, title, [...existingIds, documentId]);
+      saveError = await upsertHandoverDocumentDefinition({ ...payload, document_id: documentId });
+    }
 
     setSaving(false);
     if (saveError) {
@@ -119,9 +146,35 @@ export default function HandoverConfigPage() {
       return;
     }
 
+    setDefinitions(current => {
+      const next = [...current];
+      const matchIndex = next.findIndex(def =>
+        editingDefId !== 'new' ? def.id === editingDefId : def.document_id === documentId,
+      );
+      const row: HandoverDocumentDefinition = {
+        id: editingDefId === 'new' ? Date.now() : (editingDefId as number),
+        document_id: documentId,
+        type_key: selectedTypeKey,
+        title,
+        description: payload.description,
+        icon_key: payload.icon_key,
+        sc_enabled: payload.sc_enabled,
+        sc_template_id: payload.sc_template_id,
+        field_mappings: payload.field_mappings,
+        required: payload.required,
+        upload_only: payload.upload_only,
+        multi: payload.multi,
+        display_order: payload.display_order,
+        is_active: payload.is_active,
+      };
+      if (matchIndex >= 0) next[matchIndex] = { ...next[matchIndex], ...row };
+      else next.push(row);
+      return next;
+    });
+
     setEditingDefId(null);
     setDraftDef({});
-    await load();
+    await load(true);
     setLocalConfigOnly(isHandoverConfigLocalOnly());
   };
 
@@ -147,12 +200,22 @@ export default function HandoverConfigPage() {
 
   const copyMigrationSql = async () => {
     try {
-      await navigator.clipboard.writeText(`${migration024Sql}\n\n${migration025Sql}\n\n${migration026Sql}`);
+      await navigator.clipboard.writeText(pendingMigrationSql);
       setMigrationCopied(true);
       window.setTimeout(() => setMigrationCopied(false), 2500);
     } catch {
-      setError('Could not copy SQL — open the files in supabase/migrations and run them in the SQL Editor.');
+      setError('Clipboard is blocked. Select the SQL in the box below, copy it, then paste it in Supabase.');
     }
+  };
+
+  const downloadMigrationSql = () => {
+    const blob = new Blob([pendingMigrationSql], { type: 'text/sql' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = localConfigOnly ? 'handover-024-025-026.sql' : 'handover-025-026.sql';
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   if (loading) {
@@ -179,24 +242,37 @@ export default function HandoverConfigPage() {
                 : 'Browser forms are not enabled in the database yet'}
             </p>
             <p>
-              Run migrations <code className="font-mono text-[11px]">024</code>,{' '}
-              <code className="font-mono text-[11px]">025_handover_web_forms</code> and{' '}
-              <code className="font-mono text-[11px]">026_intruder_master_form</code> in Supabase
-              so template links, emailed forms and as-fitted quote lines are shared for all users. After you run them, refresh this page.
+              {localConfigOnly
+                ? 'Run migrations 024, 025 and 026 in Supabase so template links, emailed forms and as-fitted quote lines are shared for all users.'
+                : '024 is already in place. Run 025_handover_web_forms and 026_intruder_master_form in the SQL Editor, then refresh this page.'}
             </p>
             <ol className="list-decimal list-inside space-y-1 text-amber-900/90">
               <li>Open <strong>Supabase Dashboard → SQL Editor → New query</strong></li>
-              <li>Click <strong>Copy migration SQL</strong> below and paste into the editor</li>
+              <li>Copy or download the SQL below and paste it into the editor</li>
               <li>Click <strong>Run</strong>, then hard-refresh OANDM</li>
             </ol>
-            <button
-              type="button"
-              onClick={() => void copyMigrationSql()}
-              className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 transition-colors"
-            >
-              {migrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
-              {migrationCopied ? 'Copied — paste in Supabase SQL Editor' : 'Copy migration SQL'}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void copyMigrationSql()}
+                className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 transition-colors"
+              >
+                {migrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
+                {migrationCopied ? 'Copied — paste in Supabase SQL Editor' : (localConfigOnly ? 'Copy 024–026 SQL' : 'Copy 025 + 026 SQL')}
+              </button>
+              <button
+                type="button"
+                onClick={downloadMigrationSql}
+                className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 transition-colors"
+              >
+                Download SQL file
+              </button>
+            </div>
+            <textarea
+              readOnly
+              value={pendingMigrationSql}
+              className="w-full h-40 font-mono text-[10px] bg-white border border-amber-200 rounded-lg p-2 text-slate-700"
+            />
           </div>
         )}
       </div>
@@ -212,7 +288,12 @@ export default function HandoverConfigPage() {
             <button
               key={type.key}
               type="button"
-              onClick={() => setSelectedTypeKey(type.key)}
+              onClick={() => {
+                setSelectedTypeKey(type.key);
+                setEditingDefId(null);
+                setDraftDef({});
+                setError(null);
+              }}
               className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
                 selectedTypeKey === type.key ? 'bg-cyan-600 text-white' : 'text-slate-700 hover:bg-slate-100'
               }`}
@@ -243,8 +324,13 @@ export default function HandoverConfigPage() {
           </div>
 
           <div className="space-y-3">
+            {typeDefinitions.length === 0 && (
+              <p className="text-sm text-slate-500 bg-white border border-dashed border-slate-300 rounded-xl px-4 py-8 text-center">
+                No documents in this type yet. Add a certificate, training record or upload.
+              </p>
+            )}
             {typeDefinitions.map(def => (
-              <div key={def.id} className={`bg-white rounded-xl border shadow-sm overflow-hidden ${def.is_active ? 'border-slate-200' : 'border-slate-100 opacity-70'}`}>
+              <div key={def.document_id} className={`bg-white rounded-xl border shadow-sm overflow-hidden ${def.is_active ? 'border-slate-200' : 'border-slate-100 opacity-70'}`}>
                 <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-slate-100 bg-slate-50">
                   <div>
                     <p className="text-sm font-semibold text-slate-800">{def.title}</p>
@@ -287,10 +373,16 @@ export default function HandoverConfigPage() {
                   <label className="text-xs font-medium text-slate-700 mb-1 block">Document ID</label>
                   <input
                     value={draftDef.document_id ?? ''}
-                    onChange={e => setDraftDef(current => ({ ...current, document_id: e.target.value }))}
+                    onChange={e => {
+                      setDocumentIdTouched(true);
+                      setDraftDef(current => ({ ...current, document_id: e.target.value }));
+                    }}
                     disabled={editingDefId !== 'new'}
                     className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 font-mono disabled:bg-slate-50"
                   />
+                  {editingDefId === 'new' && (
+                    <p className="text-[11px] text-slate-500 mt-1">Generated from the title. Change it only if you need a specific ID.</p>
+                  )}
                 </div>
                 <div>
                   <label className="text-xs font-medium text-slate-700 mb-1 block">Display order</label>
@@ -306,7 +398,16 @@ export default function HandoverConfigPage() {
                 <label className="text-xs font-medium text-slate-700 mb-1 block">Title</label>
                 <input
                   value={draftDef.title ?? ''}
-                  onChange={e => setDraftDef(current => ({ ...current, title: e.target.value }))}
+                  onChange={e => {
+                    const title = e.target.value;
+                    setDraftDef(current => ({
+                      ...current,
+                      title,
+                      document_id: editingDefId === 'new' && !documentIdTouched
+                        ? uniqueHandoverDocumentId(selectedTypeKey, title || 'document', definitions.map(def => def.document_id))
+                        : current.document_id,
+                    }));
+                  }}
                   className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2"
                 />
               </div>

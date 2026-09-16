@@ -14,7 +14,7 @@ import {
   type SchemaSection,
 } from '../lib/schemaForm';
 
-const inputClass = 'mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white';
+const inputClass = 'w-full border-0 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-inset focus:ring-slate-400';
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -26,9 +26,9 @@ function asRows(value: unknown): FormRow[] {
 
 function FieldLabel({ field }: { field: SchemaField }) {
   return (
-    <span className="text-sm font-medium text-slate-700">
+    <span className="block bg-slate-100 border-b border-slate-800 px-3 py-1 text-[10px] font-bold uppercase tracking-wide text-slate-700">
       {field.label}
-      {field.required ? <span className="text-red-500"> *</span> : null}
+      {field.required ? <span className="text-red-600"> *</span> : null}
     </span>
   );
 }
@@ -47,10 +47,10 @@ function ListEditor({
   return (
     <div className="mt-1 space-y-2">
       {items.map((item, index) => (
-        <div key={index} className="border border-slate-200 rounded-lg p-3 space-y-2 bg-slate-50">
+        <div key={index} className="border border-slate-800 p-3 space-y-2 bg-white">
           {keys.map(entry => (
-            <label key={entry.key} className="block">
-              <span className="text-xs text-slate-500">{entry.label}</span>
+            <label key={entry.key} className="block border border-slate-800">
+              <span className="block bg-slate-100 border-b border-slate-800 px-3 py-1 text-[10px] font-bold uppercase tracking-wide text-slate-600">{entry.label}</span>
               <input
                 value={item[entry.key] ?? ''}
                 onChange={event => {
@@ -71,7 +71,7 @@ function ListEditor({
       <button
         type="button"
         onClick={() => onChange([...items, Object.fromEntries(keys.map(entry => [entry.key, '']))])}
-        className="text-xs font-medium text-cyan-700"
+        className="text-xs font-semibold uppercase tracking-wide text-slate-800"
       >
         {addLabel}
       </button>
@@ -109,7 +109,7 @@ function SchemaFieldControl({
         {(field.options ?? []).map(option => {
           const checked = selected.includes(option);
           return (
-            <label key={option} className={`text-xs px-2.5 py-1.5 rounded-full border cursor-pointer ${checked ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-white text-slate-700 border-slate-300'}`}>
+            <label key={option} className={`text-xs px-2.5 py-1.5 border cursor-pointer ${checked ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-800'}`}>
               <input
                 type="checkbox"
                 className="sr-only"
@@ -125,7 +125,7 @@ function SchemaFieldControl({
   }
   if (field.type === 'boolean' || field.type === 'checkbox') {
     return (
-      <label className="mt-1 flex items-center gap-2 text-sm text-slate-700">
+      <label className="flex items-center gap-2 text-sm text-slate-700 px-3 py-2">
         <input type="checkbox" checked={value === true} onChange={event => onChange(event.target.checked)} />
         Yes
       </label>
@@ -134,7 +134,7 @@ function SchemaFieldControl({
   if (field.type === 'measurement') {
     const measurement = asRecord(value);
     return (
-      <div className="mt-1 grid grid-cols-1 sm:grid-cols-3 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-px bg-slate-800">
         <input placeholder="Value" value={String(measurement.value ?? '')} onChange={event => onChange({ ...measurement, value: event.target.value })} className={inputClass} />
         <input placeholder="Unit" value={String(measurement.unit ?? '')} onChange={event => onChange({ ...measurement, unit: event.target.value })} className={inputClass} />
         <input placeholder="Conditions / instrument" value={String(measurement.conditions ?? '')} onChange={event => onChange({ ...measurement, conditions: event.target.value })} className={inputClass} />
@@ -144,7 +144,7 @@ function SchemaFieldControl({
   if (field.type === 'signature') {
     const signature = asRecord(value);
     return (
-      <div className="mt-1 space-y-2">
+      <div className="space-y-2 px-3 py-2">
         <input
           placeholder="Signer name"
           value={String(signature.signerName ?? '')}
@@ -252,7 +252,7 @@ function SectionFields({
   return (
     <div className="space-y-4">
       {section.fields.map(field => (
-        <label key={field.id} className="block">
+        <label key={field.id} className="block border border-slate-800">
           <FieldLabel field={field} />
           <SchemaFieldControl
             field={field}
@@ -277,24 +277,26 @@ export function SchemaForm({
   const visible = schema.sections.filter(section => isSectionVisible(section, answers));
 
   return (
-    <div className="space-y-6">
-      {visible.map(section => {
+    <div className="space-y-4">
+      {visible.map((section, sectionIndex) => {
+        const letter = String.fromCharCode(65 + sectionIndex);
         if (section.repeatable) {
           const rows = asRows(answers[section.id]);
           return (
-            <section key={section.id} className="border border-slate-200 rounded-xl p-4 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold text-slate-900">{section.title}</h2>
+            <section key={section.id} className="border-2 border-slate-900 overflow-hidden">
+              <div className="flex items-center justify-between gap-2 bg-slate-900 text-white px-3 py-2">
+                <h2 className="text-xs font-bold uppercase tracking-wider">{letter}. {section.title}</h2>
                 <button
                   type="button"
                   onClick={() => onChange({ ...answers, [section.id]: [...rows, emptyRow(section)] })}
-                  className="inline-flex items-center gap-1 text-xs font-medium text-cyan-700"
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-white/90 hover:text-white"
                 >
                   <Plus className="w-3.5 h-3.5" />Add
                 </button>
               </div>
+              <div className="p-3 space-y-3 bg-white">
               {rows.map((row, index) => (
-                <div key={row._rowId || index} className="border border-slate-100 rounded-lg p-3 space-y-3 bg-slate-50">
+                <div key={row._rowId || index} className="border border-slate-800 p-3 space-y-3 bg-slate-50">
                   <div className="flex justify-between items-center">
                     <p className="text-xs font-semibold text-slate-500">Record {index + 1}</p>
                     {rows.length > 1 && (
@@ -317,13 +319,15 @@ export function SchemaForm({
                   />
                 </div>
               ))}
+              </div>
             </section>
           );
         }
 
         return (
-          <section key={section.id} className="border border-slate-200 rounded-xl p-4 space-y-3">
-            <h2 className="text-sm font-semibold text-slate-900">{section.title}</h2>
+          <section key={section.id} className="border-2 border-slate-900 overflow-hidden">
+            <h2 className="bg-slate-900 text-white text-xs font-bold uppercase tracking-wider px-3 py-2">{letter}. {section.title}</h2>
+            <div className="p-3 bg-white space-y-3">
             <SectionFields
               section={section}
               record={asRecord(answers[section.id])}
@@ -334,6 +338,7 @@ export function SchemaForm({
               onChange({ ...answers, [section.id]: record });
             }}
             />
+            </div>
           </section>
         );
       })}

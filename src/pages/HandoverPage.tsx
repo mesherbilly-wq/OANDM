@@ -15,11 +15,11 @@ import {
   handoverDocumentIcon,
   inferHandoverDocumentTypeKey,
   applyHandoverTypeSelectionsToSystems,
+  definitionsForType,
   PROJECT_WIDE_DOCUMENT_TYPE_KEY,
   resolveProjectWideHandoverTypeKey,
   saveProjectSystemHandoverType,
   saveProjectWideHandoverType,
-  visibleHandoverDefinitions,
   type HandoverDocumentDefinition,
   type HandoverDocumentType,
 } from '../lib/handoverDocumentConfig';
@@ -171,16 +171,13 @@ export default function HandoverPage() {
       return;
     }
 
-    const system = activeDocumentSystem;
+    const system = resolveActiveDocumentSystem(projectSystems, activeSystemKey);
     if (!system) return;
 
-    if (system.handoverDocumentTypeKey) {
-      setSelectedDocTypeKey(system.handoverDocumentTypeKey);
-      return;
-    }
-
-    setSelectedDocTypeKey(inferHandoverDocumentTypeKey(system.name, system.category));
-  }, [activeSystemKey, activeDocumentSystem, projectWideTypeKey, projectSystems]);
+    setSelectedDocTypeKey(
+      system.handoverDocumentTypeKey || inferHandoverDocumentTypeKey(system.name, system.category),
+    );
+  }, [activeSystemKey, projectWideTypeKey, activeDocumentSystem?.id, activeDocumentSystem?.name]);
 
   const handleDocTypeChange = async (typeKey: string) => {
     setSelectedDocTypeKey(typeKey);
@@ -225,20 +222,9 @@ export default function HandoverPage() {
   const getLegacyUploads = (section: string) =>
     legacyUploads.filter(u => u.section === section && docMatchesActiveSystem(u));
 
-  const existingDocumentIdsForActiveSystem = useMemo(() => {
-    const ids = new Set<string>();
-    for (const doc of docs) {
-      if (docMatchesActiveSystem(doc)) ids.add(doc.document_type);
-    }
-    for (const upload of legacyUploads) {
-      if (docMatchesActiveSystem(upload)) ids.add(upload.section);
-    }
-    return [...ids];
-  }, [docs, legacyUploads, activeSystemKey, activeDocumentSystem]);
-
   const visibleDefinitions = useMemo(
-    () => visibleHandoverDefinitions(documentDefinitions, selectedDocTypeKey, existingDocumentIdsForActiveSystem),
-    [documentDefinitions, selectedDocTypeKey, existingDocumentIdsForActiveSystem],
+    () => definitionsForType(documentDefinitions, selectedDocTypeKey),
+    [documentDefinitions, selectedDocTypeKey],
   );
 
   const scEnabledDefinitions = visibleDefinitions.filter(def => def.sc_enabled && !def.upload_only);
@@ -555,7 +541,7 @@ export default function HandoverPage() {
           <p className="text-xs text-slate-500 mt-1.5">
             {activeSystemKey === PROJECT_WIDE_SYSTEM_KEY
               ? 'Project-wide documents such as acceptance certificates and RAMS.'
-              : `Document set for ${activeDocumentSystem?.name ?? 'this system'}. Saved per cost centre.`}
+              : `Showing ${documentTypes.find(type => type.key === selectedDocTypeKey)?.label ?? selectedDocTypeKey} documents for ${activeDocumentSystem?.name ?? 'this system'}.`}
           </p>
         </div>
         {savingDocType && (
@@ -568,7 +554,9 @@ export default function HandoverPage() {
       {/* Header */}
       <div className="flex items-center justify-between bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
         <div>
-          <h2 className="font-semibold text-slate-900">Handover Documents</h2>
+          <h2 className="font-semibold text-slate-900">
+            {documentTypes.find(type => type.key === selectedDocTypeKey)?.label ?? 'Handover'} documents
+          </h2>
           <p className="text-sm text-slate-500 mt-0.5">Email a browser form, collect a signature, or upload a signed PDF</p>
         </div>
         <span className={`text-sm font-semibold px-3 py-1 rounded-full ${completedDocs === totalDocs ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>

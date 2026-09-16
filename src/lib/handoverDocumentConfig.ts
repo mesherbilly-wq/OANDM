@@ -86,6 +86,8 @@ export const FALLBACK_DOCUMENT_TYPES: HandoverDocumentType[] = [
   { id: 9, key: PROJECT_WIDE_DOCUMENT_TYPE_KEY, label: 'Project-wide', display_order: 90, is_active: true },
 ];
 
+let fallbackDefinitionSeq = 1;
+
 function fallbackDefinition(
   document_id: string,
   type_key: string,
@@ -95,7 +97,7 @@ function fallbackDefinition(
   opts: Partial<HandoverDocumentDefinition> = {},
 ): HandoverDocumentDefinition {
   return {
-    id: 0,
+    id: opts.id ?? fallbackDefinitionSeq++,
     document_id,
     type_key,
     title,
@@ -170,8 +172,8 @@ export async function fetchHandoverDocumentDefinitions(): Promise<HandoverDocume
   const { data, error } = await supabase
     .from('handover_document_definitions')
     .select('*')
-    .order('display_order')
-    .order('title');
+    .order('type_key')
+    .order('display_order');
 
   if (error) {
     if (isMissingSchemaError(error.message)) {
@@ -194,8 +196,8 @@ export async function fetchHandoverDocumentDefinitions(): Promise<HandoverDocume
     const { data: refreshed, error: refreshError } = await supabase
       .from('handover_document_definitions')
       .select('*')
-      .order('display_order')
-      .order('title');
+      .order('type_key')
+      .order('display_order');
 
     if (!refreshError && refreshed?.length) {
       return (refreshed as HandoverDocumentDefinition[]).map(row => ({
@@ -217,7 +219,7 @@ export function definitionsForType(
     .sort((a, b) => a.display_order - b.display_order || a.title.localeCompare(b.title));
 }
 
-/** Include saved legacy docs even if definition was deactivated or type changed. */
+/** Include saved legacy docs even if definition was deactivated. Do not pull in documents from another type. */
 export function visibleHandoverDefinitions(
   definitions: HandoverDocumentDefinition[],
   typeKey: string,
@@ -231,15 +233,31 @@ export function visibleHandoverDefinitions(
     if (visibleIds.has(documentId)) continue;
     const def = byId.get(documentId);
     if (def) {
+      if (def.type_key !== typeKey) continue;
       visible.push(def);
       visibleIds.add(documentId);
     } else {
+      const knownFallback = FALLBACK_DOCUMENT_DEFINITIONS.find(row => row.document_id === documentId);
+      if (knownFallback && knownFallback.type_key !== typeKey) continue;
       visible.push(fallbackDefinition(documentId, typeKey, titleForLegacyDocumentId(documentId), 'Saved handover document', 'file', { is_active: true }));
       visibleIds.add(documentId);
     }
   }
 
   return visible.sort((a, b) => a.display_order - b.display_order || a.title.localeCompare(b.title));
+}
+
+export function slugifyHandoverDocumentId(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48) || 'document';
+}
+
+export function uniqueHandoverDocumentId(typeKey: string, title: string, existingIds: string[]): string {
+  const base = `${typeKey}_${slugifyHandoverDocumentId(title)}`;
+  const used = new Set(existingIds);
+  if (!used.has(base)) return base;
+  let n = 2;
+  while (used.has(`${base}_${n}`)) n += 1;
+  return `${base}_${n}`;
 }
 
 export function titleForLegacyDocumentId(documentId: string): string {
@@ -597,6 +615,9 @@ export async function upsertHandoverDocumentDefinition(
   } else {
     const { error } = await supabase.from('handover_document_definitions').insert(payload);
     if (!error) return null;
+    if (/duplicate|unique/i.test(error.message)) {
+      return 'That Document ID already exists. Change it and save again.';
+    }
     if (!isMissingSchemaError(error.message)) return error.message;
   }
 
@@ -624,12 +645,10 @@ export async function upsertHandoverDocumentDefinition(
     if (index >= 0) store.definitions[index] = row;
     else store.definitions.push(row);
   } else {
-    const existingIndex = store.definitions.findIndex(existing => existing.document_id === row.document_id);
-    if (existingIndex >= 0) {
-      store.definitions[existingIndex] = { ...row, id: store.definitions[existingIndex].id };
-    } else {
-      store.definitions.push(row);
+    if (store.definitions.some(existing => existing.document_id === row.document_id)) {
+      return 'That Document ID already exists. Change it and save again.';
     }
+    store.definitions.push(row);
   }
 
   writeLocalHandoverConfig(store);
