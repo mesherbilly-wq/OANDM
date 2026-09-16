@@ -162,10 +162,31 @@ export async function confirmEndUserFromInvite(token: string): Promise<void> {
   }
 }
 
+export async function registerEndUserFromInvite(token: string, password: string): Promise<void> {
+  const { data, error } = await supabase.rpc('register_end_user_from_invite', {
+    invite_token: token,
+    new_password: password,
+  });
+  if (error) {
+    if (/does not exist|schema cache|register_end_user_from_invite/i.test(error.message)) {
+      throw new Error('Run 032 in the Supabase SQL Editor, then try again. Invited accounts do not need a confirmation email.');
+    }
+    throw new Error(error.message);
+  }
+  const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+  if (parsed && parsed.ok === false) {
+    throw new Error('This invite could not create an account. Open the link again and try signing in.');
+  }
+}
+
 export function isEmailNotConfirmedError(message: string): boolean {
   return /email not confirmed|email_not_confirmed/i.test(message);
 }
 
 export function isAlreadyRegisteredError(message: string): boolean {
   return /already registered|already been registered|user already exists/i.test(message);
+}
+
+export function isEmailRateLimitError(message: string): boolean {
+  return /rate limit|over_email_send_rate_limit/i.test(message);
 }

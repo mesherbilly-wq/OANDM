@@ -2,8 +2,9 @@ import React, { useState } from 'react';
 import { supabase } from '../lib/supabase';
 import {
   confirmEndUserFromInvite,
-  isAlreadyRegisteredError,
   isEmailNotConfirmedError,
+  isEmailRateLimitError,
+  registerEndUserFromInvite,
 } from '../lib/projectEndUserAccess';
 import {
   Shield, Building2, Mail, Lock, Eye, EyeOff, ArrowRight,
@@ -156,20 +157,12 @@ function InviteRegisterForm({ email, inviteToken, onSwitch }: { email: string; i
       return;
     }
     setLoading(true);
-    const { data, error: signUpErr } = await supabase.auth.signUp({ email, password });
-    if (signUpErr && !isAlreadyRegisteredError(signUpErr.message)) {
-      setError(signUpErr.message);
-      setLoading(false);
-      return;
-    }
     try {
-      if (!data.session) {
-        await confirmEndUserFromInvite(inviteToken);
-        const signIn = await supabase.auth.signInWithPassword({ email, password });
-        if (signIn.error) throw signIn.error;
-      }
-    } catch (confirmErr: unknown) {
-      setError(confirmErr instanceof Error ? confirmErr.message : 'Account created, but sign-in failed. Open this invite again and sign in.');
+      await registerEndUserFromInvite(inviteToken, password);
+      const signIn = await supabase.auth.signInWithPassword({ email, password });
+      if (signIn.error) throw signIn.error;
+    } catch (registerErr: unknown) {
+      setError(registerErr instanceof Error ? registerErr.message : 'Account could not be created. Open this invite again and try signing in.');
     }
     setLoading(false);
   };
@@ -267,7 +260,11 @@ function RegisterForm({ onSwitch }: { onSwitch: () => void }) {
     });
 
     if (authErr) {
-      setError(authErr.message);
+      setError(
+        isEmailRateLimitError(authErr.message)
+          ? 'Too many confirmation emails have been sent from this project. Wait about an hour, then try again. Invited clients should open their invite link instead of registering a company.'
+          : authErr.message,
+      );
       setLoading(false);
       return;
     }
