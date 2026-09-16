@@ -3,9 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
 import { Plus, Search, FolderOpen, MoreVertical, Trash2, Edit3, X, Calendar, Building, User, ChevronRight } from 'lucide-react';
+import { canEditOperations, defaultProjectPath } from '../lib/appRoles';
+import { useUserAccess } from '../lib/userAccess';
 
 export function ProjectsPage() {
   const navigate = useNavigate();
+  const { role } = useUserAccess();
+  const canEdit = canEditOperations(role);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -86,6 +90,7 @@ export function ProjectsPage() {
           <h1 className="text-2xl font-bold text-slate-900">Projects</h1>
           <p className="text-slate-500 mt-1">Manage your security integration projects</p>
         </div>
+        {canEdit && (
         <button
           onClick={() => setShowCreateModal(true)}
           className="inline-flex items-center gap-2 bg-cyan-600 text-white px-4 py-2.5 rounded-lg hover:bg-cyan-700 transition-colors font-medium"
@@ -93,6 +98,7 @@ export function ProjectsPage() {
           <Plus className="w-5 h-5" />
           New Project
         </button>
+        )}
       </div>
 
       <div className="relative mb-6">
@@ -116,9 +122,11 @@ export function ProjectsPage() {
           <FolderOpen className="w-12 h-12 text-slate-300 mx-auto mb-4" />
           <h3 className="text-lg font-medium text-slate-900 mb-2">No projects found</h3>
           <p className="text-slate-500 mb-6">
-            {projects.length === 0 ? 'Create your first project to get started' : 'Try adjusting your search'}
+            {projects.length === 0
+              ? (canEdit ? 'Create your first project to get started' : 'No projects are available yet')
+              : 'Try adjusting your search'}
           </p>
-          {projects.length === 0 && (
+          {projects.length === 0 && canEdit && (
             <button
               onClick={() => setShowCreateModal(true)}
               className="inline-flex items-center gap-2 bg-cyan-600 text-white px-4 py-2 rounded-lg hover:bg-cyan-700 transition-colors"
@@ -159,7 +167,7 @@ export function ProjectsPage() {
                   <tr
                     key={project.id}
                     className="hover:bg-slate-50 transition-colors cursor-pointer"
-                    onClick={() => navigate(`/projects/${project.id}`)}
+                    onClick={() => navigate(defaultProjectPath(project.id, role))}
                   >
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
@@ -176,6 +184,7 @@ export function ProjectsPage() {
                       {project.start_date ? new Date(project.start_date).toLocaleDateString() : '-'}
                     </td>
                     <td className="px-6 py-4 text-right">
+                      {canEdit ? (
                       <div className="flex items-center justify-end gap-1">
                         <button
                           type="button"
@@ -220,8 +229,10 @@ export function ProjectsPage() {
                             </>
                           )}
                         </div>
-                        <ChevronRight className="w-4 h-4 text-slate-300" />
                       </div>
+                      ) : (
+                        <ChevronRight className="w-4 h-4 text-slate-300 ml-auto" />
+                      )}
                     </td>
                   </tr>
                 ))}

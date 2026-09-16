@@ -96,8 +96,8 @@ export function IntegrationsPage() {
           <h1 className="text-2xl font-bold text-slate-900">Integrations</h1>
         </div>
         <p className="text-slate-500 ml-[52px]">
-          Manage connections to external business systems. Simpro API tokens are configured here.
-          Handover certificates use browser forms — link them on Handover → Handover Config.
+          Manage connections to external business systems. Simpro stays saved after a successful test until you unlink it.
+          Only admins can open this page. Handover certificates use browser forms — link them on Handover → Handover Config.
         </p>
       </div>
 

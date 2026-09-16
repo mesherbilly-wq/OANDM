@@ -1,13 +1,15 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertCircle, ArrowLeft, Building, CheckCircle, ExternalLink, FileSearch, Loader2, Search,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import {
-  getSimproConnectionSession,
-  isSimproConnectionConfigured,
+  loadSimproConnection,
+  type SimproConnectionSession,
 } from '../../lib/simproConnectionSession';
+import { canAccessIntegrations } from '../../lib/appRoles';
+import { useUserAccess } from '../../lib/userAccess';
 import { normalizeSimproJob } from '../../integrations/connectors/simpro/normalizeSimproJob';
 import { setSimproImportSession } from '../../lib/simproImportSession';
 import { fetchAllProductModels } from '../../lib/productDatabaseDb';
@@ -19,7 +21,9 @@ const inputClass =
 
 export function SimproImportFlow({ onBack }: { onBack: () => void }) {
   const navigate = useNavigate();
-  const connection = getSimproConnectionSession();
+  const { role } = useUserAccess();
+  const [connection, setConnection] = useState<SimproConnectionSession | null>(null);
+  const [connectionLoading, setConnectionLoading] = useState(true);
 
   const [jobNumber, setJobNumber] = useState('');
   const [searching, setSearching] = useState(false);
@@ -33,7 +37,28 @@ export function SimproImportFlow({ onBack }: { onBack: () => void }) {
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [openingReview, setOpeningReview] = useState(false);
 
-  if (!isSimproConnectionConfigured() || !connection) {
+  useEffect(() => {
+    let cancelled = false;
+    loadSimproConnection().then(({ connection: saved }) => {
+      if (cancelled) return;
+      setConnection(saved);
+      setConnectionLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (connectionLoading) {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white px-5 py-8 flex items-center justify-center gap-2 text-sm text-slate-500">
+        <Loader2 className="w-4 h-4 animate-spin" />
+        Checking Simpro connection…
+      </div>
+    );
+  }
+
+  if (!connection) {
     return (
       <div className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-6 space-y-4">
         <div className="flex items-start gap-3">
@@ -41,17 +66,21 @@ export function SimproImportFlow({ onBack }: { onBack: () => void }) {
           <div>
             <p className="text-sm font-semibold text-amber-900">Simpro is not connected</p>
             <p className="text-sm text-amber-800 mt-1">
-              Configure your Simpro connection in Integrations first — Base URL, Company ID, API token, and a successful connection test.
+              {canAccessIntegrations(role)
+                ? 'Configure your Simpro connection in Integrations first — Base URL, Company ID, API token, then Test and save.'
+                : 'Ask an admin to connect Simpro in Integrations. The connection is saved until they unlink it.'}
             </p>
           </div>
         </div>
         <div className="flex flex-wrap gap-3">
-          <Link
-            to="/integrations"
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-slate-900 text-white hover:bg-slate-800"
-          >
-            Open Integrations
-          </Link>
+          {canAccessIntegrations(role) && (
+            <Link
+              to="/integrations"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-slate-900 text-white hover:bg-slate-800"
+            >
+              Open Integrations
+            </Link>
+          )}
           <button
             type="button"
             onClick={onBack}

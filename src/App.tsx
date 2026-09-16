@@ -25,6 +25,10 @@ import { IntegrationsPage } from './pages/IntegrationsPage';
 import { ImportReviewPage } from './pages/ImportReviewPage';
 import AsBuiltDrawingsPage from './pages/AsBuiltDrawingsPage';
 import PublicHandoverFormPage from './pages/PublicHandoverFormPage';
+import { UsersPage } from './pages/UsersPage';
+import { UserAccessProvider, useUserAccess } from './lib/userAccess';
+import { defaultHomePath, isEndUser } from './lib/appRoles';
+import { RequireAccess } from './components/RequireAccess';
 
 function App() {
   const [session, setSession] = useState<Session | null>(null);
@@ -82,45 +86,81 @@ function App() {
   }
 
   return (
+    <UserAccessProvider user={session.user}>
+      <AuthedApp
+        companyName={companyName}
+        userEmail={session.user.email ?? ''}
+        onSignOut={handleSignOut}
+      />
+    </UserAccessProvider>
+  );
+}
+
+function ProjectIndexRedirect() {
+  const { role } = useUserAccess();
+  return <Navigate to={isEndUser(role) ? 'om-builder' : 'info'} replace />;
+}
+
+function AuthedApp({
+  companyName,
+  userEmail,
+  onSignOut,
+}: {
+  companyName: string;
+  userEmail: string;
+  onSignOut: () => void;
+}) {
+  const { role, roleLoading } = useUserAccess();
+
+  if (roleLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="w-8 h-8 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  return (
     <BrowserRouter>
       <Routes>
         <Route path="/f/:token" element={<PublicHandoverFormPage />} />
-        <Route path="/" element={<Layout companyName={companyName} userEmail={session.user.email ?? ''} onSignOut={handleSignOut} />}>
-          <Route index element={<Navigate to="/dashboard" replace />} />
-          <Route path="dashboard"   element={<DashboardPage />} />
-          <Route path="projects"    element={<ProjectsPage />} />
-          <Route path="create-project" element={<AIProjectBuilderPage />} />
-          <Route path="ai-builder"     element={<Navigate to="/create-project" replace />} />
+        <Route path="/" element={<Layout companyName={companyName} userEmail={userEmail} onSignOut={onSignOut} />}>
+          <Route index element={<Navigate to={defaultHomePath(role)} replace />} />
+          <Route path="dashboard" element={<RequireAccess><DashboardPage /></RequireAccess>} />
+          <Route path="projects" element={<RequireAccess><ProjectsPage /></RequireAccess>} />
+          <Route path="create-project" element={<RequireAccess><AIProjectBuilderPage /></RequireAccess>} />
+          <Route path="ai-builder" element={<Navigate to="/create-project" replace />} />
 
-          <Route path="projects/:id" element={<ProjectLayout />}>
-            <Route index                  element={<Navigate to="info" replace />} />
-            <Route path="info"            element={<ProjectInfoPage />} />
-            <Route path="documents"       element={<DocumentManagementPage />} />
-            <Route path="systems"         element={<ProjectSystemsPage />} />
+          <Route path="projects/:id" element={<RequireAccess><ProjectLayout /></RequireAccess>}>
+            <Route index element={<ProjectIndexRedirect />} />
+            <Route path="info" element={<ProjectInfoPage />} />
+            <Route path="documents" element={<DocumentManagementPage />} />
+            <Route path="systems" element={<ProjectSystemsPage />} />
             <Route path="systems/:system" element={<ProjectSystemsPage />} />
-            <Route path="schedule"        element={<DeviceSchedulePage />} />
-            <Route path="technical"       element={<TechnicalDocsPage />} />
-            <Route path="commissioning"   element={<CommissioningPage />} />
-            <Route path="handover"        element={<HandoverPage />} />
-            <Route path="safetyculture"   element={<Navigate to="../handover" replace />} />
-            <Route path="datasheets"      element={<ProjectDatasheetsPage />} />
-            <Route path="as-fitted"       element={<AsBuiltDrawingsPage />} />
-            <Route path="om-builder"      element={<ProjectOMExportPage />} />
-            <Route path="export"          element={<ExportCentrePage />} />
-            <Route path="cctv"           element={<Navigate to="../systems/cctv" replace />} />
+            <Route path="schedule" element={<DeviceSchedulePage />} />
+            <Route path="technical" element={<TechnicalDocsPage />} />
+            <Route path="commissioning" element={<CommissioningPage />} />
+            <Route path="handover" element={<HandoverPage />} />
+            <Route path="safetyculture" element={<Navigate to="../handover" replace />} />
+            <Route path="datasheets" element={<ProjectDatasheetsPage />} />
+            <Route path="as-fitted" element={<AsBuiltDrawingsPage />} />
+            <Route path="om-builder" element={<ProjectOMExportPage />} />
+            <Route path="export" element={<ExportCentrePage />} />
+            <Route path="cctv" element={<Navigate to="../systems/cctv" replace />} />
             <Route path="access-control" element={<Navigate to="../systems/access-control" replace />} />
-            <Route path="intercom"       element={<Navigate to="../systems/intercom" replace />} />
-            <Route path="intruder"       element={<Navigate to="../systems/intruder" replace />} />
-            <Route path="networking"     element={<Navigate to="../systems/networking" replace />} />
-            <Route path="om-export"      element={<Navigate to="../om-builder" replace />} />
+            <Route path="intercom" element={<Navigate to="../systems/intercom" replace />} />
+            <Route path="intruder" element={<Navigate to="../systems/intruder" replace />} />
+            <Route path="networking" element={<Navigate to="../systems/networking" replace />} />
+            <Route path="om-export" element={<Navigate to="../om-builder" replace />} />
           </Route>
 
-          <Route path="product-models" element={<ProductModelsPage />} />
-          <Route path="integrations"   element={<IntegrationsPage />} />
-          <Route path="import-review"   element={<ImportReviewPage />} />
-          <Route path="om-preview"     element={<OMPreviewPage />} />
+          <Route path="product-models" element={<RequireAccess><ProductModelsPage /></RequireAccess>} />
+          <Route path="integrations" element={<RequireAccess><IntegrationsPage /></RequireAccess>} />
+          <Route path="users" element={<RequireAccess><UsersPage /></RequireAccess>} />
+          <Route path="import-review" element={<RequireAccess><ImportReviewPage /></RequireAccess>} />
+          <Route path="om-preview" element={<RequireAccess><OMPreviewPage /></RequireAccess>} />
         </Route>
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        <Route path="*" element={<Navigate to={defaultHomePath(role)} replace />} />
       </Routes>
     </BrowserRouter>
   );

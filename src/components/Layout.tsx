@@ -4,12 +4,14 @@ import {
   LayoutDashboard, FolderOpen, Box, Menu, X, Plus, Plug,
   ChevronDown, ChevronRight,
   BookOpen, Cpu, Wifi, ClipboardCheck, ShieldAlert, Award, Download, Info,
-  FileText, Layers, LogOut, Building2, User,
+  FileText, Layers, LogOut, Building2, User, Users,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { deriveProjectSystems, getCategoryStyle, PROJECT_DEVICES_CHANGED_EVENT, type ProjectSystem } from '../lib/systems';
 import { fetchProjectSystems } from '../lib/projectSystemsDb';
 import type { Device, ProjectSystemRecord } from '../types';
+import { canAccessIntegrations, canEditOperations, canManageUsers, isEndUser, roleLabel } from '../lib/appRoles';
+import { useUserAccess } from '../lib/userAccess';
 
 const PROJECT_MODULES = [
   { name: 'Overview',           slug: 'info',          icon: Info },
@@ -34,6 +36,14 @@ export function Layout({ companyName, userEmail, onSignOut }: {
   const [systemsExpanded, setSystemsExpanded] = useState(true);
   const [projectSystems, setProjectSystems] = useState<ProjectSystem[]>([]);
   const location = useLocation();
+  const { role, profilesReady } = useUserAccess();
+  const showOperations = canEditOperations(role);
+  const showIntegrations = canAccessIntegrations(role);
+  const showUsers = canManageUsers(role);
+  const endUser = isEndUser(role);
+  const visibleModules = endUser
+    ? PROJECT_MODULES.filter(mod => mod.slug === 'om-builder')
+    : PROJECT_MODULES;
 
   const projectMatch = location.pathname.match(/^\/projects\/(\d+)/);
   const currentProjectId = projectMatch?.[1] ?? null;
@@ -78,7 +88,7 @@ export function Layout({ companyName, userEmail, onSignOut }: {
       <aside className={`fixed top-0 left-0 z-50 h-full w-64 bg-slate-950 transform transition-transform duration-200 ease-in-out lg:translate-x-0 flex flex-col ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         {/* Brand */}
         <div className="flex items-center justify-between h-16 px-5 border-b border-slate-800 flex-shrink-0">
-          <Link to="/dashboard" className="flex items-center gap-3">
+          <Link to={endUser ? '/projects' : '/dashboard'} className="flex items-center gap-3">
             <img
               src="https://www.pacific-uk.co.uk/wp-content/uploads/2018/07/pacific-logo.png"
               alt="Pacific Fire and Security Systems"
@@ -92,8 +102,10 @@ export function Layout({ companyName, userEmail, onSignOut }: {
 
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-0.5">
-          <NavLink href="/dashboard" icon={LayoutDashboard} label="Dashboard"
-            active={isActive('/dashboard')} onClick={() => setSidebarOpen(false)} />
+          {showOperations && (
+            <NavLink href="/dashboard" icon={LayoutDashboard} label="Dashboard"
+              active={isActive('/dashboard')} onClick={() => setSidebarOpen(false)} />
+          )}
 
           <NavLink href="/projects" icon={FolderOpen} label="Projects"
             active={isProjectsActive} onClick={() => setSidebarOpen(false)} />
@@ -106,7 +118,7 @@ export function Layout({ companyName, userEmail, onSignOut }: {
                   Project #{currentProjectId}
                 </p>
               </div>
-              {PROJECT_MODULES.map(mod => {
+              {visibleModules.map(mod => {
                 const href = `/projects/${currentProjectId}/${mod.slug}`;
                 const isSystemsModule = mod.slug === 'systems';
                 const active = location.pathname.startsWith(href) || (isSystemsModule && location.pathname.includes('/systems/'));
@@ -164,17 +176,38 @@ export function Layout({ companyName, userEmail, onSignOut }: {
           )}
 
           <div className="pt-3 mt-2 border-t border-slate-800/60">
-            <NavLink href="/product-models" icon={Box} label="Product Database"
-              active={isActive('/product-models')} onClick={() => setSidebarOpen(false)} />
+            {showOperations && (
+              <>
+                <NavLink href="/product-models" icon={Box} label="Product Database"
+                  active={isActive('/product-models')} onClick={() => setSidebarOpen(false)} />
 
-            <Link to="/create-project" onClick={() => setSidebarOpen(false)}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all mt-0.5 ${isActive('/create-project') ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-900/30' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>
-              <Plus className="w-5 h-5 flex-shrink-0" />
-              <span className="font-medium">Create Project</span>
-            </Link>
+                <Link to="/create-project" onClick={() => setSidebarOpen(false)}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all mt-0.5 ${isActive('/create-project') ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg shadow-cyan-900/30' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>
+                  <Plus className="w-5 h-5 flex-shrink-0" />
+                  <span className="font-medium">Create Project</span>
+                </Link>
+              </>
+            )}
 
-            <NavLink href="/integrations" icon={Plug} label="Integrations"
-              active={isActive('/integrations')} onClick={() => setSidebarOpen(false)} />
+            {showIntegrations && (
+              <NavLink href="/integrations" icon={Plug} label="Integrations"
+                active={isActive('/integrations')} onClick={() => setSidebarOpen(false)} />
+            )}
+
+            {showUsers && (
+              <NavLink href="/users" icon={Users} label="Users"
+                active={isActive('/users')} onClick={() => setSidebarOpen(false)} />
+            )}
+
+            {showUsers && !profilesReady && (
+              <Link
+                to="/users"
+                onClick={() => setSidebarOpen(false)}
+                className="block mx-1 mt-2 px-3 py-2 rounded-lg text-[11px] leading-snug bg-amber-500/15 text-amber-200 border border-amber-500/30"
+              >
+                Paste 028 in the SQL Editor to turn on user roles and keep Simpro saved after deploys.
+              </Link>
+            )}
           </div>
         </nav>
 
@@ -194,6 +227,7 @@ export function Layout({ companyName, userEmail, onSignOut }: {
               {userEmail && (
                 <p className="text-[10px] text-slate-600 truncate leading-tight">{userEmail}</p>
               )}
+              <p className="text-[10px] text-slate-500 truncate leading-tight">{roleLabel(role)}</p>
             </div>
           </div>
           {/* Sign out */}
