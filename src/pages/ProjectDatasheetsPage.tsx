@@ -535,7 +535,11 @@ export function ProjectDatasheetsPage() {
                                     </p>
                                   </div>
                                   <div className="flex items-center gap-2">
-                                    <a href={candidate.url} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-slate-600 hover:underline">Preview</a>
+                                    {candidate.verified ? (
+                                      <a href={candidate.url} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-slate-600 hover:underline">Preview</a>
+                                    ) : (
+                                      <a href={googleDatasheetSearchUrl(row.manufacturer, row.model_number)} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-slate-600 hover:underline">Find on Web</a>
+                                    )}
                                     <button
                                       type="button"
                                       disabled={aiLookup.status === 'attaching'}

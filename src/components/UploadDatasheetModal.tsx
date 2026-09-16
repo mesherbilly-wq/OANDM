@@ -280,10 +280,17 @@ export function UploadDatasheetModal({ manufacturer, modelNumber, initialMode = 
                                   <><Download className="w-3.5 h-3.5" />Attach</>
                                 )}
                               </button>
-                              <a href={c.url} target="_blank" rel="noopener noreferrer"
-                                className="inline-flex items-center justify-center gap-1 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-medium rounded-lg transition-colors">
-                                <ExternalLink className="w-3 h-3" />Preview
-                              </a>
+                              {c.verified ? (
+                                <a href={c.url} target="_blank" rel="noopener noreferrer"
+                                  className="inline-flex items-center justify-center gap-1 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-medium rounded-lg transition-colors">
+                                  <ExternalLink className="w-3 h-3" />Preview
+                                </a>
+                              ) : (
+                                <a href={googleDatasheetSearchUrl(mfr, model)} target="_blank" rel="noopener noreferrer"
+                                  className="inline-flex items-center justify-center gap-1 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-medium rounded-lg transition-colors">
+                                  <ExternalLink className="w-3 h-3" />Find on Web
+                                </a>
+                              )}
                             </div>
                           </div>
                         </div>

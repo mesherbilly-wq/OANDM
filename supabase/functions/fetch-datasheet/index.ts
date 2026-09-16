@@ -72,7 +72,24 @@ async function fetchBytes(url: string): Promise<{ bytes: Uint8Array; finalUrl: s
   }
 }
 
-async function downloadPdf(url: string): Promise<Uint8Array> {
+async function downloadPdf(url: string, manufacturer: string, model: string): Promise<Uint8Array> {
+  try {
+    return await downloadPdfFromUrl(url);
+  } catch (firstError) {
+    const fallbacks = await fallbackDatasheetUrls(manufacturer, model);
+    for (const fallback of fallbacks) {
+      if (fallback === url) continue;
+      try {
+        return await downloadPdfFromUrl(fallback);
+      } catch {
+        continue;
+      }
+    }
+    throw firstError;
+  }
+}
+
+async function downloadPdfFromUrl(url: string): Promise<Uint8Array> {
   const first = await fetchBytes(url);
   if (isPdf(first.bytes)) return first.bytes;
 
@@ -86,6 +103,62 @@ async function downloadPdf(url: string): Promise<Uint8Array> {
   }
 
   throw new Error("URL does not point to a valid PDF file");
+}
+
+function compact(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function modelSlug(model: string): string {
+  return model.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9.-]+/g, "");
+}
+
+async function fallbackDatasheetUrls(manufacturer: string, model: string): Promise<string[]> {
+  const slug = modelSlug(model);
+  const pages: string[] = [];
+  if (slug && manufacturer.toLowerCase().includes("axis")) {
+    pages.push(`https://www.axis.com/products/axis-${slug}/support`);
+    pages.push(`https://www.axis.com/products/axis-${slug}`);
+  }
+  const urls: string[] = [];
+  for (const page of pages) {
+    urls.push(...await scrapeDatasheetPdfUrls(page, model));
+  }
+  return urls.slice(0, 3);
+}
+
+async function scrapeDatasheetPdfUrls(pageUrl: string, model: string): Promise<string[]> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 12000);
+    const res = await fetch(pageUrl, {
+      signal: ctrl.signal,
+      headers: {
+        "User-Agent": BROWSER_HEADERS["User-Agent"],
+        Accept: "text/html,application/xhtml+xml",
+      },
+      redirect: "follow",
+    });
+    clearTimeout(timer);
+    if (!res.ok) return [];
+    const html = await res.text();
+    const modelKey = compact(model);
+    const datasheets: string[] = [];
+    for (const match of html.matchAll(/href=["']([^"']+)["']/gi)) {
+      let url = "";
+      try {
+        url = new URL(match[1].replace(/&amp;/g, "&"), pageUrl).href;
+      } catch {
+        continue;
+      }
+      if (!/\.pdf(\?|#|$)/i.test(url)) continue;
+      if (modelKey && !compact(url).includes(modelKey)) continue;
+      if (/datasheet|data-sheet/i.test(url)) datasheets.push(url);
+    }
+    return [...new Set(datasheets)];
+  } catch {
+    return [];
+  }
 }
 
 function escapeIlike(value: string): string {
@@ -122,7 +195,7 @@ Deno.serve(async (req: Request) => {
 
     let pdfBytes: Uint8Array;
     try {
-      pdfBytes = await downloadPdf(String(url));
+      pdfBytes = await downloadPdf(String(url), String(manufacturer).trim(), String(model).trim());
     } catch (e: any) {
       return json(200, { error: "Failed to download PDF: " + (e?.message ?? "unknown error") });
     }
