@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
 import { supabase } from '../lib/supabase';
 import {
+  confirmEndUserFromInvite,
+  isAlreadyRegisteredError,
+  isEmailNotConfirmedError,
+} from '../lib/projectEndUserAccess';
+import {
   Shield, Building2, Mail, Lock, Eye, EyeOff, ArrowRight,
   ArrowLeft, Phone, Globe, Hash, Award, MapPin, Check,
   AlertCircle,
@@ -51,7 +56,17 @@ function InputGroup({ lbl, icon: Icon, children }: { lbl: string; icon?: React.E
 
 // ─── Login Form ────────────────────────────────────────────────────────────────
 
-function LoginForm({ onSwitch, initialEmail, lockEmail }: { onSwitch: () => void; initialEmail?: string; lockEmail?: boolean }) {
+function LoginForm({
+  onSwitch,
+  initialEmail,
+  lockEmail,
+  inviteToken,
+}: {
+  onSwitch: () => void;
+  initialEmail?: string;
+  lockEmail?: boolean;
+  inviteToken?: string;
+}) {
   const [email, setEmail] = useState(initialEmail ?? '');
   const [password, setPassword] = useState('');
   const [showPwd, setShowPwd] = useState(false);
@@ -62,8 +77,24 @@ function LoginForm({ onSwitch, initialEmail, lockEmail }: { onSwitch: () => void
     e.preventDefault();
     setError('');
     setLoading(true);
-    const { error: err } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-    if (err) setError(err.message);
+    const trimmed = email.trim();
+    const first = await supabase.auth.signInWithPassword({ email: trimmed, password });
+    if (!first.error) {
+      setLoading(false);
+      return;
+    }
+    if (inviteToken && isEmailNotConfirmedError(first.error.message)) {
+      try {
+        await confirmEndUserFromInvite(inviteToken);
+        const retry = await supabase.auth.signInWithPassword({ email: trimmed, password });
+        if (retry.error) setError(retry.error.message);
+      } catch (confirmErr: unknown) {
+        setError(confirmErr instanceof Error ? confirmErr.message : first.error.message);
+      }
+      setLoading(false);
+      return;
+    }
+    setError(first.error.message);
     setLoading(false);
   };
 
@@ -106,7 +137,7 @@ function LoginForm({ onSwitch, initialEmail, lockEmail }: { onSwitch: () => void
   );
 }
 
-function InviteRegisterForm({ email, onSwitch }: { email: string; onSwitch: () => void }) {
+function InviteRegisterForm({ email, inviteToken, onSwitch }: { email: string; inviteToken: string; onSwitch: () => void }) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPwd, setShowPwd] = useState(false);
@@ -125,8 +156,21 @@ function InviteRegisterForm({ email, onSwitch }: { email: string; onSwitch: () =
       return;
     }
     setLoading(true);
-    const { error: err } = await supabase.auth.signUp({ email, password });
-    if (err) setError(err.message);
+    const { data, error: signUpErr } = await supabase.auth.signUp({ email, password });
+    if (signUpErr && !isAlreadyRegisteredError(signUpErr.message)) {
+      setError(signUpErr.message);
+      setLoading(false);
+      return;
+    }
+    try {
+      if (!data.session) {
+        await confirmEndUserFromInvite(inviteToken);
+        const signIn = await supabase.auth.signInWithPassword({ email, password });
+        if (signIn.error) throw signIn.error;
+      }
+    } catch (confirmErr: unknown) {
+      setError(confirmErr instanceof Error ? confirmErr.message : 'Account created, but sign-in failed. Open this invite again and sign in.');
+    }
     setLoading(false);
   };
 
@@ -417,10 +461,12 @@ export function AuthPage({
   inviteEmail,
   inviteProjectName,
   inviteError,
+  inviteToken,
 }: {
   inviteEmail?: string;
   inviteProjectName?: string;
   inviteError?: string | null;
+  inviteToken?: string;
 } = {}) {
   const [view, setView] = useState<View>('login');
 
@@ -500,9 +546,9 @@ export function AuthPage({
             </div>
 
             {view === 'login'
-              ? <LoginForm onSwitch={() => setView('register')} initialEmail={inviteEmail} lockEmail={Boolean(inviteEmail)} />
-              : inviteEmail
-                ? <InviteRegisterForm email={inviteEmail} onSwitch={() => setView('login')} />
+              ? <LoginForm onSwitch={() => setView('register')} initialEmail={inviteEmail} lockEmail={Boolean(inviteEmail)} inviteToken={inviteToken} />
+              : inviteEmail && inviteToken
+                ? <InviteRegisterForm email={inviteEmail} inviteToken={inviteToken} onSwitch={() => setView('login')} />
                 : <RegisterForm onSwitch={() => setView('login')} />
             }
           </div>

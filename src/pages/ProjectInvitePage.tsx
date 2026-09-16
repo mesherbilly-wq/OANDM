@@ -84,6 +84,7 @@ export function ProjectInvitePage() {
       inviteEmail={preview?.email}
       inviteProjectName={preview?.project_name}
       inviteError={error}
+      inviteToken={token}
     />
   );
 }

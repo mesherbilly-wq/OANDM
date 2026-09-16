@@ -147,3 +147,25 @@ export async function claimEndUserInvite(token: string): Promise<{ project_id: n
   if (!parsed?.project_id) throw new Error('Invite could not be accepted.');
   return parsed as { project_id: number; project_name: string };
 }
+
+export async function confirmEndUserFromInvite(token: string): Promise<void> {
+  const { data, error } = await supabase.rpc('confirm_end_user_from_invite', { invite_token: token });
+  if (error) {
+    if (/does not exist|schema cache|confirm_end_user_from_invite/i.test(error.message)) {
+      throw new Error('Run 030 in the Supabase SQL Editor, then try again. The invite already proves this email.');
+    }
+    throw new Error(error.message);
+  }
+  const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+  if (parsed && parsed.ok === false && parsed.reason === 'no_user') {
+    throw new Error('Create a password on this invite first, then sign in.');
+  }
+}
+
+export function isEmailNotConfirmedError(message: string): boolean {
+  return /email not confirmed|email_not_confirmed/i.test(message);
+}
+
+export function isAlreadyRegisteredError(message: string): boolean {
+  return /already registered|already been registered|user already exists/i.test(message);
+}
