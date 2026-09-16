@@ -1,12 +1,11 @@
-import { createHandoverFormInvite } from './handoverFormsApi';
-import { applySchemaPrefill, type FormAnswers } from './schemaForm';
-import { getPackFormSchema } from './packFormSchemas';
 import { recordEmailOutbox, getEmailSettings } from './emailSettings';
 import { supabase } from './supabase';
 import { PACIFIC_TEMPLATE_FILES, fillPacificHandoverPdf, identityFromAnswers } from './pacificTemplateFill';
 import { buildPacificPdf, jobRefFromProject, uploadProjectPdf } from './pacificPdf';
 import type { ContractorBrand } from './contractorBrand';
 import { getSdpSchema } from './systemDesignProposal';
+import { applySchemaPrefill, type FormAnswers } from './schemaForm';
+import { getPackFormSchema } from './packFormSchemas';
 
 export const COMPLETION_BY_CATEGORY: Record<string, { documentId: string; title: string; templateKey: string }> = {
   intruder_alarm: { documentId: 'ia01_completion', title: 'IA01 Intruder alarm completion and handover', templateKey: 'ia01_completion' },
@@ -18,7 +17,6 @@ export interface PackDocumentLink {
   documentId: string;
   title: string;
   templateKey: string;
-  fillUrl: string;
   returnUrl: string;
   issuedPdfUrl?: string;
 }
@@ -113,7 +111,7 @@ async function createReturnToken(opts: {
     status: 'open',
   });
   if (error) throw new Error(/does not exist|schema cache/i.test(error.message)
-    ? 'Run Copy 035–036 SQL in Supabase before emailing the completion pack.'
+    ? 'Run Copy 035–037 SQL in Supabase before emailing the completion pack.'
     : error.message);
   return token;
 }
@@ -163,21 +161,10 @@ export async function sendCompletionPack(opts: {
       ? opts.sdpAnswers
       : completionAnswersFromSdp(doc.templateKey, opts.project, opts.sdpAnswers, opts.companyName);
     const schema = getPackFormSchema(doc.templateKey) ?? (doc.templateKey === 'sdp' ? getSdpSchema() : null);
-    const invite = await createHandoverFormInvite({
-      project_id: opts.projectId,
-      document_id: doc.documentId,
-      document_title: doc.title,
-      form_template_key: doc.templateKey,
-      recipient_email: opts.recipientEmail,
-      recipient_name: opts.recipientName,
-      prefill: prefillFromProject(opts.project),
-      answers,
-    });
     const returnToken = await createReturnToken({
       projectId: opts.projectId,
       documentId: doc.documentId,
       revisionNo: doc.documentId === 'sdp' ? opts.sdpRevisionNo : undefined,
-      formToken: invite.token,
     });
 
     let issuedPdfUrl: string | undefined;
@@ -215,33 +202,32 @@ export async function sendCompletionPack(opts: {
       status: 'in_progress',
       workflow_status: 'issued',
       revision_no: doc.documentId === 'sdp' ? opts.sdpRevisionNo : null,
-      sc_inspection_id: invite.token,
+      sc_inspection_id: returnToken,
       sc_template_id: doc.templateKey,
-      sc_inspection_name: invite.fill_url,
+      sc_inspection_name: issuedPdfUrl ?? `${origin()}/r/${returnToken}`,
     }, { onConflict: 'project_id,document_type,system_type' });
 
     links.push({
       documentId: doc.documentId,
       title: doc.title,
       templateKey: doc.templateKey,
-      fillUrl: invite.fill_url,
       returnUrl: `${origin()}/r/${returnToken}`,
       issuedPdfUrl,
     });
   }
 
-  const subject = `${opts.project.job_number || opts.project.project_name || 'Job'} — SDP and completion documents`;
+  const subject = `${opts.project.job_number || opts.project.project_name || 'Job'} — Pacific handover PDFs`;
   const body = [
-    `Please complete the prefilled documents for ${opts.project.project_name || 'this job'}.`,
+    `Please complete the attached Pacific PDF pack for ${opts.project.project_name || 'this job'}.`,
+    'Fill the PDF itself. Do not use a browser form.',
     '',
     ...links.flatMap(link => [
       `${link.title}`,
-      `Complete online: ${link.fillUrl}`,
-      `Return signed PDF: ${link.returnUrl}`,
-      link.issuedPdfUrl ? `Issued copy: ${link.issuedPdfUrl}` : '',
+      link.issuedPdfUrl ? `Prefilled PDF: ${link.issuedPdfUrl}` : '',
+      `Return the signed PDF: ${link.returnUrl}`,
       '',
     ]),
-    'Do not retype the imported scope unless it is wrong. Signatures bind only the revision shown on the SDP.',
+    'Signatures on the SDP bind only that revision. Return the completed PDF with the upload link so it is saved against this job.',
   ].filter(item => item !== undefined).join('\n');
 
   await recordEmailOutbox({

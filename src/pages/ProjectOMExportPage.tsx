@@ -2390,7 +2390,7 @@ function HandoverPackSection({ uploads, onRemove, handoverDocs, scHandoverDocs, 
           <h3 className="font-semibold text-slate-800">Handover Documents</h3>
           <p className="text-sm text-slate-500 mt-1">
             No handover documents uploaded yet. Go to the{' '}
-            <strong>Handover</strong> section to email a browser form or upload a signed PDF.
+            <strong>Handover</strong> section to email the Pacific PDF pack or upload a signed PDF.
           </p>
         </div>
         {handoverDocs.length > 0 && (

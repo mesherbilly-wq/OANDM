@@ -7,6 +7,7 @@ import migration025Sql from '../../supabase/migrations/20260915120000_025_handov
 import migration026Sql from '../../supabase/migrations/20260916120000_026_intruder_master_form.sql?raw';
 import migration035Sql from '../../supabase/migrations/20260916200000_035_pacific_completion_sdp.sql?raw';
 import migration036Sql from '../../supabase/migrations/20260916210000_036_sdp_revisions_and_returns.sql?raw';
+import migration037Sql from '../../supabase/migrations/20260916220000_037_pdf_only_handover.sql?raw';
 
 import {
   DEFAULT_SC_FIELD_MAPPINGS,
@@ -20,11 +21,6 @@ import {
   type HandoverDocumentDefinition,
   type HandoverDocumentType,
 } from '../lib/handoverDocumentConfig';
-import {
-  HANDOVER_FORM_TEMPLATE_LIST,
-  formTemplateKeyForDefinition,
-  inferFormTemplateKey,
-} from '../lib/handoverFormTemplates';
 
 export default function HandoverConfigPage() {
   const [types, setTypes] = useState<HandoverDocumentType[]>([]);
@@ -42,10 +38,10 @@ export default function HandoverConfigPage() {
   const [draftDef, setDraftDef] = useState<Partial<HandoverDocumentDefinition>>({});
 
   const pendingMigrationSql = localConfigOnly
-    ? `${migration024Sql}\n\n${migration025Sql}\n\n${migration026Sql}\n\n${migration035Sql}\n\n${migration036Sql}`
+    ? `${migration024Sql}\n\n${migration025Sql}\n\n${migration026Sql}\n\n${migration035Sql}\n\n${migration036Sql}\n\n${migration037Sql}`
     : formsMigrationNeeded
-      ? `${migration025Sql}\n\n${migration035Sql}\n\n${migration036Sql}`
-      : `${migration035Sql}\n\n${migration036Sql}`;
+      ? `${migration025Sql}\n\n${migration035Sql}\n\n${migration036Sql}\n\n${migration037Sql}`
+      : `${migration035Sql}\n\n${migration036Sql}\n\n${migration037Sql}`;
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -83,8 +79,8 @@ export default function HandoverConfigPage() {
       title: '',
       description: '',
       icon_key: 'file',
-      sc_enabled: true,
-      sc_template_id: inferFormTemplateKey(''),
+      sc_enabled: false,
+      sc_template_id: null,
       field_mappings: { ...DEFAULT_SC_FIELD_MAPPINGS },
       required: false,
       upload_only: false,
@@ -102,7 +98,8 @@ export default function HandoverConfigPage() {
       ...def,
       type_key: selectedTypeKey,
       field_mappings: { ...DEFAULT_SC_FIELD_MAPPINGS, ...def.field_mappings },
-      sc_template_id: formTemplateKeyForDefinition(def),
+      sc_enabled: false,
+      sc_template_id: null,
     });
   };
 
@@ -128,8 +125,8 @@ export default function HandoverConfigPage() {
       title,
       description: draftDef.description ?? null,
       icon_key: draftDef.icon_key ?? 'file',
-      sc_enabled: draftDef.sc_enabled ?? false,
-      sc_template_id: draftDef.sc_enabled ? (draftDef.sc_template_id ?? inferFormTemplateKey(title)) : null,
+      sc_enabled: false,
+      sc_template_id: null,
       field_mappings: draftDef.field_mappings ?? { ...DEFAULT_SC_FIELD_MAPPINGS },
       required: draftDef.required ?? false,
       upload_only: draftDef.upload_only ?? false,
@@ -239,19 +236,17 @@ export default function HandoverConfigPage() {
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
         <h2 className="font-semibold text-slate-900">Handover document template sets</h2>
         <p className="text-sm text-slate-500 mt-1">
-          Configure which document cards appear for each system document type. Link a browser form to each
-          certificate or record so it can be emailed, filled online, signed, and saved into Documents.
+          Configure which document cards appear for each system document type. Intruder, CCTV and access control use the Pacific fillable PDFs only — not browser forms.
         </p>
         <div className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-3 mt-3 space-y-2">
           <p className="font-semibold">Pacific SDP + IA01 / CC01 / AC01</p>
           <p>
-            Paste <strong>035</strong> then <strong>036</strong> in the Supabase SQL editor. This replaces the separate CV/IA sheets
-            with one System Design Proposal and the three standalone Pacific handover PDFs. Scope acceptance is signed on the SDP only.
+            Paste <strong>035</strong>, <strong>036</strong> and <strong>037</strong> in the Supabase SQL editor. This installs the Pacific IA01, CC01 and AC01 PDFs, turns off browser forms, and keeps the SDP as a generated PDF.
           </p>
           <button
             type="button"
             onClick={() => {
-              void navigator.clipboard.writeText(`${migration035Sql}\n\n${migration036Sql}`).then(() => {
+              void navigator.clipboard.writeText(`${migration035Sql}\n\n${migration036Sql}\n\n${migration037Sql}`).then(() => {
                 setMigrationCopied(true);
                 window.setTimeout(() => setMigrationCopied(false), 2500);
               }).catch(() => setError('Clipboard is blocked. Use Download SQL file below.'));
@@ -259,7 +254,7 @@ export default function HandoverConfigPage() {
             className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-[#C00000] text-white hover:bg-[#a00000]"
           >
             {migrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
-            {migrationCopied ? 'Copied 035–036 — paste in Supabase' : 'Copy 035–036 SQL'}
+            {migrationCopied ? 'Copied 035–037 — paste in Supabase' : 'Copy 035–037 SQL'}
           </button>
         </div>
         {(localConfigOnly || formsMigrationNeeded) && (
@@ -267,12 +262,12 @@ export default function HandoverConfigPage() {
             <p className="font-semibold">
               {localConfigOnly
                 ? 'Handover config is saved in this browser only'
-                : 'Browser forms are not enabled in the database yet'}
+                : 'Handover SQL is not fully applied yet'}
             </p>
             <p>
               {localConfigOnly
-                ? 'Run migrations 024, 025 and 026 in Supabase so template links, emailed forms and as-fitted quote lines are shared for all users.'
-                : '024 is already in place. Run 025, 026 and 027 in the SQL Editor, then refresh this page.'}
+                ? 'Run migrations 024–037 in Supabase so handover templates, return uploads and Pacific PDFs are shared for all users.'
+                : '024 is already in place. Paste Copy 025–037 SQL, then refresh this page.'}
             </p>
             <ol className="list-decimal list-inside space-y-1 text-amber-900/90">
               <li>Open <strong>Supabase Dashboard → SQL Editor → New query</strong></li>
@@ -286,7 +281,7 @@ export default function HandoverConfigPage() {
                 className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 transition-colors"
               >
                 {migrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
-                {migrationCopied ? 'Copied — paste in Supabase SQL Editor' : (localConfigOnly ? 'Copy 024–036 SQL' : (formsMigrationNeeded ? 'Copy 025–036 SQL' : 'Copy 035–036 SQL'))}
+                {migrationCopied ? 'Copied — paste in Supabase SQL Editor' : (localConfigOnly ? 'Copy 024–037 SQL' : (formsMigrationNeeded ? 'Copy 025–037 SQL' : 'Copy 035–037 SQL'))}
               </button>
               <button
                 type="button"
@@ -367,7 +362,6 @@ export default function HandoverConfigPage() {
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     {def.required && <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">Required</span>}
-                    {def.sc_enabled && <span className="text-[10px] font-semibold uppercase tracking-wide text-cyan-700 bg-cyan-50 px-2 py-0.5 rounded-full">Web form</span>}
                     {def.upload_only && <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">Upload</span>}
                     <button type="button" onClick={() => beginEditDefinition(def)} className="text-xs text-cyan-700 hover:underline">Edit</button>
                     <button type="button" onClick={() => void removeDefinition(def)} className="p-1 text-slate-400 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
@@ -375,11 +369,6 @@ export default function HandoverConfigPage() {
                 </div>
                 <div className="px-4 py-2 text-xs text-slate-500 flex flex-wrap gap-3">
                   <span>Order: {def.display_order}</span>
-                  {def.sc_enabled && (
-                    <span>
-                      Form: {HANDOVER_FORM_TEMPLATE_LIST.find(t => t.key === formTemplateKeyForDefinition(def))?.name ?? 'Browser form'}
-                    </span>
-                  )}
                 </div>
               </div>
             ))}
@@ -447,23 +436,9 @@ export default function HandoverConfigPage() {
                   className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2"
                 />
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={draftDef.sc_enabled ?? false}
-                    onChange={e => setDraftDef(current => ({
-                      ...current,
-                      sc_enabled: e.target.checked,
-                      sc_template_id: e.target.checked
-                        ? (current.sc_template_id || inferFormTemplateKey(current.title ?? ''))
-                        : current.sc_template_id,
-                    }))}
-                  />
-                  Web form
-                </label>
-                <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input type="checkbox" checked={draftDef.upload_only ?? false} onChange={e => setDraftDef(current => ({ ...current, upload_only: e.target.checked, sc_enabled: e.target.checked ? false : current.sc_enabled }))} />
+                  <input type="checkbox" checked={draftDef.upload_only ?? false} onChange={e => setDraftDef(current => ({ ...current, upload_only: e.target.checked, sc_enabled: false }))} />
                   Upload only
                 </label>
                 <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -471,31 +446,6 @@ export default function HandoverConfigPage() {
                   Required
                 </label>
               </div>
-                  {draftDef.sc_enabled && (
-                <div className="space-y-3">
-                  <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 text-xs text-slate-600">
-                    <p>
-                      Email this form from the Documents tab. The recipient fills it in the browser, signs it,
-                      and the signed PDF is saved against this document type automatically.
-                    </p>
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-slate-700 mb-1 block">Form template</label>
-                    <select
-                      value={draftDef.sc_template_id ?? inferFormTemplateKey(draftDef.title ?? '')}
-                      onChange={e => setDraftDef(current => ({ ...current, sc_template_id: e.target.value || null }))}
-                      className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2"
-                    >
-                      {HANDOVER_FORM_TEMPLATE_LIST.map(template => (
-                        <option key={template.key} value={template.key}>{template.name}</option>
-                      ))}
-                    </select>
-                    <p className="text-xs text-slate-500 mt-1">
-                      {HANDOVER_FORM_TEMPLATE_LIST.find(t => t.key === (draftDef.sc_template_id ?? inferFormTemplateKey(draftDef.title ?? '')))?.description}
-                    </p>
-                  </div>
-                </div>
-              )}
             </div>
             <div className="flex gap-3 px-6 py-4 border-t border-slate-200 bg-slate-50">
               <button type="button" onClick={() => { setEditingDefId(null); setDraftDef({}); }} className="flex-1 px-4 py-2.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-100">Cancel</button>

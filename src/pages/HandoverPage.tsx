@@ -25,8 +25,6 @@ import {
   type HandoverDocumentDefinition,
   type HandoverDocumentType,
 } from '../lib/handoverDocumentConfig';
-import { createHandoverFormInvite } from '../lib/handoverFormsApi';
-import { formTemplateKeyForDefinition, getHandoverFormTemplate } from '../lib/handoverFormTemplates';
 import { getCategoryStyle, type ProjectSystem } from '../lib/systems';
 import HandoverConfigPage from './HandoverConfigPage';
 import type { Device } from '../types';
@@ -34,10 +32,11 @@ import { sendCompletionPack } from '../lib/completionPackWorkflow';
 import { listSdpRevisions } from '../lib/sdpRevisionsApi';
 import { buildSdpAnswers } from '../lib/sdpAnswers';
 import { fetchPublicContractorBrand } from '../lib/contractorBrand';
+import { PACIFIC_TEMPLATE_FILES } from '../lib/pacificTemplateFill';
 import { Link } from 'react-router-dom';
 import {
   Upload, X, ExternalLink, CheckCircle, FileText, Loader2,
-  Award, Plus, Mail, Copy,
+  Award, Plus, Mail,
   AlertCircle, Trash2,
   FolderPlus, SlidersHorizontal,
 } from 'lucide-react';
@@ -113,15 +112,6 @@ export default function HandoverPage() {
   const [activeSystemKey, setActiveSystemKey] = useState<string>(PROJECT_WIDE_SYSTEM_KEY);
   const [loading, setLoading] = useState(true);
   const [savingDocType, setSavingDocType] = useState(false);
-
-  // Modal states
-  const [activeDoc, setActiveDoc] = useState<HandoverDocumentDefinition | null>(null);
-  const [modalMode, setModalMode] = useState<'email' | null>(null);
-  const [recipientEmail, setRecipientEmail] = useState('');
-  const [recipientName, setRecipientName] = useState('');
-  const [formLink, setFormLink] = useState<string | null>(null);
-  const [mailtoHref, setMailtoHref] = useState<string | null>(null);
-  const [actionLoading, setActionLoading] = useState(false);
   const [packEmail, setPackEmail] = useState('');
   const [packName, setPackName] = useState(project.engineer ?? '');
   const [packSending, setPackSending] = useState(false);
@@ -243,86 +233,15 @@ export default function HandoverPage() {
     [documentDefinitions, selectedDocTypeKey],
   );
 
-  const scEnabledDefinitions = visibleDefinitions.filter(def => def.sc_enabled && !def.upload_only);
+  const PACIFIC_PACK_IDS = new Set(['sdp', 'ia01_completion', 'cc01_completion', 'ac01_completion']);
+  const scEnabledDefinitions = visibleDefinitions.filter(def => PACIFIC_PACK_IDS.has(def.document_id) && !def.upload_only);
   const uploadOnlyDefinitions = visibleDefinitions.filter(def => def.upload_only);
-  const fileOnlyDefinitions = visibleDefinitions.filter(def => !def.sc_enabled && !def.upload_only);
+  const fileOnlyDefinitions = visibleDefinitions.filter(def => !PACIFIC_PACK_IDS.has(def.document_id) && !def.sc_enabled && !def.upload_only);
 
   const definitionsById = useMemo(
     () => new Map(documentDefinitions.map(def => [def.document_id, def])),
     [documentDefinitions],
   );
-
-  const openEmailFormModal = (definition: HandoverDocumentDefinition) => {
-    setActiveDoc(definition);
-    setModalMode('email');
-    setRecipientEmail('');
-    setRecipientName('');
-    setFormLink(null);
-    setMailtoHref(null);
-  };
-
-  const sendHandoverForm = async () => {
-    if (!activeDoc || !pid) return;
-    const templateKey = formTemplateKeyForDefinition(activeDoc);
-    if (!templateKey) {
-      alert(showConfig
-        ? 'Link a web form to this document on the Handover Config tab first.'
-        : 'Ask an admin to link a web form on Handover Config first.');
-      if (showConfig) setActiveTab('config');
-      return;
-    }
-    setActionLoading(true);
-    try {
-      const invite = await createHandoverFormInvite({
-        project_id: pid,
-        document_id: activeDoc.document_id,
-        document_title: activeDoc.title,
-        form_template_key: templateKey,
-        recipient_email: recipientEmail.trim() || undefined,
-        recipient_name: recipientName.trim() || undefined,
-        system_type: activeSystemFields.system_type,
-        project_system_id: activeSystemFields.project_system_id,
-        prefill: {
-          job_number: project.job_number ?? '',
-          project_name: project.project_name ?? '',
-          client_name: project.client_name ?? '',
-          site_name: project.site_name ?? '',
-          site_address: project.site_address ?? '',
-          project_manager: project.project_manager ?? '',
-          quote_number: project.quote_number ?? '',
-          engineer: project.engineer ?? '',
-          document_title: activeDoc.title,
-        },
-      });
-
-      await supabase.from('project_handover_docs').upsert({
-        project_id: pid,
-        document_type: activeDoc.document_id,
-        title: activeDoc.title,
-        status: 'in_progress',
-        sc_inspection_id: invite.token,
-        sc_template_id: templateKey,
-        sc_inspection_name: invite.fill_url,
-        ...activeSystemFields,
-      }, { onConflict: 'project_id,document_type,system_type' });
-
-      setFormLink(invite.fill_url);
-      setMailtoHref(invite.mailto_href);
-      if (invite.mailto_href && recipientEmail.trim()) {
-        window.location.href = invite.mailto_href;
-      }
-      await load();
-    } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : 'Could not create the form link.');
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const copyFormLink = async () => {
-    if (!formLink) return;
-    await navigator.clipboard.writeText(formLink);
-  };
 
   const sendPackToEngineer = async () => {
     if (!pid) return;
@@ -651,7 +570,7 @@ export default function HandoverPage() {
           <h2 className="font-semibold text-slate-900">
             {documentTypes.find(type => type.key === selectedDocTypeKey)?.label ?? 'Handover'} documents
           </h2>
-          <p className="text-sm text-slate-500 mt-0.5">Email the SDP and relevant handover PDFs, or complete one document at a time</p>
+          <p className="text-sm text-slate-500 mt-0.5">Prefill and email the Pacific handover PDFs, then save the signed copies against this job</p>
         </div>
         <span className={`text-sm font-semibold px-3 py-1 rounded-full ${completedDocs === totalDocs ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
           {completedDocs}/{totalDocs} complete
@@ -663,7 +582,7 @@ export default function HandoverPage() {
           <div>
             <h3 className="font-semibold text-slate-900">Email completion pack to engineer</h3>
             <p className="text-sm text-slate-500 mt-0.5">
-              Sends the current SDP plus IA01, CC01 or AC01 for the systems on this job. Includes fill links and a backup return upload.
+              Sends the current SDP PDF plus the Pacific IA01, CC01 or AC01 pack for the systems on this job. The engineer fills those PDFs and returns them with the upload link.
             </p>
           </div>
           <Link to="../sdp" className="text-xs font-medium text-cyan-700 hover:underline">Open SDP editor</Link>
@@ -720,13 +639,13 @@ export default function HandoverPage() {
                     <div className="bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 space-y-1">
                       <div className="flex items-center gap-2">
                         <Mail className="w-3.5 h-3.5 text-cyan-600 flex-shrink-0" />
-                        <span className="text-xs font-medium text-slate-700 truncate flex-1 min-w-0">Form sent — waiting for signature</span>
+                        <span className="text-xs font-medium text-slate-700 truncate flex-1 min-w-0">Prefilled PDF issued — waiting for the signed file</span>
                         {record.sc_inspection_name?.startsWith('http') && (
                           <a href={record.sc_inspection_name} target="_blank" rel="noopener noreferrer" className="text-xs text-cyan-600 hover:underline flex items-center gap-0.5 flex-shrink-0">
                             Open <ExternalLink className="w-3 h-3" />
                           </a>
                         )}
-                        <button onClick={() => removeScInspection(doc.document_id, record.sc_inspection_name)} className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors flex-shrink-0" title="Cancel form">
+                        <button onClick={() => removeScInspection(doc.document_id, record.sc_inspection_name)} className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors flex-shrink-0" title="Cancel issued PDF">
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
@@ -755,11 +674,13 @@ export default function HandoverPage() {
                         Edit SDP
                       </Link>
                     )}
-                    <button onClick={() => openEmailFormModal(doc)} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-cyan-600 text-white hover:bg-cyan-700 transition-colors">
-                      <Mail className="w-3.5 h-3.5" />{record?.sc_inspection_id && status === 'in_progress' ? 'Resend form' : 'Email form'}
-                    </button>
+                    {PACIFIC_TEMPLATE_FILES[doc.document_id] && (
+                      <a href={PACIFIC_TEMPLATE_FILES[doc.document_id]} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50">
+                        Open blank PDF
+                      </a>
+                    )}
                     <button onClick={() => triggerUpload(doc.document_id)} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">
-                      <Upload className="w-3.5 h-3.5" />Upload PDF
+                      <Upload className="w-3.5 h-3.5" />Upload signed PDF
                     </button>
                     {record?.file_url && (
                       <>
@@ -1043,55 +964,6 @@ export default function HandoverPage() {
         </div>
       )}
 
-      {modalMode === 'email' && activeDoc && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
-            <div className="flex items-center justify-between px-6 py-5 border-b border-slate-200">
-              <div>
-                <h3 className="text-base font-semibold text-slate-900">Email form</h3>
-                <p className="text-xs text-slate-500 mt-0.5">{activeDoc.title}</p>
-              </div>
-              <button onClick={() => { setModalMode(null); setActiveDoc(null); }} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
-            </div>
-            <div className="p-6 space-y-4">
-              <p className="text-sm text-slate-600">
-                {getHandoverFormTemplate(formTemplateKeyForDefinition(activeDoc)).name}. Project details are filled in automatically. When they sign, the PDF is saved here.
-              </p>
-              <div>
-                <label className="text-xs font-medium text-slate-700 mb-1.5 block">Recipient name</label>
-                <input value={recipientName} onChange={e => setRecipientName(e.target.value)} placeholder="Customer or engineer" className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-cyan-500" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-slate-700 mb-1.5 block">Recipient email</label>
-                <input type="email" value={recipientEmail} onChange={e => setRecipientEmail(e.target.value)} placeholder="name@client.co.uk" className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-cyan-500" />
-              </div>
-              {formLink && (
-                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 space-y-2">
-                  <p className="text-xs font-semibold text-emerald-800">Form link ready</p>
-                  <p className="text-[11px] font-mono text-slate-700 break-all">{formLink}</p>
-                  <div className="flex gap-2">
-                    <button type="button" onClick={() => void copyFormLink()} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-emerald-300 text-emerald-800 bg-white">
-                      <Copy className="w-3.5 h-3.5" />Copy link
-                    </button>
-                    {mailtoHref && (
-                      <a href={mailtoHref} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-cyan-600 text-white">
-                        <Mail className="w-3.5 h-3.5" />Open email
-                      </a>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="flex gap-3 px-6 py-4 border-t border-slate-200 bg-slate-50 rounded-b-2xl">
-              <button onClick={() => { setModalMode(null); setActiveDoc(null); }} className="flex-1 px-4 py-2.5 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors">Close</button>
-              <button onClick={() => void sendHandoverForm()} disabled={actionLoading} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 transition-colors disabled:opacity-40">
-                {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
-                {formLink ? 'Create another link' : 'Create and email'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
         </>
       )}
     </div>

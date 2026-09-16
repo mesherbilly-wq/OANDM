@@ -98,7 +98,7 @@ export function IntegrationsPage() {
         </div>
         <p className="text-slate-500 ml-[52px]">
           Manage connections to external business systems. Simpro stays saved after a successful test until you unlink it.
-          Only admins can open this page. Handover certificates use browser forms — link them on Handover → Handover Config.
+          Only admins can open this page. Handover uses the Pacific IA01, CC01 and AC01 PDFs — email them from Handover.
         </p>
       </div>
 
