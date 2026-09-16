@@ -109,7 +109,10 @@ export async function findAndSaveDatasheet(
 ): Promise<{ datasheet: Datasheet | null; candidates: DatasheetCandidate[]; placedScore: number | null; placedSource: 'adi' | 'ai' | null }> {
   const candidates = await searchDatasheetCandidates(manufacturer, model);
   const autoPlace = [...candidates]
-    .filter(candidate => candidate.verified && (candidate.score ?? 0) >= AI_AUTO_PLACE_SCORE)
+    .filter(candidate => {
+      if (candidateIsAdi(candidate) && (candidate.score ?? 0) >= 90) return true;
+      return candidate.verified && (candidate.score ?? 0) >= AI_AUTO_PLACE_SCORE;
+    })
     .sort((a, b) => {
       const aAdi = candidateIsAdi(a) ? 1 : 0;
       const bAdi = candidateIsAdi(b) ? 1 : 0;

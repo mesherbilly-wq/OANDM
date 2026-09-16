@@ -16,7 +16,10 @@ interface Candidate {
 }
 
 async function verify(url: string): Promise<boolean> {
-  const header = await pdfHeader(url, true) ?? await pdfHeader(url, false);
+  const adiCdn = /adiglobaldistribution/i.test(url);
+  const header = adiCdn
+    ? await pdfHeader(url, false)
+    : await pdfHeader(url, true) ?? await pdfHeader(url, false);
   return Boolean(header?.startsWith("%PDF"));
 }
 
@@ -60,10 +63,16 @@ Deno.serve(async (req: Request) => {
 
     const adiHits = await searchAdiDatasheets(manufacturer, model);
     const adiChecked = await verifyCandidates(adiHits, manufacturer, model);
-    const adiVerified = adiChecked.filter((c) => c.verified && isAdiDatasheetUrl(c.url));
-    if (adiVerified.length > 0) {
-      adiVerified.sort((a, b) => (b.score - a.score) || (b.verified ? 1 : 0) - (a.verified ? 1 : 0));
-      return new Response(JSON.stringify({ candidates: adiVerified, source: "adi" }), {
+    const adiDatasheets = adiChecked
+      .filter((c) => c.source === "adi" && isAdiDatasheetHit(c))
+      .map((c) => ({
+        ...c,
+        verified: c.verified || isAdiDatasheetHit(c),
+        score: Math.max(c.score, 93),
+      }));
+    if (adiDatasheets.length > 0) {
+      adiDatasheets.sort((a, b) => (b.score - a.score) || (b.verified ? 1 : 0) - (a.verified ? 1 : 0));
+      return new Response(JSON.stringify({ candidates: adiDatasheets, source: "adi" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -292,12 +301,15 @@ function compact(value: string): string {
 }
 
 function hitScore(
-  candidate: { url?: string; title?: string },
+  candidate: { url?: string; title?: string; source?: string },
   manufacturer: string,
   model: string,
   verified: boolean,
   claudeScore: number | null,
 ): number {
+  if (candidate.source === "adi" && claudeScore != null) {
+    return Math.max(verified ? claudeScore : 93, 93);
+  }
   if (claudeScore != null) {
     return verified ? claudeScore : Math.min(claudeScore, 89);
   }
@@ -374,7 +386,7 @@ async function searchAdiDatasheets(manufacturer: string, model: string): Promise
   const hits: AdiHit[] = [];
   for (const origin of ADI_ORIGINS) {
     hits.push(...await searchAdiOrigin(origin, manufacturer, model));
-    if (hits.some((hit) => isAdiDatasheetUrl(hit.url))) break;
+    if (hits.some((hit) => isAdiDatasheetHit(hit))) break;
   }
   return uniqueByUrl(hits);
 }
@@ -435,8 +447,8 @@ async function adiDocumentsForProduct(origin: string, product: AdiProduct, model
     const docs = Array.isArray(detail?.documents) ? detail.documents : [];
     const hits: AdiHit[] = [];
     for (const doc of docs) {
-      const url = String(doc?.fileUrl || doc?.filePath || "");
-      if (!/^https?:\/\//i.test(url) || !/\.pdf(\?|#|$)/i.test(url)) continue;
+      const url = adiAbsolutePdfUrl(doc?.fileUrl || doc?.filePath, origin);
+      if (!url) continue;
       if (!isAdiDatasheetDoc(doc, url) && /assembly|install|brochure|user manual|msds|instruction/i.test(`${doc?.name ?? ""} ${doc?.documentType ?? ""} ${url}`)) continue;
       hits.push({
         url,
@@ -465,7 +477,7 @@ function adiProductMatches(product: AdiProduct, model: string): boolean {
   const modelKey = compact(model);
   if (!modelKey || !product?.id) return false;
   const modelNumber = compact(product.modelNumber || product.properties?.updated_Model_Number || "");
-  if (modelNumber && modelNumber === modelKey) return true;
+  if (modelNumber && (modelNumber === modelKey || (modelKey.length >= 5 && modelNumber.includes(modelKey)))) return true;
   const name = product.name || "";
   if (isAccessoryName(name)) return false;
   return compact(name).includes(modelKey);
@@ -482,6 +494,32 @@ function isAdiDatasheetDoc(doc: { name?: string; documentType?: string; fileType
 
 function isAdiDatasheetUrl(url: string): boolean {
   return /product-data-sheet|datasheet|data-sheet/i.test(url);
+}
+
+function isAdiDatasheetHit(candidate: { url?: string; title?: string; source?: string; score?: number }): boolean {
+  if (candidate.source !== "adi" && !/adiglobaldistribution/i.test(candidate.url ?? "")) return false;
+  if (isAdiDatasheetUrl(candidate.url ?? "")) return true;
+  if ((candidate.score ?? 0) >= 90) return true;
+  return /product manual|data[- ]?sheet/i.test(candidate.title ?? "");
+}
+
+function adiAbsolutePdfUrl(raw: unknown, origin: string): string | null {
+  const value = String(raw ?? "").trim();
+  if (!value) return null;
+  try {
+    if (/^https?:\/\//i.test(value)) {
+      return /\.pdf(\?|#|$)/i.test(value) ? value : null;
+    }
+    if (/pim\//i.test(value) || value.startsWith("/pim")) {
+      const path = value.startsWith("/") ? value : `/${value}`;
+      const cdn = `https://cdn.adiglobaldistribution.co.uk${path}`;
+      return /\.pdf(\?|#|$)/i.test(cdn) ? cdn : null;
+    }
+    const resolved = new URL(value, origin).href;
+    return /\.pdf(\?|#|$)/i.test(resolved) ? resolved : null;
+  } catch {
+    return null;
+  }
 }
 
 function adiProductSegment(url: string): string | null {

@@ -168,8 +168,13 @@ async function adiDatasheetUrls(manufacturer: string, model: string): Promise<st
           ? detailJson.product.documents
           : Array.isArray(detailJson?.documents) ? detailJson.documents : [];
         for (const doc of docs) {
-          const url = String(doc?.fileUrl || doc?.filePath || "");
-          if (/product-data-sheet|data[- ]?sheet/i.test(`${doc?.name ?? ""} ${url}`) && /\.pdf(\?|#|$)/i.test(url)) {
+          const raw = String(doc?.fileUrl || doc?.filePath || "");
+          let url = raw;
+          if (raw && !/^https?:\/\//i.test(raw) && /pim\//i.test(raw)) {
+            url = `https://cdn.adiglobaldistribution.co.uk${raw.startsWith("/") ? raw : `/${raw}`}`;
+          }
+          const hay = `${doc?.name ?? ""} ${doc?.documentType ?? ""} ${url}`;
+          if (/product-data-sheet|data[- ]?sheet|product manual/i.test(hay) && /\.pdf(\?|#|$)/i.test(url)) {
             urls.push(url);
           }
         }
@@ -207,7 +212,7 @@ async function scrapeDatasheetPdfUrls(pageUrl: string, model: string): Promise<s
         continue;
       }
       if (!/\.pdf(\?|#|$)/i.test(url)) continue;
-      if (modelKey && !compact(url).includes(modelKey)) continue;
+      if (modelKey && !compact(url).includes(modelKey) && !/adiglobaldistribution/i.test(url)) continue;
       if (/datasheet|data-sheet/i.test(url)) datasheets.push(url);
     }
     return [...new Set(datasheets)];
