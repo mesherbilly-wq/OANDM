@@ -14,5 +14,5 @@ export function packCustomerSignatureNotice(key: string | null | undefined, stat
   if (isCctvPackFormKey(key)) {
     return `${status}. This is not an official NSI certificate. Technical measurements and tests are the engineer’s and company’s responsibility. The customer signs CV08 once, plus CV15 only where a change, restriction or incomplete work needs agreement.`;
   }
-  return `${status}. This is not an official NSI certificate. Technical measurements and tests are the engineer’s and company’s responsibility. The customer signs IA07 once, plus IA05/IA11/IA12/IA13 only where a change or limitation needs agreement.`;
+  return `${status}. This is not an official NSI certificate. Technical measurements and tests are the engineer’s and company’s responsibility. The customer signs IA07 once, plus IA15 only where a change, disconnection or incomplete work needs agreement.`;
 }

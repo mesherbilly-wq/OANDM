@@ -201,6 +201,7 @@ export function inferFormTemplateKey(title: string): string {
   if (/\bia12\b|upgrade and extension/.test(value)) return 'ia12_upgrade';
   if (/\bia13\b|monitoring transfer/.test(value)) return 'ia13_transfer';
   if (/\bia14\b|corrective work/.test(value)) return 'ia14_maintenance';
+  if (/\bia15\b|conditional customer acceptance/.test(value) && !/cctv/.test(value)) return 'ia15_acceptance';
   if (/intruder/.test(value) && /completion|certificate|master|handover/.test(value)) return 'ia07_handover';
   if (/train/.test(value)) return 'training_record';
   if (/keyholder/.test(value)) return 'keyholder_confirmation';

@@ -19,6 +19,7 @@ export interface SchemaSection {
   showWhen: SchemaShowWhen;
   repeatable: boolean;
   fields: SchemaField[];
+  note?: string;
 }
 
 export interface SchemaCatalogue {
@@ -34,6 +35,13 @@ export type FormRow = Record<string, unknown> & { _rowId: string };
 export const INTRUDER_ALARM_FORM_KEY = 'intruder_alarm_master';
 
 export const TEST_RESULT_OPTIONS = ['pass', 'fail', 'not_applicable', 'not_tested'] as const;
+
+export const CHECK_CODES = [
+  { value: 'P', label: 'P pass' },
+  { value: 'F', label: 'F fail' },
+  { value: 'NT', label: 'NT not tested' },
+  { value: 'NA', label: 'NA not applicable' },
+] as const;
 
 export const TRAINING_TOPIC_SEEDS = [
   'setting',
@@ -51,6 +59,7 @@ export const TRAINING_TOPIC_SEEDS = [
 const WORK_TYPE_CONFLICTS = ['takeover', 'upgrade', 'extension'];
 
 export function humanizeOption(value: string): string {
+  if (/^[A-Z0-9]{1,3}$/.test(value)) return value;
   return value.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
 }
 
@@ -62,6 +71,7 @@ export function newRowId(): string {
 export function emptyRow(section: SchemaSection): FormRow {
   const row: FormRow = { _rowId: newRowId() };
   for (const field of section.fields) {
+    if (field.type === 'note') continue;
     row[field.id] = defaultFieldValue(field);
   }
   return row;
@@ -87,6 +97,10 @@ export function defaultFieldValue(field: SchemaField): unknown {
     case 'boolean':
     case 'checkbox':
       return false;
+    case 'check_result':
+      return { result: '', reference: '' };
+    case 'note':
+      return '';
     case 'measurement':
       return { value: '', unit: '', conditions: '' };
     case 'signature':
@@ -215,6 +229,7 @@ export function emptyAnswers(schema: SchemaCatalogue): FormAnswers {
     }
     const record: Record<string, unknown> = {};
     for (const field of section.fields) {
+      if (field.type === 'note') continue;
       record[field.id] = defaultFieldValue(field);
     }
     answers[section.id] = record;
@@ -317,7 +332,15 @@ export function validateSchemaAnswers(schema: SchemaCatalogue, answers: FormAnsw
 
     for (const row of rows) {
       for (const field of section.fields) {
+        if (field.type === 'note') continue;
         const value = fieldValue(row, field);
+        if (field.type === 'check_result' && field.required) {
+          const check = value as { result?: string; reference?: string } | undefined;
+          if (isBlank(check?.result)) {
+            return `${section.title || field.label}: ${field.label} is required.`;
+          }
+          continue;
+        }
         if (field.id === 'na_reason' && row.test_outcome === 'not_applicable' && isBlank(value)) {
           return 'Give a reason when a test is not applicable.';
         }
@@ -363,6 +386,18 @@ export function flattenAnswersForPdf(schema: SchemaCatalogue, answers: FormAnswe
       }
       for (const field of section.fields) {
         const value = fieldValue(row, field);
+        if (field.type === 'note') {
+          lines.push({ label: field.label, value: '' });
+          continue;
+        }
+        if (field.type === 'check_result') {
+          const check = value as { result?: string; reference?: string } | undefined;
+          lines.push({
+            label: field.label,
+            value: [check?.result, check?.reference].filter(item => String(item ?? '').trim()).join(' / ') || '—',
+          });
+          continue;
+        }
         if (field.type === 'signature') {
           const signature = value as { signerName?: string; dataUrl?: string } | undefined;
           lines.push({

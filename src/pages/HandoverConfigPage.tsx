@@ -7,6 +7,7 @@ import migration025Sql from '../../supabase/migrations/20260915120000_025_handov
 import migration026Sql from '../../supabase/migrations/20260916120000_026_intruder_master_form.sql?raw';
 import migration027Sql from '../../supabase/migrations/20260916130000_027_intruder_ia_pack.sql?raw';
 import migration031Sql from '../../supabase/migrations/20260916170000_031_cctv_cv_pack.sql?raw';
+import migration034Sql from '../../supabase/migrations/20260916180000_034_ia15_conditional_acceptance.sql?raw';
 
 import {
   DEFAULT_SC_FIELD_MAPPINGS,
@@ -42,10 +43,10 @@ export default function HandoverConfigPage() {
   const [draftDef, setDraftDef] = useState<Partial<HandoverDocumentDefinition>>({});
 
   const pendingMigrationSql = localConfigOnly
-    ? `${migration024Sql}\n\n${migration025Sql}\n\n${migration026Sql}\n\n${migration027Sql}\n\n${migration031Sql}`
+    ? `${migration024Sql}\n\n${migration025Sql}\n\n${migration026Sql}\n\n${migration027Sql}\n\n${migration031Sql}\n\n${migration034Sql}`
     : formsMigrationNeeded
-      ? `${migration025Sql}\n\n${migration026Sql}\n\n${migration027Sql}\n\n${migration031Sql}`
-      : `${migration027Sql}\n\n${migration031Sql}`;
+      ? `${migration025Sql}\n\n${migration026Sql}\n\n${migration027Sql}\n\n${migration031Sql}\n\n${migration034Sql}`
+      : `${migration027Sql}\n\n${migration031Sql}\n\n${migration034Sql}`;
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -243,11 +244,12 @@ export default function HandoverConfigPage() {
           certificate or record so it can be emailed, filled online, signed, and saved into Documents.
         </p>
         <div className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-3 mt-3 space-y-2">
-          <p className="font-semibold">Intruder Alarm pack IA01–IA14</p>
+          <p className="font-semibold">Intruder Alarm pack IA01–IA15</p>
           <p>
-            Run <strong>027_intruder_ia_pack.sql</strong> in Supabase to install the fillable pack.
+            Run <strong>027_intruder_ia_pack.sql</strong> in Supabase to install the fillable pack, then
+            <strong> 034_ia15_conditional_acceptance.sql</strong> for IA15.
             The customer signs <strong>IA07</strong> once. Technical sheets are engineer or reviewer sign-off.
-            Extra customer acceptance appears only for design changes, reduced protection or incomplete tests.
+            Extra customer acceptance is <strong>IA15</strong> only for design changes, disconnections or incomplete tests.
           </p>
           <button
             type="button"
@@ -261,6 +263,19 @@ export default function HandoverConfigPage() {
           >
             {migrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
             {migrationCopied ? 'Copied 027 — paste in Supabase' : 'Copy 027 SQL'}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard.writeText(migration034Sql).then(() => {
+                setMigrationCopied(true);
+                window.setTimeout(() => setMigrationCopied(false), 2500);
+              }).catch(() => setError('Clipboard is blocked. Use Download SQL file below.'));
+            }}
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 hover:bg-slate-100 ml-2"
+          >
+            {migrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
+            {migrationCopied ? 'Copied 034 — paste in Supabase' : 'Copy 034 SQL'}
           </button>
         </div>
         <div className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-3 mt-3 space-y-2">

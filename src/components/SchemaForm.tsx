@@ -1,6 +1,7 @@
 import { Plus, Trash2 } from 'lucide-react';
 import { SignaturePad } from './SignaturePad';
 import {
+  CHECK_CODES,
   defaultFieldValue,
   emptyRow,
   humanizeOption,
@@ -26,7 +27,7 @@ function asRows(value: unknown): FormRow[] {
 
 function FieldLabel({ field }: { field: SchemaField }) {
   return (
-    <span className="block bg-[#D9D9D9] border-b border-[#404040] px-3 py-1 text-[10px] font-bold uppercase tracking-wide text-[#404040]">
+    <span className="block bg-[#D9D9D9] border-b border-[#404040] px-3 py-1 text-[11px] font-semibold text-[#404040]">
       {field.label}
       {field.required ? <span className="text-[#C00000]"> *</span> : null}
     </span>
@@ -50,7 +51,7 @@ function ListEditor({
         <div key={index} className="border border-[#404040] p-3 space-y-2 bg-white">
           {keys.map(entry => (
             <label key={entry.key} className="block border border-[#404040]">
-              <span className="block bg-[#D9D9D9] border-b border-[#404040] px-3 py-1 text-[10px] font-bold uppercase tracking-wide text-[#404040]">{entry.label}</span>
+              <span className="block bg-[#D9D9D9] border-b border-[#404040] px-3 py-1 text-[11px] font-semibold text-[#404040]">{entry.label}</span>
               <input
                 value={item[entry.key] ?? ''}
                 onChange={event => {
@@ -79,6 +80,14 @@ function ListEditor({
   );
 }
 
+function checkResultValue(value: unknown): { result: string; reference: string } {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    return { result: String(record.result ?? ''), reference: String(record.reference ?? '') };
+  }
+  return { result: String(value ?? ''), reference: '' };
+}
+
 function SchemaFieldControl({
   field,
   value,
@@ -88,6 +97,37 @@ function SchemaFieldControl({
   value: unknown;
   onChange: (next: unknown) => void;
 }) {
+  if (field.type === 'note') {
+    return <p className="px-3 py-2 text-sm text-[#404040] leading-relaxed whitespace-pre-wrap">{field.label}</p>;
+  }
+  if (field.type === 'check_result') {
+    const current = checkResultValue(value);
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2">
+        <label className="border-r border-[#404040] max-sm:border-r-0 max-sm:border-b">
+          <span className="block bg-[#D9D9D9] border-b border-[#404040] px-3 py-1 text-[11px] font-semibold text-[#404040]">Result</span>
+          <select
+            value={current.result}
+            onChange={event => onChange({ ...current, result: event.target.value })}
+            className={inputClass}
+          >
+            <option value="">Choose…</option>
+            {CHECK_CODES.map(option => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span className="block bg-[#D9D9D9] border-b border-[#404040] px-3 py-1 text-[11px] font-semibold text-[#404040]">Reference</span>
+          <input
+            value={current.reference}
+            onChange={event => onChange({ ...current, reference: event.target.value })}
+            className={inputClass}
+          />
+        </label>
+      </div>
+    );
+  }
   if (field.type === 'textarea') {
     return <textarea value={String(value ?? '')} onChange={event => onChange(event.target.value)} rows={3} className={inputClass} />;
   }
@@ -251,16 +291,25 @@ function SectionFields({
 }) {
   return (
     <div className="space-y-4">
-      {section.fields.map(field => (
-        <label key={field.id} className="block border border-[#404040]">
-          <FieldLabel field={field} />
-          <SchemaFieldControl
-            field={field}
-            value={record[field.id] ?? defaultFieldValue(field)}
-            onChange={next => onChange({ ...record, [field.id]: next })}
-          />
-        </label>
-      ))}
+      {section.fields.map(field => {
+        if (field.type === 'note') {
+          return (
+            <div key={field.id} className="border border-[#404040] bg-[#F7F7F7]">
+              <SchemaFieldControl field={field} value="" onChange={() => undefined} />
+            </div>
+          );
+        }
+        return (
+          <label key={field.id} className="block border border-[#404040]">
+            <FieldLabel field={field} />
+            <SchemaFieldControl
+              field={field}
+              value={record[field.id] ?? defaultFieldValue(field)}
+              onChange={next => onChange({ ...record, [field.id]: next })}
+            />
+          </label>
+        );
+      })}
     </div>
   );
 }
@@ -278,22 +327,28 @@ export function SchemaForm({
 
   return (
     <div className="space-y-4">
-      {visible.map((section, sectionIndex) => {
-        const letter = String.fromCharCode(65 + sectionIndex);
+      {visible.map(section => {
+        const heading = (
+          <div className="flex items-center justify-between gap-2 bg-[#C00000] text-white px-3 py-2">
+            <h2 className="text-xs font-bold tracking-wider">{section.title}</h2>
+            {section.repeatable ? (
+              <button
+                type="button"
+                onClick={() => onChange({ ...answers, [section.id]: [...asRows(answers[section.id]), emptyRow(section)] })}
+                className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-white/90 hover:text-white"
+              >
+                <Plus className="w-3.5 h-3.5" />Add record
+              </button>
+            ) : null}
+          </div>
+        );
+
         if (section.repeatable) {
           const rows = asRows(answers[section.id]);
           return (
             <section key={section.id} className="border border-[#404040] overflow-hidden">
-              <div className="flex items-center justify-between gap-2 bg-[#C00000] text-white px-3 py-2">
-                <h2 className="text-xs font-bold uppercase tracking-wider">{letter}. {section.title}</h2>
-                <button
-                  type="button"
-                  onClick={() => onChange({ ...answers, [section.id]: [...rows, emptyRow(section)] })}
-                  className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-white/90 hover:text-white"
-                >
-                  <Plus className="w-3.5 h-3.5" />Add record
-                </button>
-              </div>
+              {heading}
+              {section.note ? <p className="px-3 py-2 text-sm text-[#404040] leading-relaxed bg-[#F7F7F7] border-b border-[#404040] whitespace-pre-wrap">{section.note}</p> : null}
               <div className="p-3 space-y-3 bg-white">
               {rows.map((row, index) => (
                 <div key={row._rowId || index} className="border border-[#404040] p-3 space-y-3 bg-slate-50">
@@ -326,7 +381,8 @@ export function SchemaForm({
 
         return (
           <section key={section.id} className="border border-[#404040] overflow-hidden">
-            <h2 className="bg-[#C00000] text-white text-xs font-bold uppercase tracking-wider px-3 py-2">{letter}. {section.title}</h2>
+            {section.title ? heading : null}
+            {section.note ? <p className="px-3 py-2 text-sm text-[#404040] leading-relaxed bg-[#F7F7F7] border-b border-[#404040] whitespace-pre-wrap">{section.note}</p> : null}
             <div className="p-3 bg-white space-y-3">
             <SectionFields
               section={section}
