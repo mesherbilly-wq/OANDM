@@ -15,6 +15,8 @@ import {
   type DatasheetMatchOverrideState,
 } from '../lib/datasheetMatchOverrides';
 import {
+  AI_AUTO_PLACE_SCORE,
+  aiPlacementFromDatasheet,
   findAndSaveDatasheet,
   googleDatasheetSearchUrl,
   saveDatasheetFromUrl,
@@ -247,7 +249,7 @@ export function ProjectDatasheetsPage() {
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Datasheets</h2>
             <p className="text-sm text-slate-500">
-              Use the library first. If a datasheet is missing, find it with AI. If that fails, search the web or upload a PDF — anything saved is reused on future jobs.
+              Use the library first. If a datasheet is missing, find it with AI. Hits of {AI_AUTO_PLACE_SCORE}% or more are saved to the library automatically. If that fails, search the web or upload a PDF.
             </p>
           </div>
         </div>
@@ -312,6 +314,7 @@ export function ProjectDatasheetsPage() {
                 const isExpanded = expandedRowKey === match.rowKey;
                 const isUpdating = updatingRowKey === match.rowKey;
                 const aiLookup = aiByRow[match.rowKey];
+                const aiPlacement = match.datasheet ? aiPlacementFromDatasheet(match.datasheet) : { placed: false, score: null };
 
                 return (
                   <React.Fragment key={match.rowKey}>
@@ -325,10 +328,17 @@ export function ProjectDatasheetsPage() {
                       </td>
                       <td className="px-5 py-3.5">
                         {match.status === 'matched' && match.datasheet ? (
-                          <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-100 px-2 py-1 rounded">
-                            <CheckCircle className="w-3 h-3" />
-                            {match.method === 'user_approved' ? 'Approved' : 'Auto-matched'}
-                          </span>
+                          aiPlacement.placed ? (
+                            <span className="inline-flex items-center gap-1 text-xs font-medium text-cyan-800 bg-cyan-100 px-2 py-1 rounded">
+                              <Sparkles className="w-3 h-3" />
+                              AI placed it{aiPlacement.score != null ? ` · ${aiPlacement.score}%` : ''}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-100 px-2 py-1 rounded">
+                              <CheckCircle className="w-3 h-3" />
+                              {match.method === 'user_approved' ? 'Approved' : 'Auto-matched'}
+                            </span>
+                          )
                         ) : match.status === 'needs_review' ? (
                           <button
                             type="button"
@@ -361,13 +371,17 @@ export function ProjectDatasheetsPage() {
                               <CheckCircle className="w-3 h-3" />
                               Available
                             </span>
-                            {match.confidence != null && match.method !== 'exact_device' && (
+                            {aiPlacement.placed ? (
+                              <p className="text-cyan-700 mt-0.5">
+                                AI placed it{aiPlacement.score != null ? ` · ${aiPlacement.score}% hit` : ''}
+                              </p>
+                            ) : match.confidence != null && match.method !== 'exact_device' ? (
                               <p className="text-slate-400 mt-0.5">
                                 {formatMatchMethod(match.method)}
                                 {' · '}
                                 {Math.round(match.confidence * 100)}%
                               </p>
-                            )}
+                            ) : null}
                           </div>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-100 px-2 py-1 rounded">
@@ -507,7 +521,7 @@ export function ProjectDatasheetsPage() {
                           <div className="space-y-3">
                             <p className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
                               <Sparkles className="w-4 h-4 text-cyan-600" />
-                              AI found possible datasheets — attach one to save it in the library
+                              AI found possible datasheets — {AI_AUTO_PLACE_SCORE}%+ verified PDFs are saved automatically
                             </p>
                             {aiLookup.error && <p className="text-xs text-red-600">{aiLookup.error}</p>}
                             <div className="grid gap-2">
@@ -515,7 +529,10 @@ export function ProjectDatasheetsPage() {
                                 <div key={candidate.url} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-cyan-200 bg-white px-4 py-3">
                                   <div className="min-w-0">
                                     <p className="text-sm font-medium text-slate-800">{candidate.title}</p>
-                                    <p className="text-xs text-slate-500 mt-0.5 truncate">{candidate.domain} · {candidate.url}</p>
+                                    <p className="text-xs text-slate-500 mt-0.5 truncate">
+                                      {candidate.score != null ? `${candidate.score}% hit · ` : ''}
+                                      {candidate.domain} · {candidate.url}
+                                    </p>
                                   </div>
                                   <div className="flex items-center gap-2">
                                     <a href={candidate.url} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-slate-600 hover:underline">Preview</a>

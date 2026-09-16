@@ -13,7 +13,7 @@ import {
 } from '../integrations/core/productMatching';
 import type { DatasheetMatchOverrideState } from './datasheetMatchOverrides';
 
-export type DatasheetLike = Pick<Datasheet, 'id' | 'manufacturer' | 'model_number' | 'datasheet_url'>;
+export type DatasheetLike = Pick<Datasheet, 'id' | 'manufacturer' | 'model_number' | 'datasheet_url' | 'file_name'>;
 export type ProductModelLike = Pick<
   ProductModel,
   'id' | 'manufacturer' | 'model_number' | 'model_name' | 'device_type' | 'part_number'

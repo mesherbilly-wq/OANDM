@@ -2,7 +2,7 @@ import React, { useRef, useState } from 'react';
 import { X, Upload, CheckCircle, AlertCircle, FileText, Info, Search, Link, ExternalLink, Loader2, Download, ShieldCheck } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Datasheet } from '../types';
-import { googleDatasheetSearchUrl, saveDatasheetFromUrl, searchDatasheetCandidates, type DatasheetCandidate } from '../lib/datasheetLookup';
+import { AI_AUTO_PLACE_SCORE, googleDatasheetSearchUrl, saveDatasheetFromUrl, searchDatasheetCandidates, type DatasheetCandidate } from '../lib/datasheetLookup';
 
 type Mode = 'search' | 'upload' | 'link';
 
@@ -48,7 +48,19 @@ export function UploadDatasheetModal({ manufacturer, modelNumber, initialMode = 
     setAttachError(null);
 
     try {
-      setCandidates(await searchDatasheetCandidates(mfr, model));
+      const found = await searchDatasheetCandidates(mfr, model);
+      const autoPlace = [...found]
+        .filter(candidate => candidate.verified && (candidate.score ?? 0) >= AI_AUTO_PLACE_SCORE)
+        .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+      if (autoPlace[0]) {
+        const datasheet = await saveDatasheetFromUrl(autoPlace[0].url, mfr, model, {
+          source: 'ai',
+          score: autoPlace[0].score,
+        });
+        onUploaded(datasheet);
+        return;
+      }
+      setCandidates(found);
     } catch (e: any) {
       setSearchError(e.message ?? 'Search failed — try uploading a PDF or pasting a URL instead');
     } finally {
@@ -244,6 +256,11 @@ export function UploadDatasheetModal({ manufacturer, modelNumber, initialMode = 
                                 {c.verified && (
                                   <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-100 px-1.5 py-0.5 rounded">
                                     <ShieldCheck className="w-3 h-3" />Verified
+                                  </span>
+                                )}
+                                {c.score != null && (
+                                  <span className="inline-flex items-center text-xs font-medium text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
+                                    {c.score}% hit
                                   </span>
                                 )}
                               </div>
