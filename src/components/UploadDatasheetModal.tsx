@@ -2,33 +2,28 @@ import React, { useRef, useState } from 'react';
 import { X, Upload, CheckCircle, AlertCircle, FileText, Info, Search, Link, ExternalLink, Loader2, Download, ShieldCheck } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Datasheet } from '../types';
+import { googleDatasheetSearchUrl, saveDatasheetFromUrl, searchDatasheetCandidates, type DatasheetCandidate } from '../lib/datasheetLookup';
+
+type Mode = 'search' | 'upload' | 'link';
 
 interface Props {
   manufacturer: string;
   modelNumber: string;
+  initialMode?: Mode;
   onClose: () => void;
   onUploaded: (datasheet: Datasheet) => void;
 }
 
-type Mode = 'search' | 'upload' | 'link';
-
-interface Candidate {
-  url: string;
-  title: string;
-  domain: string;
-  verified: boolean;
-}
-
 const ic = 'w-full border border-slate-300 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-cyan-500 text-slate-900 bg-white text-sm';
 
-export function UploadDatasheetModal({ manufacturer, modelNumber, onClose, onUploaded }: Props) {
+export function UploadDatasheetModal({ manufacturer, modelNumber, initialMode = 'search', onClose, onUploaded }: Props) {
   const [mfr, setMfr] = useState(manufacturer);
   const [model, setModel] = useState(modelNumber);
-  const [mode, setMode] = useState<Mode>('search');
+  const [mode, setMode] = useState<Mode>(initialMode);
 
   // Search state
   const [searching, setSearching] = useState(false);
-  const [candidates, setCandidates] = useState<Candidate[] | null>(null);
+  const [candidates, setCandidates] = useState<DatasheetCandidate[] | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [attaching, setAttaching] = useState<string | null>(null); // url being attached
   const [attachError, setAttachError] = useState<string | null>(null);
@@ -53,12 +48,7 @@ export function UploadDatasheetModal({ manufacturer, modelNumber, onClose, onUpl
     setAttachError(null);
 
     try {
-      const { data, error: fnErr } = await supabase.functions.invoke('find-datasheet', {
-        body: { manufacturer: mfr.trim(), model: model.trim() },
-      });
-      if (fnErr) throw new Error(fnErr.message);
-      if (data?.error) throw new Error(data.error);
-      setCandidates(data?.candidates ?? []);
+      setCandidates(await searchDatasheetCandidates(mfr, model));
     } catch (e: any) {
       setSearchError(e.message ?? 'Search failed — try uploading a PDF or pasting a URL instead');
     } finally {
@@ -66,16 +56,12 @@ export function UploadDatasheetModal({ manufacturer, modelNumber, onClose, onUpl
     }
   };
 
-  const handleAttach = async (candidate: Candidate) => {
+  const handleAttach = async (candidate: DatasheetCandidate) => {
     setAttaching(candidate.url);
     setAttachError(null);
     try {
-      const { data, error: fnErr } = await supabase.functions.invoke('fetch-datasheet', {
-        body: { url: candidate.url, manufacturer: mfr.trim(), model: model.trim() },
-      });
-      if (fnErr) throw new Error(fnErr.message);
-      if (data?.error) throw new Error(data.error);
-      onUploaded(data.datasheet as Datasheet);
+      const datasheet = await saveDatasheetFromUrl(candidate.url, mfr, model);
+      onUploaded(datasheet);
     } catch (e: any) {
       setAttachError(candidate.url + '::' + (e.message ?? 'Failed to download PDF'));
     } finally {
@@ -223,7 +209,7 @@ export function UploadDatasheetModal({ manufacturer, modelNumber, onClose, onUpl
                     <p className="text-sm font-medium text-slate-600">No results found</p>
                     <p className="text-xs text-slate-400 mt-1">Try the Upload or Paste URL tabs, or search Google manually.</p>
                     <a
-                      href={`https://www.google.com/search?q=${encodeURIComponent(`${mfr} ${model} datasheet filetype:pdf`)}`}
+                      href={googleDatasheetSearchUrl(mfr, model)}
                       target="_blank" rel="noopener noreferrer"
                       className="inline-flex items-center gap-1.5 mt-3 text-xs text-cyan-600 hover:text-cyan-700 font-medium"
                     >
@@ -365,7 +351,7 @@ export function UploadDatasheetModal({ manufacturer, modelNumber, onClose, onUpl
               <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex gap-2.5">
                 <Info className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
                 <p className="text-xs text-blue-800">
-                  Saved to the product library — automatically matched to all existing and future devices with this manufacturer and model.
+                  Saved to the datasheet library for this manufacturer and model, so future jobs match automatically.
                 </p>
               </div>
             )}

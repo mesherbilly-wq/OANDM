@@ -36,14 +36,6 @@ Deno.serve(async (req: Request) => {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
-  const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
-  if (!ANTHROPIC_API_KEY) {
-    return new Response(
-      JSON.stringify({ error: "ANTHROPIC_API_KEY not configured" }),
-      { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
-  }
-
   const { manufacturer, model } = await req.json();
   if (!manufacturer || !model) {
     return new Response(
@@ -51,6 +43,52 @@ Deno.serve(async (req: Request) => {
       { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
+
+  const verified: Candidate[] = [];
+  const aiHits = await findWithClaude(manufacturer, model);
+  const aiChecked = await Promise.all(
+    aiHits.slice(0, 6).map(async (c) => ({
+      url: c.url,
+      title: c.title || c.url,
+      domain: c.domain || safeDomain(c.url),
+      verified: await verify(c.url),
+    })),
+  );
+  verified.push(...aiChecked);
+
+  if (aiHits.length === 0 || !verified.some((c) => c.verified)) {
+    const webHits = await webSearchPdfs(manufacturer, model);
+    const extra = await Promise.all(
+      webHits.slice(0, 5).map(async (c) => ({
+        url: c.url,
+        title: c.title || c.url,
+        domain: c.domain || safeDomain(c.url),
+        verified: await verify(c.url),
+      })),
+    );
+    verified.push(...extra);
+  }
+
+  const seen = new Set<string>();
+  const unique = verified.filter((c) => {
+    const key = c.url.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  unique.sort((a, b) => (b.verified ? 1 : 0) - (a.verified ? 1 : 0));
+
+  return new Response(JSON.stringify({ candidates: unique }), {
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+});
+
+async function findWithClaude(
+  manufacturer: string,
+  model: string,
+): Promise<Array<{ url: string; title: string; domain: string }>> {
+  const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
+  if (!ANTHROPIC_API_KEY) return [];
 
   const prompt = `You are a technical product researcher. Find datasheet PDF URLs for this security/AV/IT equipment product.
 
@@ -70,52 +108,68 @@ Return ONLY a JSON array, no explanation:
 
 If you have no confident URLs return: []`;
 
-  const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "claude-opus-4-5",
-      max_tokens: 512,
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
-
-  if (!claudeRes.ok) {
-    const err = await claudeRes.text();
-    return new Response(
-      JSON.stringify({ error: "Claude API error: " + err.substring(0, 200) }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
-  }
-
-  const claudeJson = await claudeRes.json();
-  const raw = claudeJson.content?.[0]?.text?.trim() ?? "[]";
-
-  let candidates: Array<{ url: string; title: string; domain: string }> = [];
   try {
+    const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-opus-4-5",
+        max_tokens: 512,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    if (!claudeRes.ok) return [];
+
+    const claudeJson = await claudeRes.json();
+    const raw = claudeJson.content?.[0]?.text?.trim() ?? "[]";
     const jsonMatch = raw.match(/\[[\s\S]*\]/);
-    candidates = JSON.parse(jsonMatch ? jsonMatch[0] : raw);
-    if (!Array.isArray(candidates)) candidates = [];
+    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((c: { url?: string }) => typeof c?.url === "string");
   } catch {
-    candidates = [];
+    return [];
   }
+}
 
-  const verified: Candidate[] = await Promise.all(
-    candidates.slice(0, 6).map(async (c) => ({
-      url: c.url,
-      title: c.title || c.url,
-      domain: c.domain || new URL(c.url).hostname.replace("www.", ""),
-      verified: await verify(c.url),
-    })),
-  );
+function safeDomain(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
 
-  verified.sort((a, b) => (b.verified ? 1 : 0) - (a.verified ? 1 : 0));
-
-  return new Response(JSON.stringify({ candidates: verified }), {
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
-  });
-});
+async function webSearchPdfs(
+  manufacturer: string,
+  model: string,
+): Promise<Array<{ url: string; title: string; domain: string }>> {
+  const query = encodeURIComponent(`${manufacturer} ${model} datasheet filetype:pdf`);
+  try {
+    const res = await fetch(`https://html.duckduckgo.com/html/?q=${query}`, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; DatasheetFinder/1.0)" },
+    });
+    if (!res.ok) return [];
+    const html = await res.text();
+    const hits: Array<{ url: string; title: string; domain: string }> = [];
+    const matches = html.matchAll(/uddg=([^&"]+)/g);
+    for (const match of matches) {
+      let url = "";
+      try {
+        url = decodeURIComponent(match[1]);
+      } catch {
+        continue;
+      }
+      if (!/^https?:\/\//i.test(url)) continue;
+      if (hits.some((hit) => hit.url === url)) continue;
+      hits.push({ url, title: `${manufacturer} ${model} datasheet`, domain: safeDomain(url) });
+      if (hits.length >= 5) break;
+    }
+    return hits;
+  } catch {
+    return [];
+  }
+}

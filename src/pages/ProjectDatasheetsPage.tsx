@@ -14,9 +14,15 @@ import {
   loadDatasheetMatchOverrides,
   type DatasheetMatchOverrideState,
 } from '../lib/datasheetMatchOverrides';
+import {
+  findAndSaveDatasheet,
+  googleDatasheetSearchUrl,
+  saveDatasheetFromUrl,
+  type DatasheetCandidate,
+} from '../lib/datasheetLookup';
 import type { Datasheet } from '../types';
 import {
-  BookOpen, Eye, Upload, AlertCircle, CheckCircle, Search, Sparkles, Check, X,
+  BookOpen, Eye, Upload, AlertCircle, CheckCircle, Search, Sparkles, Check, X, Loader2,
 } from 'lucide-react';
 
 interface DatasheetRow {
@@ -25,6 +31,12 @@ interface DatasheetRow {
   deviceCount: number;
   match: EquipmentDatasheetMatch;
 }
+
+type AiLookupState = {
+  status: 'idle' | 'searching' | 'attaching' | 'candidates' | 'failed';
+  candidates?: DatasheetCandidate[];
+  error?: string;
+};
 
 function formatMatchMethod(method: EquipmentDatasheetMatch['method']): string {
   switch (method) {
@@ -53,10 +65,12 @@ export function ProjectDatasheetsPage() {
   const { productModels, datasheets, refreshDatasheets } = useProject();
   const [rows, setRows] = useState<DatasheetRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [uploadFor, setUploadFor] = useState<{ manufacturer: string; modelNumber: string } | null>(null);
+  const [uploadFor, setUploadFor] = useState<{ manufacturer: string; modelNumber: string; mode?: 'search' | 'upload' | 'link' } | null>(null);
   const [overrides, setOverrides] = useState<DatasheetMatchOverrideState>({ approved: {}, dismissed: [] });
   const [expandedRowKey, setExpandedRowKey] = useState<string | null>(null);
   const [updatingRowKey, setUpdatingRowKey] = useState<string | null>(null);
+  const [aiByRow, setAiByRow] = useState<Record<string, AiLookupState>>({});
+  const [findingAll, setFindingAll] = useState(false);
 
   useEffect(() => {
     if (projectId) {
@@ -163,22 +177,91 @@ export function ProjectDatasheetsPage() {
     setUploadFor(null);
   };
 
+  const runAiLookup = async (row: DatasheetRow) => {
+    const key = row.match.rowKey;
+    setAiByRow(prev => ({ ...prev, [key]: { status: 'searching' } }));
+    try {
+      const { datasheet, candidates } = await findAndSaveDatasheet(row.manufacturer, row.model_number);
+      if (datasheet) {
+        await markDevicesDatasheetFound(row.manufacturer, row.model_number);
+        await refreshDatasheets();
+        setAiByRow(prev => ({ ...prev, [key]: { status: 'idle' } }));
+        return;
+      }
+      if (candidates.length > 0) {
+        setAiByRow(prev => ({ ...prev, [key]: { status: 'candidates', candidates } }));
+        setExpandedRowKey(key);
+        return;
+      }
+      setAiByRow(prev => ({ ...prev, [key]: { status: 'failed' } }));
+    } catch (error: any) {
+      setAiByRow(prev => ({
+        ...prev,
+        [key]: { status: 'failed', error: error?.message ?? 'AI search failed' },
+      }));
+    }
+  };
+
+  const attachAiCandidate = async (row: DatasheetRow, candidate: DatasheetCandidate) => {
+    const key = row.match.rowKey;
+    setAiByRow(prev => ({ ...prev, [key]: { ...prev[key], status: 'attaching', candidates: prev[key]?.candidates } }));
+    try {
+      await saveDatasheetFromUrl(candidate.url, row.manufacturer, row.model_number);
+      await markDevicesDatasheetFound(row.manufacturer, row.model_number);
+      await refreshDatasheets();
+      setAiByRow(prev => ({ ...prev, [key]: { status: 'idle' } }));
+      setExpandedRowKey(null);
+    } catch (error: any) {
+      setAiByRow(prev => ({
+        ...prev,
+        [key]: {
+          status: 'candidates',
+          candidates: prev[key]?.candidates,
+          error: error?.message ?? 'Could not download that PDF',
+        },
+      }));
+    }
+  };
+
+  const findMissingWithAi = async () => {
+    const missingRows = rows.filter(row => !row.match.datasheet && row.match.status !== 'needs_review');
+    if (missingRows.length === 0) return;
+    setFindingAll(true);
+    for (const row of missingRows) {
+      await runAiLookup(row);
+    }
+    setFindingAll(false);
+  };
+
   const found = rows.filter(row => row.match.datasheet).length;
   const needsReview = rows.filter(row => row.match.status === 'needs_review').length;
   const missing = rows.filter(row => !row.match.datasheet && row.match.status !== 'needs_review').length;
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-6">
-        <div className="w-10 h-10 bg-slate-100 rounded-lg flex items-center justify-center">
-          <BookOpen className="w-5 h-5 text-slate-600" />
+      <div className="flex items-start justify-between gap-4 mb-6">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-slate-100 rounded-lg flex items-center justify-center">
+            <BookOpen className="w-5 h-5 text-slate-600" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Datasheets</h2>
+            <p className="text-sm text-slate-500">
+              Use the library first. If a datasheet is missing, find it with AI. If that fails, search the web or upload a PDF — anything saved is reused on future jobs.
+            </p>
+          </div>
         </div>
-        <div>
-          <h2 className="text-lg font-semibold text-slate-900">Datasheets</h2>
-          <p className="text-sm text-slate-500">
-            Match imported equipment to Product Database entries and link existing datasheets automatically
-          </p>
-        </div>
+        {missing > 0 && (
+          <button
+            type="button"
+            onClick={() => void findMissingWithAi()}
+            disabled={findingAll}
+            className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium bg-cyan-600 text-white rounded-xl hover:bg-cyan-700 disabled:opacity-50 flex-shrink-0"
+          >
+            {findingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+            {findingAll ? 'Finding…' : `Find ${missing} missing with AI`}
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
@@ -228,6 +311,7 @@ export function ProjectDatasheetsPage() {
                 const { match } = row;
                 const isExpanded = expandedRowKey === match.rowKey;
                 const isUpdating = updatingRowKey === match.rowKey;
+                const aiLookup = aiByRow[match.rowKey];
 
                 return (
                   <React.Fragment key={match.rowKey}>
@@ -253,6 +337,15 @@ export function ProjectDatasheetsPage() {
                           >
                             <Sparkles className="w-3 h-3" />
                             {match.suggestions.length} suggestion{match.suggestions.length !== 1 ? 's' : ''}
+                          </button>
+                        ) : aiLookup?.status === 'candidates' ? (
+                          <button
+                            type="button"
+                            onClick={() => setExpandedRowKey(isExpanded ? null : match.rowKey)}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-cyan-700 bg-cyan-100 px-2 py-1 rounded hover:bg-cyan-200 transition-colors"
+                          >
+                            <Sparkles className="w-3 h-3" />
+                            {aiLookup.candidates?.length ?? 0} AI result{(aiLookup.candidates?.length ?? 0) !== 1 ? 's' : ''}
                           </button>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 bg-slate-100 px-2 py-1 rounded">
@@ -296,31 +389,59 @@ export function ProjectDatasheetsPage() {
                               View PDF
                             </a>
                           )}
-                          {!match.datasheet && (
-                            <a
-                              href={`https://www.google.com/search?q=${encodeURIComponent(`${row.manufacturer} ${row.model_number} datasheet filetype:pdf`)}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-50 text-slate-600 rounded-lg hover:bg-slate-100 border border-slate-200 transition-colors"
-                              title="Search Google for this datasheet PDF"
-                            >
-                              <Search className="w-3.5 h-3.5" />
-                              Find on Web
-                            </a>
+                          {!match.datasheet && match.status !== 'needs_review' && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => void runAiLookup(row)}
+                                disabled={aiLookup?.status === 'searching' || aiLookup?.status === 'attaching' || findingAll}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-cyan-50 text-cyan-700 rounded-lg hover:bg-cyan-100 disabled:opacity-50"
+                              >
+                                {aiLookup?.status === 'searching' || aiLookup?.status === 'attaching' ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <Sparkles className="w-3.5 h-3.5" />
+                                )}
+                                {aiLookup?.status === 'attaching' ? 'Saving…' : aiLookup?.status === 'searching' ? 'Finding…' : 'Find with AI'}
+                              </button>
+                              {(aiLookup?.status === 'failed' || aiLookup?.status === 'candidates') && (
+                                <a
+                                  href={googleDatasheetSearchUrl(row.manufacturer, row.model_number)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-50 text-slate-600 rounded-lg hover:bg-slate-100 border border-slate-200 transition-colors"
+                                  title="Search Google for this datasheet PDF"
+                                >
+                                  <Search className="w-3.5 h-3.5" />
+                                  Find on Web
+                                </a>
+                              )}
+                            </>
                           )}
                           <button
-                            onClick={() => setUploadFor({ manufacturer: row.manufacturer, modelNumber: row.model_number })}
+                            onClick={() => setUploadFor({
+                              manufacturer: row.manufacturer,
+                              modelNumber: row.model_number,
+                              mode: (match.datasheet || aiLookup?.status === 'failed') ? 'upload' : 'search',
+                            })}
                             title={match.datasheet ? 'Replace datasheet' : 'Upload or link a datasheet'}
                             className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
                               match.datasheet
                                 ? 'bg-slate-50 text-slate-500 hover:bg-slate-100'
-                                : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                : aiLookup?.status === 'failed'
+                                  ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                  : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
                             }`}
                           >
                             <Upload className="w-3.5 h-3.5" />
                             {match.datasheet ? 'Replace' : 'Upload'}
                           </button>
                         </div>
+                        {aiLookup?.status === 'failed' && (
+                          <p className="text-xs text-amber-700 mt-1.5">
+                            {aiLookup.error ?? 'AI did not find a datasheet. Search the web or upload a PDF.'}
+                          </p>
+                        )}
                       </td>
                     </tr>
 
@@ -380,6 +501,42 @@ export function ProjectDatasheetsPage() {
                         </td>
                       </tr>
                     )}
+                    {(aiLookup?.status === 'candidates') && (aiLookup.candidates?.length ?? 0) > 0 && (
+                      <tr className="bg-cyan-50/40">
+                        <td colSpan={6} className="px-5 py-4">
+                          <div className="space-y-3">
+                            <p className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
+                              <Sparkles className="w-4 h-4 text-cyan-600" />
+                              AI found possible datasheets — attach one to save it in the library
+                            </p>
+                            {aiLookup.error && <p className="text-xs text-red-600">{aiLookup.error}</p>}
+                            <div className="grid gap-2">
+                              {aiLookup.candidates!.map(candidate => (
+                                <div key={candidate.url} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-cyan-200 bg-white px-4 py-3">
+                                  <div className="min-w-0">
+                                    <p className="text-sm font-medium text-slate-800">{candidate.title}</p>
+                                    <p className="text-xs text-slate-500 mt-0.5 truncate">{candidate.domain} · {candidate.url}</p>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <a href={candidate.url} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-slate-600 hover:underline">Preview</a>
+                                    <button
+                                      type="button"
+                                      disabled={aiLookup.status === 'attaching'}
+                                      onClick={() => void attachAiCandidate(row, candidate)}
+                                      className="inline-flex items-center gap-1 rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-cyan-700 disabled:opacity-50"
+                                    >
+                                      {aiLookup.status === 'attaching' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                                      Save to library
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                            <p className="text-xs text-slate-500">If none of these work, search the web or upload a PDF. It will still be saved for future matches.</p>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
                   </React.Fragment>
                 );
               })}
@@ -392,6 +549,7 @@ export function ProjectDatasheetsPage() {
         <UploadDatasheetModal
           manufacturer={uploadFor.manufacturer}
           modelNumber={uploadFor.modelNumber}
+          initialMode={uploadFor.mode}
           onClose={() => setUploadFor(null)}
           onUploaded={handleUploaded}
         />

@@ -94,33 +94,50 @@ Deno.serve(async (req: Request) => {
   }
 
   const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/user-datasheets/${storagePath}`;
+  const manufacturerName = manufacturer.trim();
+  const modelNumber = model.trim();
+  const authHeaders = {
+    "Authorization": `Bearer ${SERVICE_ROLE}`,
+    "apikey": SERVICE_ROLE,
+    "Content-Type": "application/json",
+  };
 
-  // Upsert datasheets table
-  const upsertRes = await fetch(`${SUPABASE_URL}/rest/v1/datasheets`, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${SERVICE_ROLE}`,
-      "apikey": SERVICE_ROLE,
-      "Content-Type": "application/json",
-      "Prefer": "resolution=merge-duplicates,return=representation",
-    },
-    body: JSON.stringify({
-      manufacturer: manufacturer.trim(),
-      model_number: model.trim(),
-      file_name: fileName,
-      datasheet_url: publicUrl,
-    }),
-  });
+  const lookupRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/datasheets?manufacturer=ilike.${encodeURIComponent(`"${manufacturerName}"`)}&model_number=ilike.${encodeURIComponent(`"${modelNumber}"`)}&select=*`,
+    { headers: authHeaders },
+  );
+  const existingRows = lookupRes.ok ? await lookupRes.json() : [];
+  const existingId = Array.isArray(existingRows) ? existingRows[0]?.id : null;
 
-  if (!upsertRes.ok) {
-    const err = await upsertRes.text();
+  const payload = {
+    manufacturer: manufacturerName,
+    model_number: modelNumber,
+    file_name: fileName,
+    datasheet_url: publicUrl,
+  };
+
+  const saveRes = existingId
+    ? await fetch(`${SUPABASE_URL}/rest/v1/datasheets?id=eq.${existingId}`, {
+      method: "PATCH",
+      headers: { ...authHeaders, "Prefer": "return=representation" },
+      body: JSON.stringify(payload),
+    })
+    : await fetch(`${SUPABASE_URL}/rest/v1/datasheets`, {
+      method: "POST",
+      headers: { ...authHeaders, "Prefer": "return=representation" },
+      body: JSON.stringify(payload),
+    });
+
+  if (!saveRes.ok) {
+    const err = await saveRes.text();
     return new Response(
       JSON.stringify({ error: "Database save failed: " + err.substring(0, 200) }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 
-  const [datasheet] = await upsertRes.json();
+  const saved = await saveRes.json();
+  const datasheet = Array.isArray(saved) ? saved[0] : saved;
 
   // Backfill datasheet_found on all matching devices
   await fetch(
