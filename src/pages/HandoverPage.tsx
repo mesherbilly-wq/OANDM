@@ -281,7 +281,6 @@ export default function HandoverPage() {
 
   const scEnabledDefinitions = visibleDefinitions.filter(def => def.sc_enabled && !def.upload_only);
   const uploadOnlyDefinitions = visibleDefinitions.filter(def => def.upload_only);
-  const fileOnlyDefinitions = visibleDefinitions.filter(def => !def.sc_enabled && !def.upload_only);
 
   const definitionsById = useMemo(
     () => new Map(documentDefinitions.map(def => [def.document_id, def])),
@@ -563,15 +562,11 @@ export default function HandoverPage() {
   };
 
   // ── Stats ──────────────────────────────────────────────────────────────────
-  const totalDocs = visibleDefinitions.length;
+  const totalDocs = scEnabledDefinitions.length + uploadOnlyDefinitions.length;
   const completedDocs = scEnabledDefinitions.filter(def => {
     const rec = getDocRecord(def.document_id);
     return rec && ['completed', 'imported', 'uploaded'].includes(rec.status);
   }).length
-    + fileOnlyDefinitions.filter(def => {
-      const rec = getDocRecord(def.document_id);
-      return rec && ['uploaded', 'imported', 'completed'].includes(rec.status);
-    }).length
     + uploadOnlyDefinitions.filter(def => def.multi ? getLegacyUploads(def.document_id).length > 0 : getLegacyUpload(def.document_id)).length;
 
   if (loading) {
@@ -765,54 +760,6 @@ export default function HandoverPage() {
         </div>
         )}
       </div>
-
-      {fileOnlyDefinitions.length > 0 && (
-      <div className="space-y-3">
-        <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide px-1">Supporting Documents</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {fileOnlyDefinitions.map(doc => {
-            const record = getDocRecord(doc.document_id);
-            const Icon = handoverDocumentIcon(doc.icon_key);
-            const uploaded = Boolean(record?.file_url);
-            return (
-              <div key={doc.document_id} className={`bg-white rounded-xl border shadow-sm overflow-hidden ${uploaded ? 'border-emerald-200' : 'border-slate-200'}`}>
-                <div className={`flex items-center gap-3 px-5 py-4 border-b ${uploaded ? 'bg-emerald-50 border-emerald-100' : 'bg-slate-50 border-slate-100'}`}>
-                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${uploaded ? 'bg-emerald-100' : 'bg-slate-200'}`}>
-                    {uploaded ? <CheckCircle className="w-5 h-5 text-emerald-600" /> : <Icon className="w-5 h-5 text-slate-500" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-slate-800">{doc.title}</p>
-                    <p className="text-xs text-slate-500 mt-0.5">{doc.description}</p>
-                  </div>
-                </div>
-                <div className="px-5 py-4">
-                  {record?.file_url ? (
-                    <div className="space-y-3">
-                      <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-lg px-3.5 py-2.5">
-                        <FileText className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                        <span className="text-sm text-emerald-800 font-medium flex-1 min-w-0 truncate">{record.file_name}</span>
-                      </div>
-                      <div className="flex gap-2">
-                        <a href={record.file_url} target="_blank" rel="noopener noreferrer" className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 border border-emerald-300 text-emerald-700 text-sm font-medium rounded-lg hover:bg-emerald-50 transition-colors">
-                          <ExternalLink className="w-3.5 h-3.5" />View
-                        </a>
-                        <button onClick={() => triggerUpload(doc.document_id)} className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 border border-slate-200 text-slate-600 text-sm font-medium rounded-lg hover:bg-slate-50 transition-colors">
-                          <Upload className="w-3.5 h-3.5" />Replace
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button onClick={() => triggerUpload(doc.document_id)} className="w-full flex items-center justify-center gap-2.5 px-4 py-3 border-2 border-dashed border-slate-300 rounded-xl text-slate-500 hover:border-cyan-400 hover:text-cyan-600 hover:bg-cyan-50 transition-all">
-                      <Upload className="w-4 h-4" /><span className="text-sm font-medium">Upload PDF</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-      )}
 
       {/* Upload-only documents */}
       {uploadOnlyDefinitions.length > 0 && (
