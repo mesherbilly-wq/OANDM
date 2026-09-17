@@ -407,7 +407,7 @@ export function ProjectDatasheetsPage() {
                         )}
                       </td>
                       <td className="px-5 py-3.5 text-right">
-                        <div className="flex items-center justify-end gap-2">
+                        <div className="flex flex-wrap items-center justify-end gap-2">
                           {match.datasheet?.datasheet_url && (
                             <a
                               href={match.datasheet.datasheet_url}
@@ -434,29 +434,25 @@ export function ProjectDatasheetsPage() {
                                 )}
                                 {aiLookup?.status === 'attaching' ? 'Saving…' : aiLookup?.status === 'searching' ? 'Finding…' : 'Find datasheet'}
                               </button>
-                              {(aiLookup?.status === 'failed' || aiLookup?.status === 'candidates') && (
-                                <>
-                                  <a
-                                    href={googleDatasheetSearchUrl(row.manufacturer, row.model_number)}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-50 text-slate-600 rounded-lg hover:bg-slate-100 border border-slate-200 transition-colors"
-                                    title="Search Google for this datasheet PDF"
-                                  >
-                                    <Search className="w-3.5 h-3.5" />
-                                    Find on Web
-                                  </a>
-                                  <a
-                                    href={adiDatasheetSearchUrl(row.manufacturer, row.model_number)}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-50 text-slate-600 rounded-lg hover:bg-slate-100 border border-slate-200 transition-colors"
-                                    title="Search ADI Global Distribution UK"
-                                  >
-                                    Search ADI
-                                  </a>
-                                </>
-                              )}
+                              <a
+                                href={googleDatasheetSearchUrl(row.manufacturer, row.model_number)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-50 text-slate-600 rounded-lg hover:bg-slate-100 border border-slate-200 transition-colors"
+                                title="Search Google for this datasheet PDF"
+                              >
+                                <Search className="w-3.5 h-3.5" />
+                                Find on Web
+                              </a>
+                              <a
+                                href={adiDatasheetSearchUrl(row.manufacturer, row.model_number)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-50 text-slate-600 rounded-lg hover:bg-slate-100 border border-slate-200 transition-colors"
+                                title="Search ADI Global Distribution UK"
+                              >
+                                Search ADI
+                              </a>
                             </>
                           )}
                           <button
