@@ -112,14 +112,6 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
     });
   }
 
-  if (!scopeOfWorks) {
-    issues.push({
-      code: 'simpro.missing_scope',
-      message: 'Simpro Description, Info custom fields and Notes are empty — Scope of Works could not be populated.',
-      severity: 'warning',
-    });
-  }
-
   if (!jobNumber) {
     issues.push({
       code: 'simpro.missing_job_number',

@@ -7,7 +7,6 @@ import {
   getImportReviewBlockingIssues,
   getImportReviewCreateConfirmationIssues,
   importSelectionSummary,
-  partitionImportReviewNotes,
   resolvedInstallSystemType,
   resolvedEquipmentInstallType,
   type ImportReviewDraft,
@@ -45,7 +44,7 @@ import type { ImportEquipmentDraft } from '../integrations';
 import type { ProductLookupRecord } from '../lib/productLookupIndex';
 import { INSTALL_SYSTEM_TYPE_NAMES, categoryForSystemName } from '../lib/inferSystemType';
 
-type ReviewTab = 'project' | 'systems' | 'notes' | 'debug';
+type ReviewTab = 'project' | 'systems' | 'debug';
 
 type EditableEquipmentField =
   | 'deviceType'
@@ -234,51 +233,6 @@ function ProductDatabaseMatchPicker({
   );
 }
 
-function NoteSection({
-  title,
-  description,
-  issues,
-  emptyMessage,
-  tone,
-}: {
-  title: string;
-  description: string;
-  issues: ImportReviewDraft['issues'];
-  emptyMessage: string;
-  tone: 'info' | 'warning' | 'blocking';
-}) {
-  const toneClass =
-    tone === 'blocking'
-      ? 'border-red-200 bg-red-50 text-red-900'
-      : tone === 'warning'
-        ? 'border-amber-200 bg-amber-50 text-amber-900'
-        : 'border-slate-200 bg-slate-50 text-slate-700';
-
-  return (
-    <section className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
-      <div className="px-5 py-4 border-b border-slate-100 bg-slate-50">
-        <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
-        <p className="text-xs text-slate-500 mt-0.5">{description}</p>
-      </div>
-      <div className="p-4 space-y-2">
-        {issues.length === 0 ? (
-          <p className="text-sm text-slate-500">{emptyMessage}</p>
-        ) : (
-          issues.map(issue => (
-            <div
-              key={`${tone}-${issue.code}-${issue.message}-${issue.draftId ?? ''}`}
-              className={`rounded-xl border px-4 py-3 text-sm ${toneClass}`}
-            >
-              <p>{issue.message}</p>
-              {issue.draftId && (
-                <p className="mt-1 text-xs opacity-75 font-mono">ref: {issue.draftId}</p>
-              )}
-            </div>
-          ))
-        )}
-      </div>
-    </section>
-  );
 }
 
 export function ImportReviewPage() {
@@ -351,7 +305,6 @@ export function ImportReviewPage() {
 
   const { draft, rawJob } = session;
   const summary = importSelectionSummary(draft);
-  const noteSections = partitionImportReviewNotes(draft);
   const blockingIssues = getImportReviewBlockingIssues(draft);
   const confirmationIssues = getImportReviewCreateConfirmationIssues(draft);
   const incompleteEquipmentRows = listIncompleteSelectedEquipment(draft);
@@ -359,7 +312,6 @@ export function ImportReviewPage() {
   const productDatabaseEnrichment = summarizeProductDatabaseEnrichment(draft);
   const rawJobRecord = rawJob && typeof rawJob === 'object' ? (rawJob as Record<string, unknown>) : null;
   const originalDescriptionHtml = rawJobRecord ? pickRawDescriptionHtml(rawJobRecord) : null;
-  const noteCount = noteSections.info.length + noteSections.warnings.length + blockingIssues.length;
 
   const updateDraft = (updater: (current: ImportReviewDraft) => ImportReviewDraft) => {
     updateSimproImportSession(current => {
@@ -509,7 +461,6 @@ export function ImportReviewPage() {
     setCreateError(null);
 
     if (blockingIssues.length > 0) {
-      setTab('notes');
       return;
     }
 
@@ -652,7 +603,6 @@ export function ImportReviewPage() {
         {([
           ['project', 'Project'],
           ['systems', 'Systems & Equipment'],
-          ['notes', `Import Notes (${noteCount})`],
           ['debug', 'Debug JSON'],
         ] as const).map(([id, label]) => (
           <button
@@ -987,30 +937,6 @@ export function ImportReviewPage() {
         </div>
       )}
 
-      {tab === 'notes' && (
-        <div className="space-y-4">
-          <NoteSection
-            title="Info"
-            description="Expected exclusions and normal import behaviour — labour, freight, contingency, and similar lines."
-            issues={noteSections.info}
-            emptyMessage="No informational notes for this import."
-            tone="info"
-          />
-          <NoteSection
-            title="Warnings"
-            description="Review before creating — missing manufacturer, model, or category on selected equipment."
-            issues={noteSections.warnings}
-            emptyMessage="No warnings for this import."
-            tone="warning"
-          />
-          <NoteSection
-            title="Blocking Issues"
-            description="These must be resolved before you can create the project."
-            issues={blockingIssues}
-            emptyMessage="Nothing is blocking project creation."
-            tone="blocking"
-          />
-        </div>
       )}
 
       {tab === 'debug' && (
@@ -1063,7 +989,7 @@ export function ImportReviewPage() {
             <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
             <div>
               <p>
-                Resolve {blockingIssues.length} blocking issue{blockingIssues.length !== 1 ? 's' : ''} in Import Notes before creating the project.
+                Resolve {blockingIssues.length} blocking issue{blockingIssues.length !== 1 ? 's' : ''} before creating the project.
               </p>
               {incompleteEquipmentRows.length > 0 && (
                 <ul className="mt-2 list-disc pl-5 space-y-1 text-red-900/90">
