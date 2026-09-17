@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import { useProject } from './ProjectLayout';
 import { Trash2, Plus, Check, X } from 'lucide-react';
 import { Project, ProjectTeamMember, ProjectRevision } from '../types';
+import { displayProjectJobNumber } from '../lib/projectJobNumber';
 
 const PROJECT_STATUSES = ['active', 'on-hold', 'completed', 'cancelled'];
 const TEAM_ROLES = ['project_manager', 'engineer', 'surveyor', 'other'];
@@ -36,7 +37,10 @@ export default function ProjectInfoPage() {
 
   useEffect(() => {
     if (project) {
-      setFormData(project);
+      setFormData({
+        ...project,
+        job_number: displayProjectJobNumber(project.job_number, project.project_number) || null,
+      });
       fetchTeamMembers();
       fetchRevisions();
     }
@@ -92,7 +96,7 @@ export default function ProjectInfoPage() {
       const { error } = await supabase
         .from('projects')
         .update({
-          job_number: formData.job_number || formData.project_number || null,
+          job_number: displayProjectJobNumber(formData.job_number, formData.project_number) || null,
           project_name: formData.project_name || null,
           client_name: formData.client_name || null,
           site_name: formData.site_name || null,
@@ -231,7 +235,7 @@ export default function ProjectInfoPage() {
             <input
               type="text"
               name="job_number"
-              value={formData.job_number || formData.project_number || ''}
+              value={formData.job_number || ''}
               onChange={handleInputChange}
               placeholder="e.g. NCP104"
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-cyan-600 focus:border-transparent font-mono text-base"

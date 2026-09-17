@@ -22,6 +22,7 @@ import { MAX_DEVICES_PER_LINE } from '../lib/devicePersistConstants';
 import { persistSimproImportReviewDraft } from '../lib/persistSimproImportDraft';
 import { fetchAllProductModels } from '../lib/productDatabaseDb';
 import {
+  applyInferredCategoriesToImportDraft,
   applyProductDatabaseSelection,
   countProductDatabaseAutofillFields,
   createProductEnrichmentContext,
@@ -284,7 +285,7 @@ export function ImportReviewPage() {
   const navigate = useNavigate();
   const initialSession = useMemo(() => getSimproImportSession(), []);
   const [session, setSession] = useState(initialSession);
-  const [tab, setTab] = useState<ReviewTab>('project');
+  const [tab, setTab] = useState<ReviewTab>('systems');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const enrichmentContextRef = useRef<ProductEnrichmentContext | null>(null);
@@ -315,24 +316,19 @@ export function ImportReviewPage() {
     enrichmentContextRef.current = products.length > 0 ? createProductEnrichmentContext(products) : null;
     setProductDatabaseStatus({ error, productCount: products.length });
 
-    if (error || products.length === 0) {
+    const current = getSimproImportSession();
+    if (!current) {
       setEnrichingFromDatabase(false);
       return;
     }
 
-    const current = getSimproImportSession();
-    if (
-      !options?.force &&
-      current &&
-      isImportReviewDraftEnrichedFromProductDatabase(current.draft)
-    ) {
-      setEnrichingFromDatabase(false);
-      return;
-    }
+    const nextDraft = products.length > 0
+      ? enrichImportReviewDraftFromProductDatabase(current.draft, products)
+      : applyInferredCategoriesToImportDraft(current.draft);
 
     updateSimproImportSession(currentSession => ({
       ...currentSession,
-      draft: enrichImportReviewDraftFromProductDatabase(currentSession.draft, products),
+      draft: nextDraft,
     }));
 
     const nextSession = getSimproImportSession();
@@ -546,7 +542,7 @@ export function ImportReviewPage() {
               <div>
                 <h1 className="text-2xl font-bold text-slate-900">Import Review</h1>
                 <p className="text-sm text-slate-500">
-                  Edit equipment, adjust selections, then create the OANDM project
+                  Review the Simpro cost model, then create the OANDM project
                 </p>
               </div>
             </div>
@@ -559,6 +555,15 @@ export function ImportReviewPage() {
             Back to Create Project
           </Link>
         </div>
+      </div>
+
+      <div className="mb-5 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+        <p className="font-semibold">Before you proceed</p>
+        <p className="mt-1">
+          Delete any lines from the cost model you do not want the customer to see — uncheck labour,
+          prelims, extras, sundries, and similar commercial lines. Then set the system category on
+          each remaining system.
+        </p>
       </div>
 
       <div className="mb-5 rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm text-cyan-900">
@@ -685,6 +690,7 @@ export function ImportReviewPage() {
       {tab === 'systems' && (
         <div className="space-y-4">
           <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+            Uncheck any cost-model line the customer should not see, then confirm each system category.
             {summary.selectedSystems} of {summary.totalSystems} systems ·{' '}
             {summary.selectedLines} of {summary.totalLines} equipment lines ·{' '}
             {summary.deviceUnits} device units selected.

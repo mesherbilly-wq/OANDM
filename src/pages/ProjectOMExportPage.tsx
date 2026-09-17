@@ -14,6 +14,7 @@ import { matchEquipmentInputToProduct } from '../integrations/core/productMatchi
 import { useProject } from './ProjectLayout';
 import type { Device, CommissioningRecord, HandoverDocument, Datasheet, ProjectSystemRecord } from '../types';
 import { canAccessDocumentManagement, isEndUser } from '../lib/appRoles';
+import { displayProjectJobNumber } from '../lib/projectJobNumber';
 import { useUserAccess } from '../lib/userAccess';
 import { OmClientInvitePanel } from '../components/OmClientInvitePanel';
 import { MarkdownDocEditor, documentPreviewClassName, renderDocumentHtml, usesSimproLayout } from '../components/MarkdownDocEditor';
@@ -2324,7 +2325,7 @@ function CoverSection({ project, devices, systemGroups, contractor, authority }:
           <InfoRow icon={Building2} label="Client" value={project.client_name} />
           <InfoRow icon={User} label="Project Manager" value={project.project_manager} />
           {project.engineer && <InfoRow icon={User} label="Engineer" value={project.engineer} />}
-          <InfoRow icon={Tag} label="Job Number" value={project.job_number || project.project_number} />
+          <InfoRow icon={Tag} label="Job Number" value={displayProjectJobNumber(project.job_number, project.project_number)} />
           {project.quote_number && <InfoRow icon={Tag} label="Quote Ref" value={project.quote_number} />}
           {project.main_contractor && <InfoRow icon={Building2} label="Main Contractor" value={project.main_contractor} />}
           <InfoRow icon={Calendar} label="Date" value={new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })} />

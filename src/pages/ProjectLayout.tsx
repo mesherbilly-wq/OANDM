@@ -3,6 +3,7 @@ import { useParams, Navigate, Outlet, Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import type { Project, ProductModel, Datasheet } from '../types';
 import { ArrowLeft, FolderOpen, Tag, CheckCircle2, PauseCircle, XCircle } from 'lucide-react';
+import { displayProjectJobNumber } from '../lib/projectJobNumber';
 
 interface ProjectContextType {
   project: Project;
@@ -81,6 +82,7 @@ export function ProjectLayout() {
   const statusKey = project.project_status ?? 'active';
   const status = STATUS_CONFIG[statusKey] ?? STATUS_CONFIG['active'];
   const StatusIcon = status.icon;
+  const jobNumber = displayProjectJobNumber(project.job_number, project.project_number);
 
   return (
     <ProjectContext.Provider value={{ project, productModels, datasheets, refreshDatasheets, refreshProductModels, refreshProject }}>
@@ -101,9 +103,9 @@ export function ProjectLayout() {
                 </span>
               </div>
               <div className="flex items-center gap-3 mt-1 flex-wrap">
-                {(project.job_number || project.project_number) && (
+                {jobNumber && (
                   <span className="inline-flex items-center gap-1 text-xs font-mono font-semibold text-cyan-700 bg-cyan-50 border border-cyan-200 px-2 py-0.5 rounded-full">
-                    {project.job_number || project.project_number}
+                    {jobNumber}
                   </span>
                 )}
                 {project.client_name && <span className="text-sm text-slate-500">{project.client_name}</span>}

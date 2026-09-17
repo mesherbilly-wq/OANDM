@@ -1,5 +1,6 @@
 import type { SystemCategory } from '../../../types';
 import type { ImportReviewIssue } from '../../models/ImportReviewDraft';
+import { inferTradeCategoryFromTexts } from '../../../lib/inferSystemType';
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
@@ -256,9 +257,19 @@ export function pickRichTextField(value: unknown): string | null {
   return decoded;
 }
 
+function pickSimproPurchaseOrder(record: Record<string, unknown>): string | null {
+  return (
+    pickScalarString(record.OrderNo) ??
+    pickScalarString(record.orderNo) ??
+    pickScalarString(record.RequestNo) ??
+    pickScalarString(record.requestNo)
+  );
+}
+
 /**
- * Simpro's user-facing job number is Job.ID. JobNo is not a documented field;
- * OrderNo is the customer PO. Accept a search hint when the user typed NCP104 etc.
+ * Simpro's user-facing job number is Job.ID. JobNo is not a documented field.
+ * OrderNo / RequestNo are the customer PO — never treat them as the job number.
+ * A typed search hint (NCP104) is kept only when it is not that PO.
  */
 export function pickSimproJobNumber(
   record: Record<string, unknown>,
@@ -269,17 +280,20 @@ export function pickSimproJobNumber(
     if (value) return value;
   }
 
+  const purchaseOrder = pickSimproPurchaseOrder(record);
   const trimmedHint = pickScalarString(hint);
-  if (trimmedHint && looksLikeJobReference(trimmedHint)) return trimmedHint;
+  if (
+    trimmedHint &&
+    looksLikeJobReference(trimmedHint) &&
+    trimmedHint !== purchaseOrder
+  ) {
+    return trimmedHint;
+  }
 
   return (
     pickScalarString(record.ID) ??
     pickScalarString(record.Id) ??
-    pickScalarString(record.id) ??
-    pickScalarString(record.OrderNo) ??
-    pickScalarString(record.orderNo) ??
-    pickScalarString(record.RequestNo) ??
-    pickScalarString(record.Reference)
+    pickScalarString(record.id)
   );
 }
 
@@ -317,79 +331,19 @@ export function pickRawDescriptionHtml(record: Record<string, unknown>): string 
   return pickScalarString(record.Description);
 }
 
-const CATEGORY_RULES: { category: SystemCategory; patterns: RegExp[] }[] = [
-  {
-    category: 'Security',
-    patterns: [
-      /\bcctv\b/i, /\bcamera/i, /\bnvr\b/i, /\bdvr\b/i, /\baccess control/i, /\bintruder/i,
-      /\bintercom/i, /\banpr\b/i, /\bperimeter/i, /\bsecurity\b/i, /\balarm\b/i,
-    ],
-  },
-  {
-    category: 'Fire',
-    patterns: [/\bfire alarm/i, /\bfire detect/i, /\bsprinkler/i, /\bfire panel/i],
-  },
-  {
-    category: 'Electrical',
-    patterns: [/\belectrical/i, /\blv switch/i, /\bdistribution board/i, /\bpower\b/i],
-  },
-  {
-    category: 'Mechanical',
-    patterns: [/\bmechanical/i, /\bpump\b/i, /\bplant room/i],
-  },
-  {
-    category: 'HVAC',
-    patterns: [/\bhvac\b/i, /\bair handling/i, /\bahu\b/i, /\bchiller/i, /\bventilation/i],
-  },
-  {
-    category: 'Plumbing',
-    patterns: [/\bplumb/i, /\bdomestic water/i, /\bdrainage/i],
-  },
-  {
-    category: 'Audio Visual',
-    patterns: [/\baudio visual/i, /\bav system/i, /\bdisplay\b/i, /\bprojector/i],
-  },
-  {
-    category: 'IT',
-    patterns: [/\bnetwork/i, /\bswitch\b/i, /\brouter\b/i, /\bdata cab/i, /\bstructured cabling/i, /\bserver/i],
-  },
-  {
-    category: 'Building Fabric',
-    patterns: [/\bbuilding fabric/i, /\bdoor hardware/i, /\bglazing/i],
-  },
-];
-
 export function inferCategoryFromTexts(texts: (string | null | undefined)[]): {
   suggestedCategory: SystemCategory | null;
   confidence: number;
   method: 'keyword_rule' | 'unresolved';
 } {
-  const combined = texts.filter(Boolean).join(' ');
-  if (!combined.trim()) {
-    return { suggestedCategory: null, confidence: 0, method: 'unresolved' };
-  }
-
-  let bestCategory: SystemCategory | null = null;
-  let bestScore = 0;
-
-  for (const rule of CATEGORY_RULES) {
-    let score = 0;
-    for (const pattern of rule.patterns) {
-      if (pattern.test(combined)) score += 1;
-    }
-    if (score > bestScore) {
-      bestScore = score;
-      bestCategory = rule.category;
-    }
-  }
-
-  if (!bestCategory || bestScore === 0) {
+  const suggestedCategory = inferTradeCategoryFromTexts(texts);
+  if (!suggestedCategory) {
     return { suggestedCategory: null, confidence: 0, method: 'unresolved' };
   }
 
   return {
-    suggestedCategory: bestCategory,
-    confidence: Math.min(0.95, 0.35 + bestScore * 0.12),
+    suggestedCategory,
+    confidence: 0.7,
     method: 'keyword_rule',
   };
 }

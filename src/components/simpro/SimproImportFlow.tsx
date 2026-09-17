@@ -193,15 +193,14 @@ export function SimproImportFlow({ onBack }: { onBack: () => void }) {
     try {
       const draft = normalizeSimproJob(rawJobDetail, {
         jobId: loadedJobId ?? selectedMatchId,
-        jobNumber: selectedMatch?.jobNumber ?? jobNumber.trim(),
+        jobNumber: jobNumber.trim() || undefined,
       });
       const { products, error } = await fetchAllProductModels();
       if (error) {
         setReviewError(`Product Database could not be loaded (${error}). Import Review will open without autofill.`);
       }
 
-      const enrichedDraft =
-        products.length > 0 ? enrichImportReviewDraftFromProductDatabase(draft, products) : draft;
+      const enrichedDraft = enrichImportReviewDraftFromProductDatabase(draft, products);
 
       setSimproImportSession({ draft: enrichedDraft, rawJob: rawJobDetail });
       navigate('/import-review');

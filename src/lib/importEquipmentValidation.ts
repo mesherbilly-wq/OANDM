@@ -1,6 +1,7 @@
 import type { ImportEquipmentDraft, ImportReviewDraft, ImportReviewIssue } from '../integrations';
 import { selectedSystems } from '../integrations/core/draftHelpers';
-import type { ProductModel } from '../types';
+import type { ProductModel, SystemCategory } from '../types';
+import { inferTradeCategoryFromTexts } from './inferSystemType';
 import { normalizePart, normalizeToken, pickMetadataString } from './equipmentMatchUtils';
 import {
   buildProductPartIndex,
@@ -228,7 +229,12 @@ function applyProductMatchFields(
     filledFields.push('Warranty');
   }
 
-  if (filledFields.length === 0) return item;
+  if (!next.category) {
+    const inferred = inferTradeCategoryFromTexts(textsForImportEquipmentCategory(next));
+    if (inferred) next.category = inferred;
+  }
+
+  if (filledFields.length === 0 && next.category === item.category) return item;
 
   return {
     ...next,
@@ -380,7 +386,7 @@ export function enrichImportReviewDraftFromProductDatabase(
 ): ImportReviewDraft {
   const context = createProductEnrichmentContext(products);
 
-  return {
+  const withProducts: ImportReviewDraft = {
     ...draft,
     systems: draft.systems.map(system => ({
       ...system,
@@ -389,6 +395,76 @@ export function enrichImportReviewDraftFromProductDatabase(
         return enrichEquipmentFromProductDatabase(item, context, { respectUserChoices: true });
       }),
     })),
+  };
+
+  return applyInferredCategoriesToImportDraft(withProducts);
+}
+
+export function textsForImportEquipmentCategory(item: ImportEquipmentDraft): string[] {
+  return [
+    item.productCategory,
+    item.modelName,
+    item.manufacturer,
+    item.modelNumber,
+    item.deviceType,
+    pickMetadataString(item.metadata, 'simproPartNo'),
+    pickMetadataString(item.metadata, 'simproCatalogNo'),
+    pickMetadataString(item.metadata, 'simproStockNo'),
+    pickMetadataString(item.metadata, 'simproCostCentreProductDescription'),
+  ];
+}
+
+function majorityCategory(categories: SystemCategory[]): SystemCategory | null {
+  if (categories.length === 0) return null;
+  const votes = new Map<SystemCategory, number>();
+  for (const category of categories) {
+    votes.set(category, (votes.get(category) ?? 0) + 1);
+  }
+  const ranked = [...votes.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return ranked[0]?.[0] ?? null;
+}
+
+/** Fill blank trade categories from part numbers, Product Database category, and product text. */
+export function applyInferredCategoriesToImportDraft(draft: ImportReviewDraft): ImportReviewDraft {
+  return {
+    ...draft,
+    systems: draft.systems.map(system => {
+      const equipment = system.equipment.map(item => {
+        if (item.category) return item;
+        const inferred = inferTradeCategoryFromTexts(textsForImportEquipmentCategory(item));
+        return inferred ? { ...item, category: inferred } : item;
+      });
+
+      if (system.category.confirmedCategory) {
+        return { ...system, equipment };
+      }
+
+      const lineCategories = equipment
+        .filter(item => item.selected && item.category)
+        .map(item => item.category) as SystemCategory[];
+      const fromLines = majorityCategory(lineCategories);
+      const fromTexts = inferTradeCategoryFromTexts([
+        system.name,
+        system.description,
+        system.sourceCostCentreName,
+        ...equipment.flatMap(textsForImportEquipmentCategory),
+      ]);
+      const suggestedCategory = fromLines ?? fromTexts ?? system.category.suggestedCategory;
+      if (!suggestedCategory) {
+        return { ...system, equipment };
+      }
+
+      return {
+        ...system,
+        equipment,
+        category: {
+          ...system.category,
+          suggestedCategory,
+          method: fromLines ? 'product_match' : fromTexts ? 'keyword_rule' : system.category.method,
+          confidence: Math.max(system.category.confidence, fromLines || fromTexts ? 0.75 : 0),
+        },
+      };
+    }),
   };
 }
 

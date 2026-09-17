@@ -10,6 +10,7 @@ import {
 
 import { clampLineQuantity } from './devicePersistConstants';
 import { IMPORT_LINE_NOTE_TAG } from './deviceGrouping';
+import { displayProjectJobNumber } from './projectJobNumber';
 import { appendProductFieldNotes } from './deviceProductFields';
 import { buildPrefixCounters } from './deviceProjectEdits';
 import { equipmentHasDatasheet } from './datasheetMatching';
@@ -175,7 +176,7 @@ export async function persistSimproImportReviewDraft(
       client_name: nullIfEmpty(draft.project.clientName),
       site_name: nullIfEmpty(draft.project.siteName),
       site_address: nullIfEmpty(draft.project.siteAddress),
-      job_number: nullIfEmpty(draft.project.jobNumber) ?? nullIfEmpty(draft.project.projectNumber),
+      job_number: nullIfEmpty(displayProjectJobNumber(draft.project.jobNumber, draft.project.projectNumber)),
       quote_number: nullIfEmpty(draft.project.quoteNumber),
       project_number: nullIfEmpty(draft.project.projectNumber),
       project_manager: nullIfEmpty(draft.project.projectManager),
@@ -290,7 +291,7 @@ export async function persistSimproImportReviewDraft(
         client_name: draft.project.clientName,
         site_name: draft.project.siteName,
         site_address: draft.project.siteAddress,
-        job_number: draft.project.jobNumber ?? draft.project.projectNumber,
+        job_number: displayProjectJobNumber(draft.project.jobNumber, draft.project.projectNumber),
         quote_number: draft.project.quoteNumber,
         project_manager: draft.project.projectManager,
         engineer: draft.project.engineer,
@@ -314,7 +315,7 @@ export async function persistSimproImportReviewDraft(
         project_name: draft.project.projectName,
         client_name: draft.project.clientName,
         site_address: draft.project.siteAddress,
-        job_number: draft.project.jobNumber ?? draft.project.projectNumber,
+        job_number: displayProjectJobNumber(draft.project.jobNumber, draft.project.projectNumber),
         quote_number: draft.project.quoteNumber,
         project_manager: draft.project.projectManager,
         engineer: draft.project.engineer,

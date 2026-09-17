@@ -1,5 +1,6 @@
 import { mapSimproJobFields, formatIncompleteMarker } from '../src/lib/simproJobFields.ts';
-import { inferSystemTypeName, shouldAutoAssignSystemType } from '../src/lib/inferSystemType.ts';
+import { inferSystemTypeName, inferTradeCategoryFromTexts, shouldAutoAssignSystemType } from '../src/lib/inferSystemType.ts';
+import { displayProjectJobNumber } from '../src/lib/projectJobNumber.ts';
 import { buildSdpAnswers, reconcileSimproRefresh, sdpHasBothSignatures, applySdpKind } from '../src/lib/sdpAnswers.ts';
 import { sdpSigningWording, SDP_PROPOSED_WORDING, SDP_AS_FITTED_WORDING } from '../src/lib/systemDesignProposal.ts';
 
@@ -30,17 +31,28 @@ const mapped = mapSimproJobFields({
 assert('maps job number from JobNo', mapped.jobNumber === 'J-100');
 assert('maps job number from Simpro ID when JobNo is absent', mapSimproJobFields({
   ID: 8821,
-  Name: 'Gatehouse cameras',
+  OrderNo: 'PO-999',
 }).jobNumber === '8821');
+assert('does not use the customer PO as the job number', mapSimproJobFields({
+  ID: 8821,
+  OrderNo: 'PO-999',
+}, { jobNumberHint: 'PO-999' }).jobNumber === '8821');
 assert('maps typed job number hint over internal ID', mapSimproJobFields({
   ID: 8821,
+  OrderNo: 'PO-999',
   Name: 'Gatehouse cameras',
 }, { jobNumberHint: 'NCP104' }).jobNumber === 'NCP104');
 assert('does not use a project title as the job number hint', mapSimproJobFields({
   ID: 8821,
   Name: 'Gatehouse cameras',
 }, { jobNumberHint: 'Gatehouse cameras' }).jobNumber === '8821');
+assert('overview prefers Simpro ID over a stored PO', displayProjectJobNumber('PO-999', '8821') === '8821');
+assert('overview keeps a manual job number when there is no Simpro ID', displayProjectJobNumber('NCP104', null) === 'NCP104');
 assert('infers CCTV from camera text', inferSystemTypeName(['Axis P3245-LVE camera']) === 'CCTV');
+assert('maps camera part text to Security category', inferTradeCategoryFromTexts(['Axis P3245-LVE camera']) === 'Security');
+assert('maps Product Database CCTV category to Security', inferTradeCategoryFromTexts(['CCTV Cameras']) === 'Security');
+assert('maps HID reader to Security category', inferTradeCategoryFromTexts(['HID Signo reader']) === 'Security');
+assert('maps PoE switch text to IT category', inferTradeCategoryFromTexts(['PoE network switch']) === 'IT');
 assert('infers Access Control from reader text', inferSystemTypeName(['HID Signo reader']) === 'Access Control');
 assert('auto-assigns Simpro materials lines', shouldAutoAssignSystemType('Materials') === true);
 assert('keeps an already chosen CCTV type', shouldAutoAssignSystemType('CCTV') === false);

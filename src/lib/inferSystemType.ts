@@ -79,6 +79,41 @@ export function inferSystemTypeName(texts: (string | null | undefined)[]): strin
   return bestScore > 0 ? bestName : null;
 }
 
+const TRADE_CATEGORY_RULES: { category: SystemCategory; patterns: RegExp[] }[] = [
+  { category: 'Security', patterns: [/\bsecurity\b/i, /\balarm\b/i] },
+  { category: 'Fire', patterns: [/\bfire\b/i, /\bsprinkler/i] },
+  { category: 'Electrical', patterns: [/\belectrical/i, /\blv switch/i, /\bdistribution board/i] },
+  { category: 'Mechanical', patterns: [/\bmechanical/i, /\bpump\b/i, /\bplant room/i] },
+  { category: 'HVAC', patterns: [/\bhvac\b/i, /\bair handling/i, /\bahu\b/i, /\bchiller/i, /\bventilation/i] },
+  { category: 'Plumbing', patterns: [/\bplumb/i, /\bdomestic water/i, /\bdrainage/i] },
+  { category: 'Audio Visual', patterns: [/\baudio visual/i, /\bav system/i, /\bprojector/i] },
+  { category: 'IT', patterns: [/\bdata cab/i, /\bstructured cabling/i, /\bserver/i] },
+  { category: 'Building Fabric', patterns: [/\bbuilding fabric/i, /\bdoor hardware/i, /\bglazing/i] },
+];
+
+/** Trade category (Security, Fire, IT, …) from product text, part numbers, and Product Database category. */
+export function inferTradeCategoryFromTexts(texts: (string | null | undefined)[]): SystemCategory | null {
+  const systemName = inferSystemTypeName(texts);
+  if (systemName) return categoryForSystemName(systemName);
+
+  const combined = texts.filter(Boolean).join(' ');
+  if (!combined.trim()) return null;
+
+  let bestCategory: SystemCategory | null = null;
+  let bestScore = 0;
+  for (const rule of TRADE_CATEGORY_RULES) {
+    let score = 0;
+    for (const pattern of rule.patterns) {
+      if (pattern.test(combined)) score += 1;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestCategory = rule.category;
+    }
+  }
+  return bestScore > 0 ? bestCategory : null;
+}
+
 export function textsForDeviceSystemInference(device: Pick<Device, 'model_name' | 'device_type' | 'manufacturer' | 'model_number' | 'notes'>): string[] {
   return [
     getDeviceProductDescription(device),

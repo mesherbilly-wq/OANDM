@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useProject } from './ProjectLayout';
 import { supabase } from '../lib/supabase';
 import { canAccessHandoverConfig } from '../lib/appRoles';
+import { displayProjectJobNumber } from '../lib/projectJobNumber';
 import { useUserAccess } from '../lib/userAccess';
 import {
   documentMatchesSystem,
@@ -395,7 +396,7 @@ export default function HandoverPage() {
       const addText = (key: string, value: string | null | undefined) => {
         if (fieldMap[key] && value) items.push({ item_id: fieldMap[key], item_type: 'TEXT', text_item: { value } });
       };
-      addText('job_number', project.job_number);
+      addText('job_number', displayProjectJobNumber(project.job_number, project.project_number));
       addText('quote_number', project.quote_number);
       addText('project_name', project.project_name);
       addText('client_name', project.client_name);
@@ -1080,8 +1081,8 @@ export default function HandoverPage() {
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
                 <p className="text-xs font-medium text-slate-700 mb-1">Auto-populated fields:</p>
                 <div className="text-xs text-slate-500 space-y-0.5">
-                  {(project.job_number || project.project_number) && (
-                    <p>Job Number: {project.job_number || project.project_number}</p>
+                  {displayProjectJobNumber(project.job_number, project.project_number) && (
+                    <p>Job Number: {displayProjectJobNumber(project.job_number, project.project_number)}</p>
                   )}
                   {project.project_name && <p>Project: {project.project_name}</p>}
                   {project.client_name && <p>Client: {project.client_name}</p>}
