@@ -131,7 +131,7 @@ const SECTIONS: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: 'maintenance_plan', label: 'Maintenance Plan',    icon: CalendarCheck },
   { id: 'commissioning',    label: 'Commissioning Pack',  icon: CheckCircle },
   { id: 'handover',         label: 'Handover Certificate', icon: Award },
-  { id: 'as_fitted',        label: 'As Fitted',           icon: Layers },
+  { id: 'as_fitted',        label: 'As Fitted Drawings',  icon: Layers },
   { id: 'datasheets',       label: 'Datasheet Index',     icon: ExternalLink },
   { id: 'user_manuals',     label: 'User Manuals',        icon: BookMarked },
 ];
@@ -3048,7 +3048,7 @@ function AsFittedDrawingsSection({ drawings, pageImages, documentSystems, scopeC
         <Layers className="w-10 h-10 text-slate-200 mx-auto mb-3" />
         <p className="text-sm font-medium text-slate-500">No as-fitted record or drawings yet</p>
         <p className="text-xs text-slate-400 mt-1">
-          Edit the as-fitted copy of the Scope of Works and upload drawings in the <strong>As Fitted</strong> section.
+          Edit the as-fitted copy of the Scope of Works in <strong>As Fitted</strong> and upload drawings in <strong>As Fitted Drawings</strong>.
         </p>
       </div>
     );
@@ -3075,7 +3075,7 @@ function AsFittedDrawingsSection({ drawings, pageImages, documentSystems, scopeC
           <Layers className="w-10 h-10 text-slate-200 mx-auto mb-3" />
           <p className="text-sm font-medium text-slate-500">No as-fitted drawings uploaded</p>
           <p className="text-xs text-slate-400 mt-1">
-            Upload drawings in the <strong>As Fitted</strong> section — they will appear here full-size in the O&M pack.
+            Upload drawings in the <strong>As Fitted Drawings</strong> section — they will appear here full-size in the O&M pack.
           </p>
         </div>
       ) : drawingGroups.map(group => (

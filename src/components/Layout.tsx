@@ -4,7 +4,7 @@ import {
   LayoutDashboard, FolderOpen, Box, Menu, X, Plus, Plug,
   ChevronDown, ChevronRight,
   BookOpen, Cpu, Wifi, ClipboardCheck, ShieldAlert, Award, Download, Info,
-  FileText, Layers, LogOut, Building2, User, Users,
+  FileText, Layers, LogOut, Building2, User, Users, ClipboardList,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { deriveProjectSystems, getCategoryStyle, PROJECT_DEVICES_CHANGED_EVENT, type ProjectSystem } from '../lib/systems';
@@ -17,11 +17,12 @@ const PROJECT_MODULES = [
   { name: 'Overview',           slug: 'info',          icon: Info },
   { name: 'Document Mgmt',      slug: 'documents',     icon: FileText },
   { name: 'Systems',            slug: 'systems',       icon: Cpu,           hasChildren: true },
+  { name: 'As Fitted',          slug: 'as-fitted-scope', icon: ClipboardList },
   { name: 'Device Schedule',    slug: 'schedule',      icon: ClipboardCheck },
   { name: 'Technical Docs',     slug: 'technical',     icon: Wifi },
   { name: 'Commissioning',      slug: 'commissioning',  icon: ShieldAlert },
   { name: 'Handover',           slug: 'handover',       icon: Award },
-  { name: 'As Fitted',          slug: 'as-fitted',      icon: Layers },
+  { name: 'As Fitted Drawings', slug: 'as-fitted',      icon: Layers },
   { name: 'Datasheets',         slug: 'datasheets',    icon: BookOpen },
   { name: 'O&M Builder',        slug: 'om-builder',    icon: FolderOpen },
   { name: 'Export Centre',      slug: 'export',        icon: Download },
@@ -121,7 +122,9 @@ export function Layout({ companyName, userEmail, onSignOut }: {
               {visibleModules.map(mod => {
                 const href = `/projects/${currentProjectId}/${mod.slug}`;
                 const isSystemsModule = mod.slug === 'systems';
-                const active = location.pathname.startsWith(href) || (isSystemsModule && location.pathname.includes('/systems/'));
+                const active = isSystemsModule
+                  ? location.pathname.startsWith(href) || location.pathname.includes('/systems/')
+                  : location.pathname === href || location.pathname.startsWith(`${href}/`);
 
                 if (isSystemsModule) {
                   return (

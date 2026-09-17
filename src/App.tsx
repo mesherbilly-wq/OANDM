@@ -24,6 +24,7 @@ import { AIProjectBuilderPage } from './pages/AIProjectBuilderPage';
 import { IntegrationsPage } from './pages/IntegrationsPage';
 import { ImportReviewPage } from './pages/ImportReviewPage';
 import AsBuiltDrawingsPage from './pages/AsBuiltDrawingsPage';
+import AsFittedPage from './pages/AsFittedPage';
 import PublicHandoverFormPage from './pages/PublicHandoverFormPage';
 import SafetyCulturePage from './pages/SafetyCulturePage';
 import { UsersPage } from './pages/UsersPage';
@@ -167,6 +168,7 @@ function AuthedApp({
             <Route path="systems" element={<ProjectSystemsPage />} />
             <Route path="systems/:system" element={<ProjectSystemsPage />} />
             <Route path="schedule" element={<DeviceSchedulePage />} />
+            <Route path="as-fitted-scope" element={<AsFittedPage />} />
             <Route path="technical" element={<TechnicalDocsPage />} />
             <Route path="commissioning" element={<CommissioningPage />} />
             <Route path="sdp" element={<SdpPage />} />

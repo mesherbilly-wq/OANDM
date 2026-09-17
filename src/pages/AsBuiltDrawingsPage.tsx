@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import {
@@ -10,8 +10,6 @@ import {
   Upload, FileText, X, Plus, ExternalLink, Pencil, Check, Loader2,
   ImageIcon, Hash, RefreshCw, AlertCircle, FileType,
 } from 'lucide-react';
-import { AsFittedItemsPanel } from '../components/AsFittedItemsPanel';
-import { MarkdownDocEditor } from '../components/MarkdownDocEditor';
 
 const DRAWING_TYPES = [
   'General Arrangement',
@@ -73,10 +71,6 @@ export default function AsBuiltDrawingsPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [asFittedScope, setAsFittedScope] = useState('');
-  const [asFittedScopeId, setAsFittedScopeId] = useState<number | null>(null);
-  const [proposedScope, setProposedScope] = useState('');
-  const [scopeSaving, setScopeSaving] = useState(false);
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editState, setEditState] = useState<EditState>({ title: '', drawing_number: '', revision: '', drawing_type: '', system_name: '', notes: '' });
@@ -92,7 +86,7 @@ export default function AsBuiltDrawingsPage() {
 
   const load = useCallback(async () => {
     if (!pid) return;
-    const [{ data }, { data: devData }, { data: docs }] = await Promise.all([
+    const [{ data }, { data: devData }] = await Promise.all([
       supabase
         .from('as_fitted_drawings')
         .select('*')
@@ -102,36 +96,10 @@ export default function AsBuiltDrawingsPage() {
         .from('devices')
         .select('id, project_id, system_type, system_category, project_system_id')
         .eq('project_id', pid),
-      supabase
-        .from('project_documents')
-        .select('id, document_type, content')
-        .eq('project_id', pid)
-        .in('document_type', ['scope_of_works', 'as_fitted_scope']),
     ]);
     setDrawings(data ?? []);
     const systems = await loadDocumentProjectSystems(pid, devData ?? []);
     setProjectSystems(systems);
-    const asFitted = (docs ?? []).find(d => d.document_type === 'as_fitted_scope');
-    const proposed = (docs ?? []).find(d => d.document_type === 'scope_of_works');
-    setProposedScope(proposed?.content ?? '');
-    if (asFitted) {
-      setAsFittedScopeId(asFitted.id);
-      setAsFittedScope(asFitted.content ?? '');
-    } else if (proposed?.content) {
-      const { data: inserted } = await supabase.from('project_documents').insert({
-        project_id: pid,
-        document_type: 'as_fitted_scope',
-        title: 'As Fitted',
-        content: proposed.content,
-        status: 'draft',
-        generated_by: 'manual',
-      }).select('id, content').single();
-      setAsFittedScopeId(inserted?.id ?? null);
-      setAsFittedScope(inserted?.content ?? proposed.content);
-    } else {
-      setAsFittedScopeId(null);
-      setAsFittedScope('');
-    }
     setLoading(false);
   }, [pid]);
 
@@ -222,31 +190,6 @@ export default function AsBuiltDrawingsPage() {
     }
   };
 
-  const saveAsFittedScope = async () => {
-    if (!pid) return;
-    setScopeSaving(true);
-    if (asFittedScopeId) {
-      await supabase.from('project_documents').update({ content: asFittedScope, status: 'final' }).eq('id', asFittedScopeId);
-    } else {
-      const { data } = await supabase.from('project_documents').insert({
-        project_id: pid,
-        document_type: 'as_fitted_scope',
-        title: 'As Fitted',
-        content: asFittedScope,
-        status: 'final',
-        generated_by: 'manual',
-      }).select('id').single();
-      setAsFittedScopeId(data?.id ?? null);
-    }
-    setScopeSaving(false);
-  };
-
-  const copyFromScope = () => {
-    if (!proposedScope) return;
-    if (asFittedScope.trim() && asFittedScope !== proposedScope && !window.confirm('Replace the as-fitted record with the current Scope of Works?')) return;
-    setAsFittedScope(proposedScope);
-  };
-
   const updatePending = (patch: Partial<PendingUpload>) => {
     setPendingQueue(prev => prev.map((item, i) => i === pendingIndex ? { ...item, ...patch } : item));
   };
@@ -308,8 +251,8 @@ export default function AsBuiltDrawingsPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-lg font-semibold text-slate-900">As Fitted</h2>
-          <p className="text-sm text-slate-500 mt-0.5">Starts as a copy of the Scope of Works. Edit it if the installed works differ, then add drawings.</p>
+          <h2 className="text-lg font-semibold text-slate-900">As Fitted Drawings</h2>
+          <p className="text-sm text-slate-500 mt-0.5">Upload final installation drawings. These appear full-size in the O&M pack.</p>
         </div>
         <button
           onClick={() => fileInputRef.current?.click()}
@@ -318,21 +261,6 @@ export default function AsBuiltDrawingsPage() {
           <Plus className="w-4 h-4" />Add Drawing
         </button>
       </div>
-
-      <div className="mb-6">
-        <MarkdownDocEditor
-          title="As Fitted"
-          content={asFittedScope}
-          onChange={setAsFittedScope}
-          onSave={() => void saveAsFittedScope()}
-          saving={scopeSaving}
-          placeholder="Enter as-fitted works here (supports Markdown formatting)..."
-          emptyHint="No as-fitted record yet. It copies the Scope of Works when that exists, or you can type it here."
-          extraAction={proposedScope ? { label: 'Copy from Scope of Works', onClick: copyFromScope } : undefined}
-        />
-      </div>
-
-      <AsFittedItemsPanel projectId={pid} />
 
       {/* Drop zone */}
       <div
