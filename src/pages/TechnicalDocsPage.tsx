@@ -127,49 +127,88 @@ function uniquifyHeaders(headers: string[]): string[] {
   });
 }
 
-function findHeaderRowIndex(grid: string[][]): number {
-  let best = -1;
-  let bestScore = -1;
-  const searchLimit = Math.min(grid.length - 1, 40);
-  for (let i = 0; i <= searchLimit; i++) {
-    if (!looksLikeHeaderRow(grid[i])) continue;
-    let following = 0;
-    for (let j = i + 1; j < Math.min(grid.length, i + 8); j++) {
-      if (filledCount(grid[j]) >= 2) following++;
-    }
-    const score = filledCount(grid[i]) * 2 + following * 3 - i;
-    if (score > bestScore) {
-      bestScore = score;
-      best = i;
-    }
-  }
-  if (best >= 0) return best;
-  return grid.findIndex(row => filledCount(row) >= 2);
+const HEADER_HINTS = /name|model|serial|mac|ip|camera|firmware|location|device|channel|status|manufacturer|part|host|address|description|type|\bid\b|qty|quantity/i;
+
+function headerHintCount(row: string[]): number {
+  return row.filter(cell => HEADER_HINTS.test(cell)).length;
 }
 
-/** Use only the detected table: skip titles/notes, take headers from the table row even if it is not row 1. */
-function extractTableFromGrid(raw: unknown[][]): { headers: string[]; rows: Record<string, string>[] } {
-  const grid = raw.map(row => (Array.isArray(row) ? row : [row]).map(cell => String(cell ?? '').trim()));
-  const headerIdx = findHeaderRowIndex(grid);
-  if (headerIdx < 0) return { headers: [], rows: [] };
+function usedWidth(row: string[]): number {
+  let width = row.length;
+  while (width > 0 && !String(row[width - 1] ?? '').trim()) width--;
+  return width;
+}
 
-  const headerRaw = grid[headerIdx];
-  let width = headerRaw.length;
-  while (width > 0 && !headerRaw[width - 1]) width--;
+function sameDocId(a: unknown, b: unknown): boolean {
+  if (a == null || b == null || a === '') return false;
+  return String(a) === String(b);
+}
+
+function tableScore(table: { headers: string[]; rows: Record<string, string>[] }, headerLike: boolean, hint: number): number {
+  if (table.headers.length < 2 || table.rows.length === 0) return -1;
+  return table.rows.length * table.headers.length + hint * 50 + (headerLike ? 20 : 0);
+}
+
+function gridFromUnknown(raw: unknown[][]): string[][] {
+  return raw.map(row => (Array.isArray(row) ? row : [row]).map(cell => String(cell ?? '').trim()));
+}
+
+function tableFromHeader(grid: string[][], headerIdx: number): { headers: string[]; rows: Record<string, string>[] } {
+  let width = 0;
+  for (let i = headerIdx; i < grid.length; i++) width = Math.max(width, usedWidth(grid[i]));
   if (width < 2) return { headers: [], rows: [] };
 
-  const headers = uniquifyHeaders(headerRaw.slice(0, width));
+  const headers = uniquifyHeaders(Array.from({ length: width }, (_, col) => grid[headerIdx][col] ?? ''));
   const rows: Record<string, string>[] = [];
   for (let i = headerIdx + 1; i < grid.length; i++) {
     const cells = headers.map((_, col) => grid[i][col] ?? '');
     if (cells.every(cell => !cell.trim())) continue;
     const filled = cells.filter(cell => cell.trim());
     if (filled.length === 1 && filled[0].length > 80) continue;
+    if (looksLikeHeaderRow(cells) && headerHintCount(cells) >= 2) continue;
     const row: Record<string, string> = {};
     for (let col = 0; col < headers.length; col++) row[headers[col]] = cells[col];
     rows.push(row);
   }
   return { headers, rows };
+}
+
+/** Skip title/date rows and pick the table with the most real columns and rows. */
+function extractTableFromGrid(raw: unknown[][]): { headers: string[]; rows: Record<string, string>[] } {
+  const grid = gridFromUnknown(raw);
+  let best: { headers: string[]; rows: Record<string, string>[] } = { headers: [], rows: [] };
+  let bestScore = -1;
+  const searchLimit = Math.min(grid.length - 1, 80);
+  for (let i = 0; i <= searchLimit; i++) {
+    if (filledCount(grid[i]) < 2) continue;
+    const headerLike = looksLikeHeaderRow(grid[i]);
+    const hint = headerHintCount(grid[i]);
+    if (!headerLike && hint === 0) continue;
+    const table = tableFromHeader(grid, i);
+    const score = tableScore(table, headerLike, hint);
+    if (score > bestScore) {
+      bestScore = score;
+      best = table;
+    }
+  }
+  if (best.rows.length > 0) return best;
+  const fallbackIdx = grid.findIndex(row => filledCount(row) >= 2);
+  return fallbackIdx >= 0 ? tableFromHeader(grid, fallbackIdx) : { headers: [], rows: [] };
+}
+
+function columnsFromRows(rows: TechDocRow[], configured: ColConfig[]): ColConfig[] {
+  const visible = (configured ?? []).filter(col => col.visible).sort((a, b) => a.order - b.order);
+  if (visible.length > 0) return visible;
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    for (const key of Object.keys(row.data ?? {})) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+      keys.push(key);
+    }
+  }
+  return keys.map((key, order) => ({ key, display_name: key, visible: true, order }));
 }
 
 function clusterXPositions(xValues: number[], tolerance: number): number[] {
@@ -305,31 +344,74 @@ async function extractTablesFromPDF(file: File): Promise<ExtractedTable[]> {
 
 // ── File parsing ──────────────────────────────────────────────────────────────
 
+function parseCsvText(text: string, delimiter?: string): unknown[][] {
+  const result = Papa.parse<unknown[]>(text, {
+    header: false,
+    skipEmptyLines: false,
+    delimiter: delimiter || undefined,
+  });
+  return (result.data ?? []).map(row => (Array.isArray(row) ? row : [row]).map(cell => String(cell ?? '')));
+}
+
+function decodeSpreadsheetText(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  const utf16le = bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE;
+  const utf16be = bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF;
+  const looksUtf16 = bytes.length > 4 && bytes[1] === 0 && bytes[3] === 0;
+  const text = new TextDecoder(utf16le || looksUtf16 ? 'utf-16le' : utf16be ? 'utf-16be' : 'utf-8').decode(buf);
+  return text.replace(/^\uFEFF/, '');
+}
+
+function bestTable(tables: { headers: string[]; rows: Record<string, string>[] }[]): { headers: string[]; rows: Record<string, string>[] } {
+  let best = tables[0] ?? { headers: [], rows: [] };
+  let bestScore = tableScore(best, true, headerHintCount(best.headers));
+  for (const table of tables.slice(1)) {
+    const score = tableScore(table, true, headerHintCount(table.headers));
+    if (score > bestScore) {
+      best = table;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
 async function parseNonPdfFile(file: File): Promise<{ headers: string[]; rows: Record<string, string>[] }> {
   const name = file.name.toLowerCase();
 
   if (name.endsWith('.csv') || name.endsWith('.txt')) {
-    return new Promise((resolve, reject) => {
-      Papa.parse(file, {
-        header: false,
-        skipEmptyLines: false,
-        complete: (result) => {
-          const grid = (result.data as unknown[][]).map(row =>
-            (Array.isArray(row) ? row : [row]).map(cell => String(cell ?? '')),
-          );
-          resolve(extractTableFromGrid(grid));
-        },
-        error: reject,
-      });
-    });
+    const text = decodeSpreadsheetText(await file.arrayBuffer());
+    return bestTable([
+      extractTableFromGrid(parseCsvText(text)),
+      extractTableFromGrid(parseCsvText(text, ',')),
+      extractTableFromGrid(parseCsvText(text, ';')),
+      extractTableFromGrid(parseCsvText(text, '\t')),
+      extractTableFromGrid(parseCsvText(text, '|')),
+    ]);
   }
 
   if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
     const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, { type: 'array' });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const data = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: false, defval: '' }) as unknown[][];
-    return extractTableFromGrid(data);
+    try {
+      const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+      const tables = wb.SheetNames.map(sheetName => {
+        const data = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sheetName], {
+          header: 1,
+          raw: false,
+          defval: '',
+          blankrows: true,
+        }) as unknown[][];
+        return extractTableFromGrid(data);
+      });
+      const fromSheets = bestTable(tables);
+      if (fromSheets.rows.length > 0) return fromSheets;
+    } catch { /* fall through to text parse */ }
+    const text = decodeSpreadsheetText(buf);
+    return bestTable([
+      extractTableFromGrid(parseCsvText(text)),
+      extractTableFromGrid(parseCsvText(text, ',')),
+      extractTableFromGrid(parseCsvText(text, ';')),
+      extractTableFromGrid(parseCsvText(text, '\t')),
+    ]);
   }
 
   throw new Error('Unsupported file type. Please use CSV, TXT, Excel, or PDF files.');
@@ -413,11 +495,11 @@ export default function TechnicalDocsPage() {
     const rawDocs = docsRes.data ?? [];
 
     const built: TechDocDocument[] = rawDocs.map((doc: any) => {
-      const docRows = rows.filter(row => row.document_id === doc.id);
-      const cfg = cfgs.find((c: { document_id?: number | null }) => c.document_id === doc.id)
+      const docRows = rows.filter(row => sameDocId(row.document_id, doc.id));
+      const cfg = cfgs.find((c: { document_id?: number | null }) => sameDocId(c.document_id, doc.id))
         ?? (docRows.length === 0 ? cfgs.find((c: { system_type: string; document_id?: number | null }) => c.system_type === doc.system_type && !c.document_id) : undefined);
       return {
-        id: doc.id,
+        id: Number(doc.id),
         title: doc.title || doc.file_name || 'Technical document',
         document_type: doc.document_type ?? null,
         notes: doc.notes ?? null,
@@ -431,10 +513,34 @@ export default function TechnicalDocsPage() {
       };
     });
 
-    const orphanRows = rows.filter(row => !row.document_id || !built.some(doc => doc.id === row.document_id));
-    if (orphanRows.length > 0) {
-      const bySystem = new Map<string, typeof orphanRows>();
-      for (const row of orphanRows) {
+    const claimed = new Set(built.flatMap(doc => doc.rows.map(row => String(row.id))));
+    const orphanRows = rows.filter(row => !claimed.has(String(row.id)));
+    const emptyNamedBySystem = new Map<string, TechDocDocument[]>();
+    for (const doc of built) {
+      if (doc.rows.length > 0 || !doc.system_type) continue;
+      const bucket = emptyNamedBySystem.get(doc.system_type) ?? [];
+      bucket.push(doc);
+      emptyNamedBySystem.set(doc.system_type, bucket);
+    }
+    const stillOrphan: typeof orphanRows = [];
+    const orphansBySystem = new Map<string, typeof orphanRows>();
+    for (const row of orphanRows) {
+      const key = row.system_type || 'Technical Documentation';
+      const bucket = orphansBySystem.get(key) ?? [];
+      bucket.push(row);
+      orphansBySystem.set(key, bucket);
+    }
+    for (const [system, sysRows] of orphansBySystem) {
+      const emptyNamed = emptyNamedBySystem.get(system);
+      if (emptyNamed?.length === 1) {
+        emptyNamed[0].rows = sysRows;
+        continue;
+      }
+      stillOrphan.push(...sysRows);
+    }
+    if (stillOrphan.length > 0) {
+      const bySystem = new Map<string, typeof stillOrphan>();
+      for (const row of stillOrphan) {
         const key = row.system_type || 'Technical Documentation';
         const bucket = bySystem.get(key) ?? [];
         bucket.push(row);
@@ -515,7 +621,10 @@ export default function TechnicalDocsPage() {
     } else {
       try {
         const { headers, rows } = await parseNonPdfFile(file);
-        if (headers.length === 0) { alert('No columns found in file.'); return; }
+        if (headers.length === 0 || rows.length === 0) {
+          alert('Could not find a table of rows in that file. Axis hardware inventory exports often put the camera list on a later sheet — try Excel/CSV and import again.');
+          return;
+        }
         setImportColCfg(headers.map((h, i) => ({ key: h, display_name: h, visible: true, order: i })));
         setModal({ type: 'import', system: pending.system_name, rawHeaders: headers, previewRows: rows, file });
       } catch (err: any) {
@@ -588,13 +697,25 @@ export default function TechnicalDocsPage() {
         }
         throw docErr;
       }
-      const documentId = inserted?.id as number;
-      if (previewRows.length > 0) {
-        const inserts = previewRows.map((data, i) => ({
-          project_id: pid, system_type: systemName, row_index: i, data, document_id: documentId,
-        }));
-        const { error } = await supabase.from('tech_doc_rows').insert(inserts);
-        if (error) throw error;
+      const documentId = Number(inserted?.id);
+      if (!documentId) throw new Error('Document was created without an id.');
+      if (previewRows.length === 0) {
+        await supabase.from('tech_doc_documents').delete().eq('id', documentId);
+        throw new Error('Could not find any data rows in that spreadsheet.');
+      }
+      const withDocId = previewRows.map((data, i) => ({
+        project_id: pid, system_type: systemName, row_index: i, data, document_id: documentId,
+      }));
+      let { error } = await supabase.from('tech_doc_rows').insert(withDocId);
+      if (error && missingTable(error)) {
+        setNeedsMigration(true);
+        const withoutDocId = withDocId.map(({ document_id: _documentId, ...rest }) => rest);
+        const retry = await supabase.from('tech_doc_rows').insert(withoutDocId);
+        error = retry.error;
+      }
+      if (error) {
+        await supabase.from('tech_doc_documents').delete().eq('id', documentId);
+        throw error;
       }
       const colData = {
         project_id: pid,
@@ -604,8 +725,19 @@ export default function TechnicalDocsPage() {
         updated_at: new Date().toISOString(),
       };
       const { error: cfgErr } = await supabase.from('tech_doc_column_configs').insert(colData);
-      if (cfgErr && !missingTable(cfgErr)) throw cfgErr;
+      if (cfgErr && missingTable(cfgErr)) {
+        setNeedsMigration(true);
+        await supabase.from('tech_doc_column_configs').upsert({
+          project_id: pid,
+          system_type: systemName,
+          columns: importColCfg,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'project_id,system_type' });
+      } else if (cfgErr) {
+        throw cfgErr;
+      }
       await load();
+      setExpandedDocId(documentId);
       advanceQueue();
     } catch (err: any) {
       alert('Import failed: ' + err.message);
@@ -688,7 +820,7 @@ export default function TechnicalDocsPage() {
   // ── Column config ────────────────────────────────────────────────────────────
 
   const openColConfig = (doc: TechDocDocument) => {
-    setEditingColCfg([...(doc.colConfig ?? [])]);
+    setEditingColCfg(columnsFromRows(doc.rows, doc.colConfig).map((col, order) => ({ ...col, order })));
     setModal({ type: 'columns', system: String(doc.id) });
   };
 
@@ -721,7 +853,7 @@ export default function TechnicalDocsPage() {
 
   const exportCSV = (doc: TechDocDocument) => {
     if (doc.rows.length === 0) return;
-    const cols = doc.colConfig.filter(c => c.visible).sort((a, b) => a.order - b.order);
+    const cols = columnsFromRows(doc.rows, doc.colConfig);
     if (cols.length === 0) return;
     const csv = [cols.map(c => c.display_name), ...doc.rows.map(r => cols.map(c => r.data[c.key] ?? ''))].map(row =>
       row.map(c => { const s = String(c); return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s; }).join(',')
@@ -854,7 +986,7 @@ export default function TechnicalDocsPage() {
       ) : (
         <div className="space-y-3">
           {visibleDocuments.map(doc => {
-            const visibleCols = (doc.colConfig ?? []).filter(c => c.visible).sort((a, b) => a.order - b.order);
+            const visibleCols = columnsFromRows(doc.rows, doc.colConfig);
             const expanded = expandedDocId === doc.id;
             return (
               <div key={doc.id} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
@@ -1165,7 +1297,7 @@ export default function TechnicalDocsPage() {
               </span>
               <button
                 onClick={confirmImport}
-                disabled={importing || importColCfg.filter(c => c.visible).length === 0}
+                disabled={importing || importColCfg.filter(c => c.visible).length === 0 || modal.previewRows.length === 0}
                 className="flex items-center gap-2 px-5 py-2.5 text-sm font-medium bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 transition-colors disabled:opacity-40"
               >
                 {importing
