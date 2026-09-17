@@ -150,9 +150,19 @@ function collectPartNumberCandidates(item: ImportEquipmentDraft): string[] {
   return candidates;
 }
 
+function orderMatchesByProductList(
+  matches: ProductLookupRecord[],
+  products: ProductLookupRecord[],
+): ProductLookupRecord[] {
+  if (matches.length <= 1) return matches;
+  const ids = new Set(matches.map(product => product.id));
+  return products.filter(product => ids.has(product.id));
+}
+
 function findExactProductsByCandidates(
   candidates: string[],
   partIndex: ProductPartIndex,
+  products: ProductLookupRecord[],
 ): ProductLookupRecord[] {
   const byId = new Map<number, ProductLookupRecord>();
 
@@ -165,12 +175,13 @@ function findExactProductsByCandidates(
     }
   }
 
-  return [...byId.values()];
+  return orderMatchesByProductList([...byId.values()], products);
 }
 
 function findSuggestedProductsByCandidates(
   candidates: string[],
   partIndex: ProductPartIndex,
+  products: ProductLookupRecord[],
 ): ProductLookupRecord[] {
   const byId = new Map<number, ProductLookupRecord>();
 
@@ -180,7 +191,7 @@ function findSuggestedProductsByCandidates(
     }
   }
 
-  return [...byId.values()];
+  return orderMatchesByProductList([...byId.values()], products);
 }
 
 function resolveSingleExactMatch(
@@ -188,17 +199,18 @@ function resolveSingleExactMatch(
   matches: ProductLookupRecord[],
 ): { product: ProductLookupRecord | null; ambiguous: boolean } {
   if (matches.length === 0) return { product: null, ambiguous: false };
-  if (matches.length === 1) return { product: matches[0], ambiguous: false };
 
+  let pool = matches;
   const manufacturer = item.manufacturer?.trim();
-  if (manufacturer) {
+  if (manufacturer && matches.length > 1) {
     const narrowed = matches.filter(
       product => normalizeToken(product.manufacturer) === normalizeToken(manufacturer),
     );
-    if (narrowed.length === 1) return { product: narrowed[0], ambiguous: false };
+    if (narrowed.length > 0) pool = narrowed;
   }
 
-  return { product: null, ambiguous: true };
+  // Duplicate Product Database rows with the same part number: use the top (first) row.
+  return { product: pool[0], ambiguous: false };
 }
 
 function applyProductMatchFields(
@@ -307,7 +319,11 @@ export function enrichEquipmentFromProductDatabase(
   const primaryCandidates = collectPrimaryPartCandidates(normalized);
   const allCandidates = collectPartNumberCandidates(normalized);
 
-  const exactMatches = findExactProductsByCandidates(primaryCandidates, context.partIndex);
+  const exactMatches = findExactProductsByCandidates(
+    primaryCandidates,
+    context.partIndex,
+    context.products,
+  );
   const exactResolution = resolveSingleExactMatch(normalized, exactMatches);
 
   if (exactResolution.product) {
@@ -324,7 +340,11 @@ export function enrichEquipmentFromProductDatabase(
     );
   }
 
-  const suggestedMatches = findSuggestedProductsByCandidates(allCandidates, context.partIndex);
+  const suggestedMatches = findSuggestedProductsByCandidates(
+    allCandidates,
+    context.partIndex,
+    context.products,
+  );
   if (suggestedMatches.length > 0) {
     return withDatabaseLookupMetadata(
       normalized,

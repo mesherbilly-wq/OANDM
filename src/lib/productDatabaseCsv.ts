@@ -615,7 +615,7 @@ function findAutofillProduct(
   if (row.partNumber.trim()) {
     const mapped = mapCsvRowToProductFields(row);
     const { matches, method } = findMergeMatches(mapped, products);
-    if (matches.length === 1) {
+    if (matches.length >= 1) {
       return {
         product: matches[0],
         reason: `Matched existing product #${matches[0].id} by ${method?.replace(/_/g, ' ') ?? 'part number'}.`,
@@ -983,20 +983,7 @@ export function buildProductDatabaseImportPreview(
     }
 
     const { matches, method } = findMergeMatches(mapped, existingProducts);
-    if (matches.length > 1) {
-      rejectionReasons.duplicate_existing = (rejectionReasons.duplicate_existing ?? 0) + 1;
-      previewRows.push({
-        category: 'duplicate',
-        rowNumber: csvRow.rowNumber,
-        csv: csvRow,
-        mapped,
-        matchMethod: method ?? undefined,
-        reason: `Multiple existing products match (${matches.map(product => `#${product.id}`).join(', ')}).`,
-      });
-      continue;
-    }
-
-    if (matches.length === 1) {
+    if (matches.length > 0) {
       const existing = matches[0];
       if (claimedProductIds.has(existing.id)) {
         rejectionReasons.duplicate_claimed = (rejectionReasons.duplicate_claimed ?? 0) + 1;

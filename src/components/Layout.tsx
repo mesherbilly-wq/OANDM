@@ -4,7 +4,7 @@ import {
   LayoutDashboard, FolderOpen, Box, Menu, X, Plus, Plug,
   ChevronDown, ChevronRight,
   BookOpen, Cpu, Wifi, ClipboardCheck, ShieldAlert, Award, Download, Info,
-  FileText, Layers, LogOut, Building2, User, Users, ClipboardList,
+  FileText, Layers, LogOut, Building2, User, Users, ClipboardList, ScrollText,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { deriveProjectSystems, getCategoryStyle, PROJECT_DEVICES_CHANGED_EVENT, type ProjectSystem } from '../lib/systems';
@@ -18,6 +18,7 @@ const PROJECT_MODULES = [
   { name: 'Document Mgmt',      slug: 'documents',     icon: FileText },
   { name: 'Device Schedule',    slug: 'schedule',      icon: ClipboardCheck },
   { name: 'Systems',            slug: 'systems',       icon: Cpu,           hasChildren: true },
+  { name: 'Scope of Works',     slug: 'scope',         icon: ScrollText },
   { name: 'As Fitted',          slug: 'as-fitted-scope', icon: ClipboardList },
   { name: 'Technical Docs',     slug: 'technical',     icon: Wifi },
   { name: 'Commissioning',      slug: 'commissioning',  icon: ShieldAlert },

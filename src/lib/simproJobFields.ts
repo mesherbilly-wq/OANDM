@@ -1,4 +1,5 @@
 import { cleanTextField, looksLikeHtml, pickNestedName, pickRichTextField, pickSimproJobNumber, pickString } from '../integrations/connectors/simpro/simproImportHelpers';
+import { prepareCustomerScopeHtml } from './scopeOfWorksHtml';
 
 export interface SimproFieldSource {
   path: string;
@@ -122,11 +123,11 @@ export function pickSimproScopeOfWorks(job: Record<string, unknown>): {
 
   const htmlSource = sources.find(source => looksLikeHtml(source.value));
   if (htmlSource) {
-    return { text: htmlSource.value, sources };
+    return { text: prepareCustomerScopeHtml(htmlSource.value) || null, sources };
   }
 
   const text = sources.map(source => source.value).join('\n\n').trim();
-  return { text: text || null, sources };
+  return { text: text ? prepareCustomerScopeHtml(text) || null : null, sources };
 }
 
 export function mapSimproJobFields(

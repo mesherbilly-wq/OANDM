@@ -1406,7 +1406,7 @@ export function ProjectOMExportPage() {
               onSave={handleSaveScope}
               saving={scopeSaving}
               placeholder="Enter Scope of Works here (supports Markdown formatting)..."
-              emptyHint="No Scope of Works found. You can type it below, or use Create Project (upload your quote/proposal) to auto-generate it."
+              emptyHint="No Scope of Works found. It is filled from Simpro on import, or paste a quote on the Scope of Works page."
               isAiGenerated={!!projectDocs.find(d => d.document_type === 'scope_of_works' && d.generated_by === 'ai')}
               onRegenerate={handleRegenerateScope}
               regenerating={scopeRegenerating}

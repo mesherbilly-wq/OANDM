@@ -189,12 +189,14 @@ export function findSuggestedPartMatches(
           bestScore = score;
         }
 
-        matches.set(product.id, product);
+        if (!matches.has(product.id)) matches.set(product.id, product);
       }
     }
   }
 
-  return [...matches.values()];
+  const ranked = [...matches.values()];
+  if (ranked.length <= 1) return ranked;
+  return products.filter(product => matches.has(product.id));
 }
 
 /** O(1) part-number lookup index — build once per product list, reuse for every equipment line. */
@@ -239,7 +241,9 @@ export function buildProductPartIndex(products: ProductLookupRecord[]): ProductP
       }
     }
 
-    return [...byId.values()];
+    if (byId.size <= 1) return [...byId.values()];
+    // Keep Product Database order so duplicate part numbers use the top row.
+    return products.filter(product => byId.has(product.id));
   };
 
   return {

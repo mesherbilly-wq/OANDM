@@ -14,6 +14,7 @@ import { buildPrefixCounters } from './deviceProjectEdits';
 import { equipmentHasDatasheet } from './datasheetMatching';
 import { getDevicePrefix } from './deviceLabel';
 import { categoryForSystemName } from './inferSystemType';
+import { prepareCustomerScopeHtml } from './scopeOfWorksHtml';
 import {
   buildPersistSystemNameMap,
   insertProjectSystemsFromSimproDraft,
@@ -186,7 +187,7 @@ export async function persistSimproImportReviewDraft(
     throw new Error(projectError?.message ?? 'Failed to create project.');
   }
 
-  const scopeContent = nullIfEmpty(draft.project.projectSummary);
+  const scopeContent = nullIfEmpty(prepareCustomerScopeHtml(draft.project.projectSummary));
   if (scopeContent) {
     const { error: scopeError } = await supabase.from('project_documents').insert({
       project_id: project.id,
@@ -214,7 +215,7 @@ export async function persistSimproImportReviewDraft(
   const persistSystemNames = buildPersistSystemNameMap(draft.systems);
 
   const [{ data: productModels }, { data: datasheets }] = await Promise.all([
-    supabase.from('product_models').select('*'),
+    supabase.from('product_models').select('*').order('manufacturer').order('id'),
     supabase.from('datasheets').select('*'),
   ]);
 
