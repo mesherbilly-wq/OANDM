@@ -80,6 +80,17 @@ function isPriceOnlyBlock(text: string): boolean {
   ) || /^(?:£|\$|€)\s*[\d,]+\.\d{2}$/.test(value);
 }
 
+/** Quoted equipment line: quantity + description + money, not a narrative sentence. */
+function isPricedScheduleLine(text: string): boolean {
+  const value = collapseText(text);
+  if (!value || value.length > 240) return false;
+  if (!CURRENCY_OR_MONEY.test(value)) return false;
+  if (/^[A-Za-z]/.test(value) && /[.!?]$/.test(value) && value.split(' ').length > 12) return false;
+  const moneyCount = value.match(CURRENCY)?.length ?? 0;
+  if (moneyCount >= 2) return true;
+  return /^\d+(\.\d+)?\b/.test(value) || /\b\d+\s*(x|off|nr|no\.?)\b/i.test(value);
+}
+
 function isEmptyBlock(el: Element): boolean {
   if (el.querySelector('img,table')) return false;
   return !collapseText(el.textContent ?? '');
@@ -117,7 +128,7 @@ function stripScopeCommercialContent(html: string): string {
         if (tableLooksLikeScheduleOrCosts(table)) table.remove();
       });
 
-      if (isPriceOnlyBlock(text) || isEmptyBlock(el)) {
+      if (isPriceOnlyBlock(text) || isPricedScheduleLine(text) || isEmptyBlock(el)) {
         el.remove();
       }
     }
@@ -165,7 +176,7 @@ function stripPlainScopeCommercial(text: string): string {
         continue;
       }
     }
-    if (isPriceOnlyBlock(trimmed)) continue;
+    if (isPriceOnlyBlock(trimmed) || isPricedScheduleLine(trimmed)) continue;
     kept.push(line);
   }
   if (inTable) flushTable();

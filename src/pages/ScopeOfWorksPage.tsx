@@ -4,6 +4,7 @@ import { FileUp, Loader2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { MarkdownDocEditor, renderDocumentHtml, documentPreviewClassName } from '../components/MarkdownDocEditor';
 import { prepareCustomerScopeHtml } from '../lib/scopeOfWorksHtml';
+import { htmlFromScopeImportFile } from '../lib/scopeOfWorksImport';
 
 export default function ScopeOfWorksPage() {
   const { id } = useParams<{ id: string }>();
@@ -89,16 +90,11 @@ export default function ScopeOfWorksPage() {
   };
 
   const onPickFile = async (file: File) => {
-    const name = file.name.toLowerCase();
-    if (name.endsWith('.docx') || name.endsWith('.doc') || name.endsWith('.pdf')) {
-      setImportError('Paste from Word or Simpro, or upload an HTML file, so the original layout can be kept.');
-      return;
-    }
     setImporting(true);
     setImportError(null);
     try {
-      const text = await file.text();
-      await applyImportedHtml(text);
+      const html = await htmlFromScopeImportFile(file);
+      await applyImportedHtml(html);
     } catch (error) {
       setImportError(error instanceof Error ? error.message : 'Could not read that file.');
     }
@@ -128,7 +124,7 @@ export default function ScopeOfWorksPage() {
       <div className="mb-6">
         <h2 className="text-lg font-semibold text-slate-900">Scope of Works</h2>
         <p className="text-sm text-slate-500 mt-0.5">
-          Filled automatically from Simpro. You can also paste or upload a quote — layout is kept, device schedules and commercial costs are removed.
+          Filled automatically from Simpro. You can also paste or upload a PDF, Word or HTML quote — layout is kept, device schedules and commercial costs are removed.
         </p>
       </div>
 
@@ -144,7 +140,7 @@ export default function ScopeOfWorksPage() {
         <input
           ref={fileRef}
           type="file"
-          accept=".html,.htm,.txt,text/html,text/plain"
+          accept=".pdf,.doc,.docx,.html,.htm,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/html,text/plain"
           className="hidden"
           onChange={event => {
             const file = event.target.files?.[0];
@@ -159,7 +155,7 @@ export default function ScopeOfWorksPage() {
           className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
         >
           {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileUp className="w-4 h-4" />}
-          Import HTML
+          Import PDF / Word
         </button>
         <button
           type="button"
@@ -226,7 +222,7 @@ export default function ScopeOfWorksPage() {
         onSave={() => void saveScope()}
         saving={saving}
         placeholder="Enter Scope of Works here, or paste a quote above…"
-        emptyHint="No Scope of Works yet. Import from Simpro when creating the project, or paste/upload a quote here."
+        emptyHint="No Scope of Works yet. Import from Simpro when creating the project, or upload a PDF/Word quote here."
         extraAction={{
           label: 'Remove schedule & costs',
           onClick: stripExisting,
