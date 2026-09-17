@@ -1077,6 +1077,7 @@ export default function ProjectSystemsPage() {
           device={editDevice}
           productModels={productModels}
           projectSystemNames={projectSystemNames}
+          projectSystems={projectSystems}
           onClose={() => setEditDevice(null)}
           onSave={() => { setEditDevice(null); fetchDevices(); }}
         />

@@ -5,7 +5,14 @@ import { supabase } from '../lib/supabase';
 import { groupDevices, getGroupRowKey, type GroupedEquipment } from '../lib/deviceGrouping';
 import { fetchProjectDevices } from '../lib/fetchProjectDevices';
 import { loadProjectSystemsForProject } from '../lib/projectSystemsDb';
-import { deriveProjectSystems, getCategoryStyle, notifyProjectDevicesChanged } from '../lib/systems';
+import { resolveSystemAssignment } from '../lib/documentProjectSystems';
+import { getDeviceProductDescription } from '../lib/deviceProductFields';
+import {
+  deriveProjectSystems,
+  getCategoryStyle,
+  LEGACY_SYSTEM_TYPE_NAMES,
+  notifyProjectDevicesChanged,
+} from '../lib/systems';
 import { buildPrefixCounters, updateEquipmentGroup } from '../lib/deviceProjectEdits';
 import { MAX_DEVICES_PER_LINE } from '../lib/devicePersistConstants';
 import { Device, ProjectSystemRecord } from '../types';
@@ -36,6 +43,33 @@ function systemBadgeClass(systemName: string | null): string {
   return SYSTEM_TYPE_COLORS[systemName] ?? 'bg-slate-100 text-slate-700 border-slate-200';
 }
 
+function SystemTypeSelect({
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  value: string | null;
+  options: string[];
+  disabled?: boolean;
+  onChange: (next: string) => void;
+}) {
+  const names = value && !options.includes(value) ? [value, ...options] : options;
+  return (
+    <select
+      className={`text-xs font-medium px-2 py-1.5 rounded-lg border w-full min-w-[9rem] ${systemBadgeClass(value)}`}
+      value={value ?? ''}
+      disabled={disabled}
+      onChange={event => onChange(event.target.value)}
+    >
+      {!(value ?? '') && <option value="">Unnamed System</option>}
+      {names.map(name => (
+        <option key={name} value={name}>{name}</option>
+      ))}
+    </select>
+  );
+}
+
 interface DeviceRow {
   device: Device;
   children: DeviceRow[];
@@ -58,7 +92,8 @@ export default function DeviceSchedulePage() {
   const [editGroup, setEditGroup] = useState<GroupedEquipment | null>(null);
   const [editDevice, setEditDevice] = useState<Device | null>(null);
   const [qtyDrafts, setQtyDrafts] = useState<Record<string, string>>({});
-  const [savingQtyKey, setSavingQtyKey] = useState<string | null>(null);
+  const [descDrafts, setDescDrafts] = useState<Record<string, string>>({});
+  const [savingRowKey, setSavingRowKey] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   React.useEffect(() => {
@@ -85,6 +120,15 @@ export default function DeviceSchedulePage() {
     () => deriveProjectSystems(devices, systemRows),
     [devices, systemRows],
   );
+
+  const systemTypeOptions = useMemo(() => {
+    const names = new Set<string>(LEGACY_SYSTEM_TYPE_NAMES);
+    for (const system of projectSystems) {
+      const name = system.name.trim();
+      if (name) names.add(name);
+    }
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [projectSystems]);
 
   const pendingCount = useMemo(() => {
     return devices.filter((d) => d.status === 'pending_review').length;
@@ -255,10 +299,10 @@ export default function DeviceSchedulePage() {
       });
       return;
     }
-    setSavingQtyKey(key);
+    setSavingRowKey(key);
     setSaveError(null);
     const error = await updateEquipmentGroup(projectIdNum, group, { quantity: parsed }, { ...prefixCounters });
-    setSavingQtyKey(null);
+    setSavingRowKey(null);
     if (error) {
       setSaveError(error);
       return;
@@ -268,6 +312,106 @@ export default function DeviceSchedulePage() {
       delete next[key];
       return next;
     });
+    await fetchDevices();
+  };
+
+  const clearDraft = (setter: React.Dispatch<React.SetStateAction<Record<string, string>>>, key: string) => {
+    setter(current => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  };
+
+  const commitGroupSystemType = async (group: GroupedEquipment, nextName: string) => {
+    if (!projectIdNum) return;
+    if ((group.system_type ?? '') === nextName) return;
+    const key = getGroupRowKey(group);
+    setSavingRowKey(key);
+    setSaveError(null);
+    const error = await updateEquipmentGroup(
+      projectIdNum,
+      group,
+      resolveSystemAssignment(projectSystems, nextName),
+      { ...prefixCounters },
+    );
+    setSavingRowKey(null);
+    if (error) {
+      setSaveError(error);
+      return;
+    }
+    await fetchDevices();
+  };
+
+  const commitGroupDescription = async (group: GroupedEquipment) => {
+    if (!projectIdNum) return;
+    const key = getGroupRowKey(group);
+    const raw = descDrafts[key];
+    if (raw === undefined) return;
+    const next = raw.trim();
+    const current = group.description?.trim() ?? '';
+    if (next === current) {
+      clearDraft(setDescDrafts, key);
+      return;
+    }
+    setSavingRowKey(key);
+    setSaveError(null);
+    const error = await updateEquipmentGroup(
+      projectIdNum,
+      group,
+      { model_name: next || null },
+      { ...prefixCounters },
+    );
+    setSavingRowKey(null);
+    if (error) {
+      setSaveError(error);
+      return;
+    }
+    clearDraft(setDescDrafts, key);
+    await fetchDevices();
+  };
+
+  const commitDeviceSystemType = async (device: Device, nextName: string) => {
+    if ((device.system_type ?? '') === nextName) return;
+    const key = `device:${device.id}`;
+    setSavingRowKey(key);
+    setSaveError(null);
+    const { error } = await supabase
+      .from('devices')
+      .update(resolveSystemAssignment(projectSystems, nextName))
+      .eq('id', device.id);
+    setSavingRowKey(null);
+    if (error) {
+      setSaveError(error.message);
+      return;
+    }
+    notifyProjectDevicesChanged();
+    await fetchDevices();
+  };
+
+  const commitDeviceDescription = async (device: Device) => {
+    const key = `device:${device.id}`;
+    const raw = descDrafts[key];
+    if (raw === undefined) return;
+    const next = raw.trim();
+    const current = getDeviceProductDescription(device)?.trim() ?? '';
+    if (next === current) {
+      clearDraft(setDescDrafts, key);
+      return;
+    }
+    setSavingRowKey(key);
+    setSaveError(null);
+    const { error } = await supabase
+      .from('devices')
+      .update({ model_name: next || null })
+      .eq('id', device.id);
+    setSavingRowKey(null);
+    if (error) {
+      setSaveError(error.message);
+      return;
+    }
+    clearDraft(setDescDrafts, key);
+    notifyProjectDevicesChanged();
     await fetchDevices();
   };
 
@@ -332,13 +476,30 @@ export default function DeviceSchedulePage() {
                 }} />
               )}
               <span className="font-semibold text-gray-900">{device.device_name}</span>
-              <span className={`text-xs px-2 py-1 rounded border ${systemBadgeClass(device.system_type)}`}>
-                {device.system_type ?? 'Unnamed System'}
-              </span>
+              <SystemTypeSelect
+                value={device.system_type}
+                options={systemTypeOptions}
+                disabled={savingRowKey === `device:${device.id}`}
+                onChange={next => void commitDeviceSystemType(device, next)}
+              />
               {isOrphan && (
                 <AlertCircle size={16} className="text-yellow-500" title="Parent device not found" />
               )}
             </div>
+          </td>
+          <td className="px-4 py-3">
+            <input
+              type="text"
+              placeholder="Description"
+              className="w-full min-w-[10rem] border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-900"
+              value={descDrafts[`device:${device.id}`] ?? getDeviceProductDescription(device) ?? ''}
+              disabled={savingRowKey === `device:${device.id}`}
+              onChange={event => setDescDrafts(current => ({ ...current, [`device:${device.id}`]: event.target.value }))}
+              onBlur={() => void commitDeviceDescription(device)}
+              onKeyDown={event => {
+                if (event.key === 'Enter') event.currentTarget.blur();
+              }}
+            />
           </td>
           <td className="px-4 py-3 text-gray-700">{device.component_type || '-'}</td>
           <td className="px-4 py-3 text-gray-700">{device.mac_address || '-'}</td>
@@ -484,6 +645,12 @@ export default function DeviceSchedulePage() {
         </div>
       )}
 
+      {saveError && (
+        <div className="px-4 py-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg">
+          {saveError}
+        </div>
+      )}
+
       {/* Device Table */}
       {viewMode === 'grouped' ? (
         equipmentGroups.length === 0 ? (
@@ -492,11 +659,6 @@ export default function DeviceSchedulePage() {
           </div>
         ) : (
           <div className="overflow-x-auto bg-white rounded-lg border border-gray-200">
-            {saveError && (
-              <div className="mx-4 mt-4 px-4 py-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg">
-                {saveError}
-              </div>
-            )}
             <table className="w-full">
               <thead>
                 <tr className="bg-gray-100 border-b border-gray-200">
@@ -511,13 +673,27 @@ export default function DeviceSchedulePage() {
                   return (
                     <tr key={rowKey} className="border-b border-gray-200 hover:bg-gray-50">
                       <td className="px-4 py-3">
-                        {row.system_type ? (
-                          <span className={`text-xs px-2 py-1 rounded border ${systemBadgeClass(row.system_type)}`}>
-                            {row.system_type}
-                          </span>
-                        ) : '—'}
+                        <SystemTypeSelect
+                          value={row.system_type}
+                          options={systemTypeOptions}
+                          disabled={savingRowKey === rowKey}
+                          onChange={next => void commitGroupSystemType(row, next)}
+                        />
                       </td>
-                      <td className="px-4 py-3 text-gray-700">{row.description || '—'}</td>
+                      <td className="px-4 py-3">
+                        <input
+                          type="text"
+                          placeholder="Description"
+                          className="w-full min-w-[10rem] border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-900"
+                          value={descDrafts[rowKey] ?? row.description ?? ''}
+                          disabled={savingRowKey === rowKey}
+                          onChange={event => setDescDrafts(current => ({ ...current, [rowKey]: event.target.value }))}
+                          onBlur={() => void commitGroupDescription(row)}
+                          onKeyDown={event => {
+                            if (event.key === 'Enter') event.currentTarget.blur();
+                          }}
+                        />
+                      </td>
                       <td className="px-4 py-3 text-gray-700">{row.manufacturer || '—'}</td>
                       <td className="px-4 py-3 text-gray-700">{row.model_number || '—'}</td>
                       <td className="px-4 py-3">
@@ -527,7 +703,7 @@ export default function DeviceSchedulePage() {
                           max={MAX_DEVICES_PER_LINE}
                           className="w-20 border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-semibold text-gray-900"
                           value={qtyDrafts[rowKey] ?? String(row.quantity)}
-                          disabled={savingQtyKey === rowKey}
+                          disabled={savingRowKey === rowKey}
                           onChange={event => setQtyDrafts(current => ({ ...current, [rowKey]: event.target.value }))}
                           onBlur={() => void commitGroupQuantity(row)}
                           onKeyDown={event => {
@@ -574,6 +750,7 @@ export default function DeviceSchedulePage() {
             <thead>
               <tr className="bg-gray-100 border-b border-gray-200">
                 <th className="px-4 py-3 text-left font-semibold text-gray-900">Device Name</th>
+                <th className="px-4 py-3 text-left font-semibold text-gray-900">Description</th>
                 <th className="px-4 py-3 text-left font-semibold text-gray-900">Type</th>
                 <th className="px-4 py-3 text-left font-semibold text-gray-900">Manufacturer</th>
                 <th className="px-4 py-3 text-left font-semibold text-gray-900">Model</th>
@@ -592,6 +769,7 @@ export default function DeviceSchedulePage() {
           projectId={projectIdNum}
           group={editGroup}
           prefixCounters={prefixCounters}
+          projectSystems={projectSystems}
           onClose={() => setEditGroup(null)}
           onSaved={() => { setEditGroup(null); void fetchDevices(); }}
         />
@@ -601,6 +779,7 @@ export default function DeviceSchedulePage() {
           device={editDevice}
           productModels={productModels}
           projectSystemNames={projectSystems.map(system => system.name)}
+          projectSystems={projectSystems}
           onClose={() => setEditDevice(null)}
           onSave={() => { setEditDevice(null); void fetchDevices(); }}
         />

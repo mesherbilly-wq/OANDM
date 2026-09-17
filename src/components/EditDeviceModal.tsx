@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { X, AlertCircle, Search, CheckCircle, Link as LinkIcon, Unlink } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { resolveSystemAssignment } from '../lib/documentProjectSystems';
+import { LEGACY_SYSTEM_TYPE_NAMES, type ProjectSystem } from '../lib/systems';
 import type { Device, ProductModel } from '../types';
 
 const DEVICE_TYPES = ['Camera', 'Door', 'Door Controller', 'Access Reader', 'Recorder', 'Sensor', 'Intercom', 'Network Switch', 'Other'];
@@ -9,11 +11,12 @@ interface Props {
   device: Device;
   productModels: ProductModel[];
   projectSystemNames?: string[];
+  projectSystems?: Array<Pick<ProjectSystem, 'id' | 'name' | 'category'>>;
   onClose: () => void;
   onSave: (updated?: Device) => void;
 }
 
-export function EditDeviceModal({ device, productModels, projectSystemNames = [], onClose, onSave }: Props) {
+export function EditDeviceModal({ device, productModels, projectSystemNames = [], projectSystems = [], onClose, onSave }: Props) {
   // Resolve initial linked product model
   const initialLinked = useMemo(() =>
     productModels.find(
@@ -64,6 +67,12 @@ export function EditDeviceModal({ device, productModels, projectSystemNames = []
     ).slice(0, 40);
   }, [productModels, pickerSearch]);
 
+  const systemOptions = [...new Set([
+    ...LEGACY_SYSTEM_TYPE_NAMES,
+    ...projectSystems.map(system => system.name.trim()).filter(Boolean),
+    ...projectSystemNames.map(name => name.trim()).filter(Boolean),
+  ])].sort((a, b) => a.localeCompare(b));
+
   const handleLinkModel = (pm: ProductModel) => {
     setLinkedModel(pm);
     setManufacturer(pm.manufacturer ?? '');
@@ -84,8 +93,12 @@ export function EditDeviceModal({ device, productModels, projectSystemNames = []
     setSaving(true);
     setError(null);
 
+    const systemAssignment = projectSystems.length > 0
+      ? resolveSystemAssignment(projectSystems, systemType)
+      : { system_type: systemType.trim() || null };
+
     const updates = {
-      system_type: systemType.trim() || null,
+      ...systemAssignment,
       device_name: deviceName || null,
       device_type: deviceType || null,
       manufacturer: manufacturer || null,
@@ -236,18 +249,15 @@ export function EditDeviceModal({ device, productModels, projectSystemNames = []
 
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1.5">System</label>
-                  <input
-                    list="project-system-names"
-                    value={systemType}
-                    onChange={(e) => setSystemType(e.target.value)}
-                    className={ic}
-                    placeholder="e.g. Level 1 Access Control"
-                  />
-                  <datalist id="project-system-names">
-                    {projectSystemNames.map(name => (
-                      <option key={name} value={name} />
+                  <select value={systemType} onChange={(e) => setSystemType(e.target.value)} className={ic}>
+                    {!systemType && <option value="">Unnamed System</option>}
+                    {systemType && !systemOptions.includes(systemType) && (
+                      <option value={systemType}>{systemType}</option>
+                    )}
+                    {systemOptions.map(name => (
+                      <option key={name} value={name}>{name}</option>
                     ))}
-                  </datalist>
+                  </select>
                 </div>
 
                 <div>

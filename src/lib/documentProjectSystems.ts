@@ -1,6 +1,6 @@
-import type { Device } from '../types';
+import type { Device, SystemCategory } from '../types';
 import type { ProjectSystem } from './systems';
-import { deriveProjectSystems, systemNameToSlug } from './systems';
+import { deriveProjectSystems, legacySystemNameToCategory, systemNameToSlug } from './systems';
 import { loadProjectSystemsForProject } from './projectSystemsDb';
 
 export const PROJECT_WIDE_SYSTEM_KEY = '__project_wide__';
@@ -63,6 +63,22 @@ export function systemAssignmentFields(
   return {
     system_type: system.name,
     project_system_id: system.id ?? null,
+  };
+}
+
+/** Map a chosen system name onto device columns, using a project system row when one exists. */
+export function resolveSystemAssignment(
+  projectSystems: Array<Pick<ProjectSystem, 'id' | 'name' | 'category'>>,
+  systemName: string | null | undefined,
+): { system_type: string | null; project_system_id: number | null; system_category: SystemCategory | null } {
+  const name = systemName?.trim();
+  if (!name) {
+    return { system_type: null, project_system_id: null, system_category: null };
+  }
+  const matched = projectSystems.find(system => system.name === name);
+  return {
+    ...systemAssignmentFields(matched ?? { name, id: undefined }),
+    system_category: matched ? matched.category ?? null : legacySystemNameToCategory(name),
   };
 }
 

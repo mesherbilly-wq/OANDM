@@ -2,12 +2,15 @@ import React, { useState } from 'react';
 import { AlertCircle, X } from 'lucide-react';
 import type { GroupedEquipment } from '../lib/deviceGrouping';
 import { MAX_DEVICES_PER_LINE } from '../lib/devicePersistConstants';
+import { resolveSystemAssignment } from '../lib/documentProjectSystems';
 import { updateEquipmentGroup, type EquipmentGroupUpdates } from '../lib/deviceProjectEdits';
+import { LEGACY_SYSTEM_TYPE_NAMES, type ProjectSystem } from '../lib/systems';
 
 interface Props {
   projectId: number;
   group: GroupedEquipment;
   prefixCounters: Record<string, number>;
+  projectSystems: Array<Pick<ProjectSystem, 'id' | 'name' | 'category'>>;
   onClose: () => void;
   onSaved: () => void;
 }
@@ -16,9 +19,11 @@ export function EditEquipmentGroupModal({
   projectId,
   group,
   prefixCounters,
+  projectSystems,
   onClose,
   onSaved,
 }: Props) {
+  const [systemType, setSystemType] = useState(group.system_type ?? '');
   const [manufacturer, setManufacturer] = useState(group.manufacturer ?? '');
   const [modelNumber, setModelNumber] = useState(group.model_number ?? '');
   const [description, setDescription] = useState(group.description ?? '');
@@ -32,6 +37,11 @@ export function EditEquipmentGroupModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const systemOptions = [...new Set([
+    ...LEGACY_SYSTEM_TYPE_NAMES,
+    ...projectSystems.map(system => system.name.trim()).filter(Boolean),
+  ])].sort((a, b) => a.localeCompare(b));
+
   const ic = 'w-full border border-slate-300 rounded-lg px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-cyan-500 text-slate-900 bg-white text-sm';
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -41,6 +51,7 @@ export function EditEquipmentGroupModal({
 
     const parsedQty = parseInt(quantity, 10);
     const updates: EquipmentGroupUpdates = {
+      ...resolveSystemAssignment(projectSystems, systemType),
       manufacturer: manufacturer.trim() || null,
       model_number: modelNumber.trim() || null,
       model_name: description.trim() || null,
@@ -83,6 +94,19 @@ export function EditEquipmentGroupModal({
                 <p className="text-sm">{error}</p>
               </div>
             )}
+
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1.5">System Type</label>
+              <select value={systemType} onChange={event => setSystemType(event.target.value)} className={ic}>
+                {!systemType && <option value="">Unnamed System</option>}
+                {systemType && !systemOptions.includes(systemType) && (
+                  <option value={systemType}>{systemType}</option>
+                )}
+                {systemOptions.map(name => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+            </div>
 
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1.5">Description</label>

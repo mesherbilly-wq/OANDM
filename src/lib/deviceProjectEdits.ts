@@ -52,6 +52,8 @@ export interface EquipmentGroupUpdates {
   notes?: string | null;
   ai_confidence?: number | null;
   quantity?: number;
+  system_type?: string | null;
+  project_system_id?: number | null;
   system_category?: SystemCategory | null;
 }
 
@@ -71,6 +73,8 @@ export async function updateEquipmentGroup(
   if (updates.location !== undefined) fieldUpdates.location = updates.location;
   if (updates.notes !== undefined) fieldUpdates.notes = updates.notes;
   if (updates.ai_confidence !== undefined) fieldUpdates.ai_confidence = updates.ai_confidence;
+  if (updates.system_type !== undefined) fieldUpdates.system_type = updates.system_type;
+  if (updates.project_system_id !== undefined) fieldUpdates.project_system_id = updates.project_system_id;
   if (updates.system_category !== undefined) fieldUpdates.system_category = updates.system_category;
 
   if (Object.keys(fieldUpdates).length > 0) {
@@ -85,7 +89,10 @@ export async function updateEquipmentGroup(
 
   const targetQty = clampLineQuantity(updates.quantity);
   const currentQty = group.devices.length;
-  if (targetQty === currentQty) return null;
+  if (targetQty === currentQty) {
+    if (Object.keys(fieldUpdates).length > 0) notifyProjectDevicesChanged();
+    return null;
+  }
 
   if (targetQty < currentQty) {
     const excessIds = group.devices.slice(targetQty).map(device => device.id);
@@ -95,24 +102,29 @@ export async function updateEquipmentGroup(
   }
 
   const template = group.devices[0];
-  const category = resolveDeviceCategory(template) ?? 'Other';
-  const prefix = getDevicePrefix(category, template.device_type ?? '');
+  const nextSystemType = updates.system_type !== undefined ? updates.system_type : template.system_type;
+  const nextSystemCategory = updates.system_category !== undefined ? updates.system_category : template.system_category;
+  const category = resolveDeviceCategory({
+    system_type: nextSystemType,
+    system_category: nextSystemCategory,
+  }) ?? 'Other';
+  const prefix = getDevicePrefix(category, (updates.device_type !== undefined ? updates.device_type : template.device_type) ?? '');
   const newRows: Record<string, unknown>[] = [];
 
   for (let unit = currentQty; unit < targetQty; unit += 1) {
     prefixCounters[prefix] = (prefixCounters[prefix] ?? 0) + 1;
     newRows.push({
       project_id: projectId,
-      project_system_id: template.project_system_id,
-      system_type: template.system_type,
-      system_category: template.system_category,
-      device_type: template.device_type,
+      project_system_id: updates.project_system_id !== undefined ? updates.project_system_id : template.project_system_id,
+      system_type: nextSystemType,
+      system_category: nextSystemCategory,
+      device_type: updates.device_type !== undefined ? updates.device_type : template.device_type,
       device_name: `${prefix}-${String(prefixCounters[prefix]).padStart(3, '0')}`,
-      manufacturer: template.manufacturer,
-      model_number: template.model_number,
-      model_name: template.model_name,
-      location: template.location,
-      notes: template.notes,
+      manufacturer: updates.manufacturer !== undefined ? updates.manufacturer : template.manufacturer,
+      model_number: updates.model_number !== undefined ? updates.model_number : template.model_number,
+      model_name: updates.model_name !== undefined ? updates.model_name : template.model_name,
+      location: updates.location !== undefined ? updates.location : template.location,
+      notes: updates.notes !== undefined ? updates.notes : template.notes,
       matched: template.matched,
       datasheet_found: template.datasheet_found,
       status: template.status,
