@@ -21,7 +21,7 @@ const PROJECT_MODULES = [
   { name: 'Technical Docs',     slug: 'technical',     icon: Wifi },
   { name: 'Commissioning',      slug: 'commissioning',  icon: ShieldAlert },
   { name: 'Handover',           slug: 'handover',       icon: Award },
-  { name: 'As Fitted Drawings', slug: 'as-fitted',      icon: Layers },
+  { name: 'As Fitted',          slug: 'as-fitted',      icon: Layers },
   { name: 'Datasheets',         slug: 'datasheets',    icon: BookOpen },
   { name: 'O&M Builder',        slug: 'om-builder',    icon: FolderOpen },
   { name: 'Export Centre',      slug: 'export',        icon: Download },

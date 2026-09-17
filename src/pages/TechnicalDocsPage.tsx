@@ -4,14 +4,17 @@ import { supabase } from '../lib/supabase';
 import {
   loadDocumentProjectSystems,
   mergeDocumentSystemNames,
+  systemAssignmentFields,
 } from '../lib/documentProjectSystems';
 import { getCategoryStyle, type ProjectSystem } from '../lib/systems';
 import {
   Upload, Download, X, Check, Eye, EyeOff, Trash2, Settings2,
   GripVertical, CheckCircle, AlertCircle, Table2, FileText,
+  Plus, Pencil, ExternalLink, ClipboardCopy,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
+import migration039Sql from '../../supabase/migrations/20260917120000_039_tech_doc_documents.sql?raw';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -26,12 +29,46 @@ interface TechDocRow {
   id: number;
   row_index: number;
   data: Record<string, string>;
+  document_id?: number | null;
 }
 
-interface SystemState {
+interface TechDocDocument {
+  id: number;
+  title: string;
+  document_type: string | null;
+  notes: string | null;
+  system_type: string | null;
+  file_name: string | null;
+  file_url: string | null;
+  file_size: number | null;
   rows: TechDocRow[];
   colConfig: ColConfig[];
   configId: number | null;
+}
+
+interface PendingDescribe {
+  file: File;
+  title: string;
+  document_type: string;
+  system_name: string;
+  notes: string;
+}
+
+const TECH_DOC_TYPES = [
+  'Door Schedule',
+  'Camera Schedule',
+  'IP Address Schedule',
+  'Port / Patch Schedule',
+  'Cable Schedule',
+  'Device Configuration',
+  'Network Table',
+  'Other',
+];
+
+const ic = 'w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 bg-white text-slate-900';
+
+function missingTable(error: { message?: string } | null | undefined): boolean {
+  return /does not exist|schema cache|document_id/i.test(error?.message ?? '');
 }
 
 interface ExtractedTable {
@@ -306,42 +343,51 @@ export default function TechnicalDocsPage() {
 
   const [projectSystems, setProjectSystems] = useState<ProjectSystem[]>([]);
   const [activeSystem, setActiveSystem] = useState<string>('');
-  const [systemState, setSystemState] = useState<Record<string, SystemState>>({});
+  const [documents, setDocuments] = useState<TechDocDocument[]>([]);
   const [loading, setLoading] = useState(true);
+  const [needsMigration, setNeedsMigration] = useState(false);
+  const [migrationCopied, setMigrationCopied] = useState(false);
   const [modal, setModal] = useState<ModalState>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [pdfParsing, setPdfParsing] = useState(false);
+  const [pendingQueue, setPendingQueue] = useState<PendingDescribe[]>([]);
+  const [pendingIndex, setPendingIndex] = useState(0);
 
   // Import wizard state
   const [importColCfg, setImportColCfg] = useState<ColConfig[]>([]);
   const [importing, setImporting] = useState(false);
+  const [pendingMeta, setPendingMeta] = useState<PendingDescribe | null>(null);
 
   // Cell editing
   const [editingCell, setEditingCell] = useState<{ rowId: number; key: string } | null>(null);
   const [cellValue, setCellValue] = useState('');
   const [savedCell, setSavedCell] = useState<{ rowId: number; key: string } | null>(null);
+  const [expandedDocId, setExpandedDocId] = useState<number | null>(null);
+  const [editingDoc, setEditingDoc] = useState<TechDocDocument | null>(null);
 
   // Column config editing
   const [editingColCfg, setEditingColCfg] = useState<ColConfig[]>([]);
   const [savingCols, setSavingCols] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const importSystemRef = useRef<string>('');
 
-  const activeSystemMeta = useMemo(
-    () => projectSystems.find(system => system.name === activeSystem) ?? null,
-    [projectSystems, activeSystem],
+  const visibleDocuments = useMemo(
+    () => documents.filter(doc => !activeSystem || doc.system_type === activeSystem),
+    [documents, activeSystem],
   );
+
+  const currentPending = pendingQueue[pendingIndex] ?? null;
 
   // ── Load ────────────────────────────────────────────────────────────────────
 
   const load = useCallback(async () => {
     if (!pid) return;
     setLoading(true);
-    const [{ data: rowData }, { data: cfgData }, { data: devData }] = await Promise.all([
+    const [{ data: rowData, error: rowErr }, { data: cfgData }, { data: devData }, docsRes] = await Promise.all([
       supabase.from('tech_doc_rows').select('*').eq('project_id', pid).order('system_type').order('row_index'),
       supabase.from('tech_doc_column_configs').select('*').eq('project_id', pid),
       supabase.from('devices').select('id, project_id, system_type, system_category, project_system_id').eq('project_id', pid),
+      supabase.from('tech_doc_documents').select('*').eq('project_id', pid).order('created_at', { ascending: false }),
     ]);
 
     const devices = devData ?? [];
@@ -350,27 +396,71 @@ export default function TechnicalDocsPage() {
       ...new Set([
         ...(rowData ?? []).map((row: { system_type: string }) => row.system_type),
         ...(cfgData ?? []).map((cfg: { system_type: string }) => cfg.system_type),
+        ...(docsRes.data ?? []).map((doc: { system_type: string | null }) => doc.system_type),
       ].filter(Boolean)),
     ] as string[];
     const systems = mergeDocumentSystemNames(baseSystems, extraNames);
     setProjectSystems(systems);
 
-    const state: Record<string, SystemState> = {};
-    for (const system of systems) {
-      const rows = (rowData ?? []).filter((row: { system_type: string }) => row.system_type === system.name) as TechDocRow[];
-      const cfg = (cfgData ?? []).find((c: { system_type: string }) => c.system_type === system.name);
-      state[system.name] = {
-        rows,
+    if (docsRes.error && missingTable(docsRes.error)) {
+      setNeedsMigration(true);
+    } else {
+      setNeedsMigration(false);
+    }
+
+    const rows = (rowData ?? []) as Array<TechDocRow & { system_type: string; document_id?: number | null }>;
+    const cfgs = cfgData ?? [];
+    const rawDocs = docsRes.data ?? [];
+
+    const built: TechDocDocument[] = rawDocs.map((doc: any) => {
+      const docRows = rows.filter(row => row.document_id === doc.id);
+      const cfg = cfgs.find((c: { document_id?: number | null }) => c.document_id === doc.id)
+        ?? (docRows.length === 0 ? cfgs.find((c: { system_type: string; document_id?: number | null }) => c.system_type === doc.system_type && !c.document_id) : undefined);
+      return {
+        id: doc.id,
+        title: doc.title || doc.file_name || 'Technical document',
+        document_type: doc.document_type ?? null,
+        notes: doc.notes ?? null,
+        system_type: doc.system_type ?? null,
+        file_name: doc.file_name ?? null,
+        file_url: doc.file_url ?? null,
+        file_size: doc.file_size ?? null,
+        rows: docRows,
         colConfig: (cfg?.columns as ColConfig[]) ?? [],
         configId: cfg?.id ?? null,
       };
-    }
-    setSystemState(state);
-    setActiveSystem(current => {
-      if (current && systems.some(system => system.name === current)) return current;
-      return systems[0]?.name ?? '';
     });
+
+    const orphanRows = rows.filter(row => !row.document_id || !built.some(doc => doc.id === row.document_id));
+    if (orphanRows.length > 0) {
+      const bySystem = new Map<string, typeof orphanRows>();
+      for (const row of orphanRows) {
+        const key = row.system_type || 'Technical Documentation';
+        const bucket = bySystem.get(key) ?? [];
+        bucket.push(row);
+        bySystem.set(key, bucket);
+      }
+      for (const [system, sysRows] of bySystem) {
+        const cfg = cfgs.find((c: { system_type: string; document_id?: number | null }) => c.system_type === system && !c.document_id);
+        built.push({
+          id: -Math.abs(sysRows[0]?.id ?? Date.now()),
+          title: `${system} table`,
+          document_type: 'Imported table',
+          notes: needsMigration ? 'Paste 039 SQL to keep multiple named spreadsheets.' : null,
+          system_type: system,
+          file_name: null,
+          file_url: null,
+          file_size: null,
+          rows: sysRows,
+          colConfig: (cfg?.columns as ColConfig[]) ?? [],
+          configId: cfg?.id ?? null,
+        });
+      }
+    }
+
+    setDocuments(built);
     setLoading(false);
+    void rowErr;
   }, [pid]);
 
   useEffect(() => { load(); }, [load]);
@@ -378,34 +468,47 @@ export default function TechnicalDocsPage() {
   // ── File pick handler ────────────────────────────────────────────────────────
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files ?? []);
     e.target.value = '';
-    if (!file) return;
+    if (files.length === 0) return;
+    const queued: PendingDescribe[] = files.map(file => ({
+      file,
+      title: file.name.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' '),
+      document_type: '',
+      system_name: activeSystem || projectSystems[0]?.name || '',
+      notes: '',
+    }));
+    setPdfError(null);
+    setPendingQueue(queued);
+    setPendingIndex(0);
+  };
 
+  const updateCurrentPending = (patch: Partial<PendingDescribe>) => {
+    setPendingQueue(prev => prev.map((item, i) => i === pendingIndex ? { ...item, ...patch } : item));
+  };
+
+  const startParseFromDescribe = async () => {
+    const pending = pendingQueue[pendingIndex];
+    if (!pending) return;
+    const file = pending.file;
+    setPendingMeta(pending);
     setPdfError(null);
     const isPdf = file.name.toLowerCase().endsWith('.pdf');
-
     if (isPdf) {
       setPdfParsing(true);
       try {
         const tables = await extractTablesFromPDF(file);
         if (tables.length === 0) {
-          setPdfError(
-            'Could not read table automatically. Please upload CSV/Excel or manually copy and paste the table.'
-          );
+          setPdfError('Could not read table automatically. Please upload CSV/Excel or copy and paste the table.');
         } else if (tables.length === 1) {
-          // Go straight to import wizard
           const table = tables[0];
-          const colCfg: ColConfig[] = table.headers.map((h, i) => ({
-            key: h, display_name: h, visible: true, order: i,
-          }));
-          setImportColCfg(colCfg);
-          setModal({ type: 'import', system: importSystemRef.current, rawHeaders: table.headers, previewRows: table.rows, file });
+          setImportColCfg(table.headers.map((h, i) => ({ key: h, display_name: h, visible: true, order: i })));
+          setModal({ type: 'import', system: pending.system_name, rawHeaders: table.headers, previewRows: table.rows, file });
         } else {
-          setModal({ type: 'pdf_select', system: importSystemRef.current, file, tables });
+          setModal({ type: 'pdf_select', system: pending.system_name, file, tables });
         }
-      } catch (err: any) {
-        setPdfError('Could not read table automatically. Please upload CSV/Excel or manually copy and paste the table.');
+      } catch {
+        setPdfError('Could not read table automatically. Please upload CSV/Excel or copy and paste the table.');
       } finally {
         setPdfParsing(false);
       }
@@ -413,14 +516,24 @@ export default function TechnicalDocsPage() {
       try {
         const { headers, rows } = await parseNonPdfFile(file);
         if (headers.length === 0) { alert('No columns found in file.'); return; }
-        const colCfg: ColConfig[] = headers.map((h, i) => ({
-          key: h, display_name: h, visible: true, order: i,
-        }));
-        setImportColCfg(colCfg);
-        setModal({ type: 'import', system: importSystemRef.current, rawHeaders: headers, previewRows: rows, file });
+        setImportColCfg(headers.map((h, i) => ({ key: h, display_name: h, visible: true, order: i })));
+        setModal({ type: 'import', system: pending.system_name, rawHeaders: headers, previewRows: rows, file });
       } catch (err: any) {
         alert(err.message ?? 'Failed to parse file.');
       }
+    }
+  };
+
+  const advanceQueue = () => {
+    if (pendingIndex + 1 < pendingQueue.length) {
+      setPendingIndex(i => i + 1);
+      setModal(null);
+      setPendingMeta(null);
+    } else {
+      setPendingQueue([]);
+      setPendingIndex(0);
+      setPendingMeta(null);
+      setModal(null);
     }
   };
 
@@ -436,33 +549,64 @@ export default function TechnicalDocsPage() {
     }
   };
 
+  const uploadOriginalFile = async (file: File): Promise<{ file_name: string; file_url: string; file_size: number } | null> => {
+    if (!pid) return null;
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const path = `tech-docs/${pid}/${Date.now()}_${safeName}`;
+    const { error } = await supabase.storage.from('om-uploads').upload(path, file, { upsert: false });
+    if (error) return { file_name: file.name, file_url: '', file_size: file.size };
+    const { data: { publicUrl } } = supabase.storage.from('om-uploads').getPublicUrl(path);
+    return { file_name: file.name, file_url: publicUrl, file_size: file.size };
+  };
+
   // ── Import confirm ───────────────────────────────────────────────────────────
 
   const confirmImport = async () => {
     if (modal?.type !== 'import' || !pid) return;
-    const { system, previewRows } = modal;
+    const meta = pendingMeta ?? currentPending;
+    const { system, previewRows, file } = modal;
+    const systemName = meta?.system_name || system;
+    const selectedSystem = projectSystems.find(s => s.name === systemName) ?? null;
     setImporting(true);
     try {
-      await supabase.from('tech_doc_rows').delete().eq('project_id', pid).eq('system_type', system);
-
+      const stored = await uploadOriginalFile(file);
+      const docPayload = {
+        project_id: pid,
+        title: (meta?.title || file.name).trim(),
+        document_type: meta?.document_type || null,
+        notes: meta?.notes?.trim() || null,
+        file_name: stored?.file_name ?? file.name,
+        file_url: stored?.file_url || null,
+        file_size: stored?.file_size ?? file.size,
+        ...systemAssignmentFields(selectedSystem ?? { name: systemName, id: undefined }),
+      };
+      const { data: inserted, error: docErr } = await supabase.from('tech_doc_documents').insert(docPayload).select('id').single();
+      if (docErr) {
+        if (missingTable(docErr)) {
+          setNeedsMigration(true);
+          throw new Error('Paste 039 SQL in Supabase, then import again so each spreadsheet can be named and kept.');
+        }
+        throw docErr;
+      }
+      const documentId = inserted?.id as number;
       if (previewRows.length > 0) {
         const inserts = previewRows.map((data, i) => ({
-          project_id: pid, system_type: system, row_index: i, data,
+          project_id: pid, system_type: systemName, row_index: i, data, document_id: documentId,
         }));
         const { error } = await supabase.from('tech_doc_rows').insert(inserts);
         if (error) throw error;
       }
-
-      const existingCfgId = systemState[system]?.configId;
-      const colData = { project_id: pid, system_type: system, columns: importColCfg, updated_at: new Date().toISOString() };
-      if (existingCfgId) {
-        await supabase.from('tech_doc_column_configs').update(colData).eq('id', existingCfgId);
-      } else {
-        await supabase.from('tech_doc_column_configs').insert(colData);
-      }
-
-      setModal(null);
+      const colData = {
+        project_id: pid,
+        system_type: systemName,
+        columns: importColCfg,
+        document_id: documentId,
+        updated_at: new Date().toISOString(),
+      };
+      const { error: cfgErr } = await supabase.from('tech_doc_column_configs').insert(colData);
+      if (cfgErr && !missingTable(cfgErr)) throw cfgErr;
       await load();
+      advanceQueue();
     } catch (err: any) {
       alert('Import failed: ' + err.message);
     } finally { setImporting(false); }
@@ -478,16 +622,15 @@ export default function TechnicalDocsPage() {
   const saveCell = async () => {
     if (!editingCell) return;
     const { rowId, key } = editingCell;
-    const row = systemState[activeSystem]?.rows.find(r => r.id === rowId);
+    const row = documents.flatMap(doc => doc.rows).find(r => r.id === rowId);
     if (!row) { setEditingCell(null); return; }
     const newData = { ...row.data, [key]: cellValue };
     const { error } = await supabase.from('tech_doc_rows').update({ data: newData }).eq('id', rowId);
     if (error) { alert('Save failed: ' + error.message); return; }
-    setSystemState(prev => {
-      const sys = prev[activeSystem];
-      if (!sys) return prev;
-      return { ...prev, [activeSystem]: { ...sys, rows: sys.rows.map(r => r.id === rowId ? { ...r, data: newData } : r) } };
-    });
+    setDocuments(prev => prev.map(doc => ({
+      ...doc,
+      rows: doc.rows.map(r => r.id === rowId ? { ...r, data: newData } : r),
+    })));
     setSavedCell(editingCell);
     setTimeout(() => setSavedCell(null), 2000);
     setEditingCell(null);
@@ -498,46 +641,76 @@ export default function TechnicalDocsPage() {
     else if (e.key === 'Escape') setEditingCell(null);
   };
 
-  // ── Delete row ───────────────────────────────────────────────────────────────
+  // ── Delete row / document ────────────────────────────────────────────────────
 
   const deleteRow = async (rowId: number) => {
     if (!confirm('Delete this row?')) return;
     await supabase.from('tech_doc_rows').delete().eq('id', rowId);
-    setSystemState(prev => {
-      const sys = prev[activeSystem];
-      if (!sys) return prev;
-      return { ...prev, [activeSystem]: { ...sys, rows: sys.rows.filter(r => r.id !== rowId) } };
-    });
+    setDocuments(prev => prev.map(doc => ({ ...doc, rows: doc.rows.filter(r => r.id !== rowId) })));
   };
 
-  // ── Clear system ─────────────────────────────────────────────────────────────
+  const deleteDocument = async (doc: TechDocDocument) => {
+    if (!confirm(`Delete "${doc.title}"?`)) return;
+    if (doc.id > 0) {
+      await supabase.from('tech_doc_rows').delete().eq('document_id', doc.id);
+      await supabase.from('tech_doc_column_configs').delete().eq('document_id', doc.id);
+      await supabase.from('tech_doc_documents').delete().eq('id', doc.id);
+      if (doc.file_url) {
+        try {
+          const url = new URL(doc.file_url);
+          const storagePath = decodeURIComponent(url.pathname).split('/om-uploads/')[1];
+          if (storagePath) await supabase.storage.from('om-uploads').remove([storagePath]);
+        } catch { /* ignore */ }
+      }
+    } else if (doc.system_type && pid) {
+      await supabase.from('tech_doc_rows').delete().eq('project_id', pid).eq('system_type', doc.system_type);
+    }
+    await load();
+  };
 
-  const clearSystem = async (system: string) => {
-    if (!pid || !confirm(`Clear all imported data for ${system}?`)) return;
-    await supabase.from('tech_doc_rows').delete().eq('project_id', pid).eq('system_type', system);
-    setSystemState(prev => ({ ...prev, [system]: { ...prev[system]!, rows: [] } }));
+  const saveDocumentMeta = async () => {
+    if (!editingDoc || editingDoc.id <= 0) return;
+    const selectedSystem = projectSystems.find(s => s.name === editingDoc.system_type) ?? null;
+    const fields = systemAssignmentFields(selectedSystem ?? (editingDoc.system_type ? { name: editingDoc.system_type, id: undefined } : null));
+    await supabase.from('tech_doc_documents').update({
+      title: editingDoc.title,
+      document_type: editingDoc.document_type,
+      notes: editingDoc.notes,
+      ...fields,
+    }).eq('id', editingDoc.id);
+    if (fields.system_type) {
+      await supabase.from('tech_doc_rows').update({ system_type: fields.system_type }).eq('document_id', editingDoc.id);
+    }
+    setEditingDoc(null);
+    await load();
   };
 
   // ── Column config ────────────────────────────────────────────────────────────
 
-  const openColConfig = (system: string) => {
-    setEditingColCfg([...( systemState[system]?.colConfig ?? [])]);
-    setModal({ type: 'columns', system });
+  const openColConfig = (doc: TechDocDocument) => {
+    setEditingColCfg([...(doc.colConfig ?? [])]);
+    setModal({ type: 'columns', system: String(doc.id) });
   };
 
   const saveColConfig = async () => {
     if (modal?.type !== 'columns' || !pid) return;
-    const { system } = modal;
+    const doc = documents.find(d => String(d.id) === modal.system);
+    if (!doc) return;
     setSavingCols(true);
     try {
-      const cfgId = systemState[system]?.configId;
-      const payload = { project_id: pid, system_type: system, columns: editingColCfg, updated_at: new Date().toISOString() };
-      if (cfgId) {
-        await supabase.from('tech_doc_column_configs').update(payload).eq('id', cfgId);
+      const payload = {
+        project_id: pid,
+        system_type: doc.system_type,
+        columns: editingColCfg,
+        document_id: doc.id > 0 ? doc.id : null,
+        updated_at: new Date().toISOString(),
+      };
+      if (doc.configId) {
+        await supabase.from('tech_doc_column_configs').update(payload).eq('id', doc.configId);
       } else {
         await supabase.from('tech_doc_column_configs').insert(payload);
       }
-      setSystemState(prev => ({ ...prev, [system]: { ...prev[system]!, colConfig: editingColCfg } }));
+      setDocuments(prev => prev.map(d => d.id === doc.id ? { ...d, colConfig: editingColCfg } : d));
       setModal(null);
     } catch (err: any) {
       alert('Save failed: ' + err.message);
@@ -546,25 +719,30 @@ export default function TechnicalDocsPage() {
 
   // ── Export CSV ────────────────────────────────────────────────────────────────
 
-  const exportCSV = (system: string) => {
-    const state = systemState[system];
-    if (!state || state.rows.length === 0) return;
-    const cols = state.colConfig.filter(c => c.visible).sort((a, b) => a.order - b.order);
+  const exportCSV = (doc: TechDocDocument) => {
+    if (doc.rows.length === 0) return;
+    const cols = doc.colConfig.filter(c => c.visible).sort((a, b) => a.order - b.order);
     if (cols.length === 0) return;
-    const csv = [cols.map(c => c.display_name), ...state.rows.map(r => cols.map(c => r.data[c.key] ?? ''))].map(row =>
+    const csv = [cols.map(c => c.display_name), ...doc.rows.map(r => cols.map(c => r.data[c.key] ?? ''))].map(row =>
       row.map(c => { const s = String(c); return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s; }).join(',')
     ).join('\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
-    a.download = `tech-docs-${system.toLowerCase().replace(/\s+/g, '-')}.csv`;
+    a.download = `${(doc.title || 'tech-doc').toLowerCase().replace(/\s+/g, '-')}.csv`;
     a.click();
   };
 
-  // ── Render ────────────────────────────────────────────────────────────────────
+  const copyMigration = async () => {
+    try {
+      await navigator.clipboard.writeText(migration039Sql);
+      setMigrationCopied(true);
+      window.setTimeout(() => setMigrationCopied(false), 2500);
+    } catch {
+      alert('Clipboard is blocked. Copy supabase/migrations/20260917120000_039_tech_doc_documents.sql manually.');
+    }
+  };
 
-  const current = systemState[activeSystem];
-  const visibleCols = (current?.colConfig ?? []).filter(c => c.visible).sort((a, b) => a.order - b.order);
-  const hasData = (current?.rows.length ?? 0) > 0;
+  // ── Render ────────────────────────────────────────────────────────────────────
 
   if (loading) {
     return (
@@ -580,38 +758,46 @@ export default function TechnicalDocsPage() {
         ref={fileInputRef}
         type="file"
         accept=".csv,.txt,.xlsx,.xls,.pdf"
+        multiple
         className="hidden"
         onChange={handleFileChange}
       />
 
-      {/* Header */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="font-semibold text-slate-900">Technical Documentation</h2>
-            <p className="text-xs text-slate-500 mt-0.5">Import PDF, CSV, Excel, or TXT files per system — select and rename columns.</p>
+            <p className="text-xs text-slate-500 mt-0.5">Upload spreadsheets, name what each document is, and keep more than one per system.</p>
           </div>
-          <div className="flex items-center gap-1.5 text-xs text-slate-500">
-            <Table2 className="w-3.5 h-3.5" />
-            {projectSystems.filter(system => (systemState[system.name]?.rows.length ?? 0) > 0).length} systems with data
-          </div>
+          <button
+            type="button"
+            onClick={() => { setPdfError(null); fileInputRef.current?.click(); }}
+            disabled={pdfParsing}
+            className="inline-flex items-center gap-2 bg-cyan-600 text-white px-4 py-2 rounded-xl hover:bg-cyan-700 text-sm font-medium disabled:opacity-50"
+          >
+            <Plus className="w-4 h-4" />Add spreadsheet
+          </button>
         </div>
       </div>
 
-      {/* PDF error banner */}
-      {pdfError && (
-        <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
-          <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
-          <div className="flex-1">
-            <p className="text-sm font-medium text-amber-800">{pdfError}</p>
-          </div>
-          <button onClick={() => setPdfError(null)} className="text-amber-400 hover:text-amber-600 flex-shrink-0">
-            <X className="w-4 h-4" />
+      {needsMigration && (
+        <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 space-y-2">
+          <p className="font-semibold">Paste 039 in Supabase to keep multiple named technical documents.</p>
+          <button type="button" onClick={() => void copyMigration()} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-cyan-600 text-white hover:bg-cyan-700">
+            {migrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
+            {migrationCopied ? 'Copied 039 — paste in Supabase' : 'Copy 039 SQL'}
           </button>
         </div>
       )}
 
-      {/* PDF parsing overlay */}
+      {pdfError && (
+        <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+          <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
+          <p className="text-sm font-medium text-amber-800 flex-1">{pdfError}</p>
+          <button onClick={() => setPdfError(null)} className="text-amber-400 hover:text-amber-600"><X className="w-4 h-4" /></button>
+        </div>
+      )}
+
       {pdfParsing && (
         <div className="flex items-center gap-3 bg-cyan-50 border border-cyan-200 rounded-xl px-4 py-3">
           <div className="w-4 h-4 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
@@ -619,13 +805,26 @@ export default function TechnicalDocsPage() {
         </div>
       )}
 
-      {/* System tabs */}
       <div className="flex flex-wrap gap-1.5 bg-white rounded-xl border border-slate-200 shadow-sm px-4 py-3">
         {projectSystems.length === 0 ? (
           <p className="text-sm text-slate-500 py-1">No systems yet — import devices or create systems first.</p>
-        ) : projectSystems.map(system => {
+        ) : (
+          <>
+            <button type="button" onClick={() => setActiveSystem('')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                !activeSystem ? 'bg-cyan-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              All
+              {documents.length > 0 && (
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${!activeSystem ? 'bg-cyan-500 text-white' : 'bg-slate-300 text-slate-700'}`}>
+                  {documents.length}
+                </span>
+              )}
+            </button>
+            {projectSystems.map(system => {
           const Icon = getCategoryStyle(system.category).icon;
-          const count = systemState[system.name]?.rows.length ?? 0;
+          const count = documents.filter(doc => doc.system_type === system.name).length;
           return (
             <button key={system.name} onClick={() => setActiveSystem(system.name)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
@@ -642,128 +841,166 @@ export default function TechnicalDocsPage() {
             </button>
           );
         })}
-      </div>
-
-      {activeSystem && (
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        {/* Toolbar */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100 bg-slate-50">
-          <div className="flex items-center gap-2">
-            {React.createElement(getCategoryStyle(activeSystemMeta?.category ?? null).icon, { className: 'w-4 h-4 text-slate-600' })}
-            <span className="text-sm font-semibold text-slate-800">{activeSystem}</span>
-            {hasData && (
-              <span className="text-xs text-slate-500">{current!.rows.length} rows · {visibleCols.length} columns shown</span>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            {hasData && (
-              <>
-                <button onClick={() => openColConfig(activeSystem)} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors">
-                  <Settings2 className="w-3.5 h-3.5" />Columns
-                </button>
-                <button onClick={() => exportCSV(activeSystem)} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors">
-                  <Download className="w-3.5 h-3.5" />Export
-                </button>
-                <button onClick={() => clearSystem(activeSystem)} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-red-200 text-red-500 hover:bg-red-50 transition-colors">
-                  <Trash2 className="w-3.5 h-3.5" />Clear
-                </button>
-              </>
-            )}
-            <button
-              onClick={() => { importSystemRef.current = activeSystem; setPdfError(null); fileInputRef.current?.click(); }}
-              disabled={pdfParsing}
-              className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-cyan-600 text-white hover:bg-cyan-700 transition-colors disabled:opacity-50"
-            >
-              <Upload className="w-3.5 h-3.5" />{hasData ? 'Re-import' : 'Import File'}
-            </button>
-          </div>
-        </div>
-
-        {/* Content */}
-        {!hasData ? (
-          <div className="flex flex-col items-center justify-center py-16 gap-4">
-            <div className="w-14 h-14 rounded-xl bg-slate-100 flex items-center justify-center">
-              <Upload className="w-6 h-6 text-slate-400" />
-            </div>
-            <div className="text-center">
-              <p className="text-sm font-medium text-slate-700">No data imported for {activeSystem}</p>
-              <p className="text-xs text-slate-400 mt-1">Supports PDF, CSV, Excel (.xlsx), and TXT files</p>
-            </div>
-            <div className="flex gap-3">
-              <button
-                onClick={() => { importSystemRef.current = activeSystem; setPdfError(null); fileInputRef.current?.click(); }}
-                disabled={pdfParsing}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-cyan-600 text-white text-sm font-medium rounded-lg hover:bg-cyan-700 transition-colors disabled:opacity-50"
-              >
-                <Upload className="w-4 h-4" />Import File
-              </button>
-            </div>
-            <p className="text-xs text-slate-400">PDF · CSV · Excel · TXT</p>
-          </div>
-        ) : visibleCols.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12 gap-3 text-slate-500">
-            <EyeOff className="w-6 h-6 text-slate-300" />
-            <p className="text-sm">All columns are hidden.</p>
-            <button onClick={() => openColConfig(activeSystem)} className="text-xs text-cyan-600 hover:underline">Configure columns</button>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200">
-                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wider w-8">#</th>
-                  {visibleCols.map(col => (
-                    <th key={col.key} className="text-left px-3 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">
-                      {col.display_name}
-                    </th>
-                  ))}
-                  <th className="w-8 px-2" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {current!.rows.map((row, idx) => (
-                  <tr key={row.id} className="hover:bg-slate-50/70 transition-colors group">
-                    <td className="px-4 py-1.5 text-xs text-slate-400 font-mono">{idx + 1}</td>
-                    {visibleCols.map(col => {
-                      const isEditing = editingCell?.rowId === row.id && editingCell?.key === col.key;
-                      const isSaved = savedCell?.rowId === row.id && savedCell?.key === col.key;
-                      const val = row.data[col.key] ?? '';
-                      return (
-                        <td key={col.key} className="px-2 py-1 min-w-[100px] max-w-[240px]">
-                          {isEditing ? (
-                            <input
-                              autoFocus type="text" value={cellValue}
-                              onChange={e => setCellValue(e.target.value)}
-                              onBlur={saveCell} onKeyDown={handleCellKey}
-                              className="w-full px-2 py-1 border border-cyan-500 rounded bg-cyan-50 text-sm font-mono focus:outline-none"
-                            />
-                          ) : (
-                            <div
-                              onClick={() => startEdit(row.id, col.key, val)}
-                              className={`px-2 py-1.5 cursor-pointer rounded text-sm font-mono hover:bg-slate-100 relative transition-colors ${isSaved ? 'bg-emerald-50' : ''}`}
-                            >
-                              {val || <span className="text-slate-300">—</span>}
-                              {isSaved && <Check className="w-3 h-3 absolute right-1 top-2 text-emerald-500" />}
-                            </div>
-                          )}
-                        </td>
-                      );
-                    })}
-                    <td className="px-2 py-1 text-right">
-                      <button onClick={() => deleteRow(row.id)} className="opacity-0 group-hover:opacity-100 p-1 text-slate-300 hover:text-red-500 rounded transition-all">
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="text-xs text-slate-400 px-4 py-2 border-t border-slate-100">
-              Click any cell to edit &middot; Enter to save &middot; Esc to cancel
-            </p>
-          </div>
+          </>
         )}
       </div>
+
+      {visibleDocuments.length === 0 ? (
+        <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
+          <Table2 className="w-10 h-10 text-slate-200 mx-auto mb-3" />
+          <p className="text-sm font-medium text-slate-500">No technical documents{activeSystem ? ` for ${activeSystem}` : ''} yet</p>
+          <p className="text-xs text-slate-400 mt-1">Upload a spreadsheet and describe what it is — door schedule, IP table, and so on.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {visibleDocuments.map(doc => {
+            const visibleCols = (doc.colConfig ?? []).filter(c => c.visible).sort((a, b) => a.order - b.order);
+            const expanded = expandedDocId === doc.id;
+            return (
+              <div key={doc.id} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="flex items-center gap-4 px-5 py-4">
+                  <div className="w-9 h-9 bg-cyan-50 rounded-lg flex items-center justify-center flex-shrink-0">
+                    <FileText className="w-4 h-4 text-cyan-700" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-slate-800 truncate">{doc.title}</p>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-0.5 text-xs text-slate-500">
+                      {doc.document_type && <span className="bg-slate-100 px-1.5 py-0.5 rounded">{doc.document_type}</span>}
+                      {doc.system_type && <span>{doc.system_type}</span>}
+                      <span>{doc.rows.length} rows</span>
+                      {doc.file_name && <span className="truncate max-w-xs">{doc.file_name}</span>}
+                      {doc.notes && <span className="truncate max-w-xs">{doc.notes}</span>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {doc.file_url && (
+                      <a href={doc.file_url} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-100 inline-flex items-center gap-1">
+                        <ExternalLink className="w-3 h-3" />File
+                      </a>
+                    )}
+                    <button type="button" onClick={() => setExpandedDocId(expanded ? null : doc.id)} className={`text-xs px-2 py-1 border rounded-lg ${expanded ? 'bg-cyan-50 border-cyan-300 text-cyan-700' : 'border-slate-200 text-slate-500 hover:bg-slate-100'}`}>
+                      {expanded ? 'Hide table' : 'View table'}
+                    </button>
+                    <button type="button" onClick={() => openColConfig(doc)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><Settings2 className="w-3.5 h-3.5" /></button>
+                    <button type="button" onClick={() => exportCSV(doc)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><Download className="w-3.5 h-3.5" /></button>
+                    {doc.id > 0 && <button type="button" onClick={() => setEditingDoc(doc)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><Pencil className="w-3.5 h-3.5" /></button>}
+                    <button type="button" onClick={() => void deleteDocument(doc)} className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg"><Trash2 className="w-3.5 h-3.5" /></button>
+                  </div>
+                </div>
+                {expanded && (
+                  visibleCols.length === 0 ? (
+                    <p className="px-5 pb-4 text-sm text-slate-400">No columns configured.</p>
+                  ) : (
+                    <div className="overflow-x-auto border-t border-slate-100">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-slate-200">
+                            <th className="text-left px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wider w-8">#</th>
+                            {visibleCols.map(col => (
+                              <th key={col.key} className="text-left px-3 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{col.display_name}</th>
+                            ))}
+                            <th className="w-8 px-2" />
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {doc.rows.map((row, idx) => (
+                            <tr key={row.id} className="hover:bg-slate-50/70 transition-colors group">
+                              <td className="px-4 py-1.5 text-xs text-slate-400 font-mono">{idx + 1}</td>
+                              {visibleCols.map(col => {
+                                const isEditing = editingCell?.rowId === row.id && editingCell?.key === col.key;
+                                const isSaved = savedCell?.rowId === row.id && savedCell?.key === col.key;
+                                const val = row.data[col.key] ?? '';
+                                return (
+                                  <td key={col.key} className="px-2 py-1 min-w-[100px] max-w-[240px]">
+                                    {isEditing ? (
+                                      <input autoFocus type="text" value={cellValue} onChange={e => setCellValue(e.target.value)} onBlur={saveCell} onKeyDown={handleCellKey} className="w-full px-2 py-1 border border-cyan-500 rounded bg-cyan-50 text-sm font-mono focus:outline-none" />
+                                    ) : (
+                                      <div onClick={() => startEdit(row.id, col.key, val)} className={`px-2 py-1.5 cursor-pointer rounded text-sm font-mono hover:bg-slate-100 relative ${isSaved ? 'bg-emerald-50' : ''}`}>
+                                        {val || <span className="text-slate-300">—</span>}
+                                        {isSaved && <Check className="w-3 h-3 absolute right-1 top-2 text-emerald-500" />}
+                                      </div>
+                                    )}
+                                  </td>
+                                );
+                              })}
+                              <td className="px-2 py-1 text-right">
+                                <button onClick={() => deleteRow(row.id)} className="opacity-0 group-hover:opacity-100 p-1 text-slate-300 hover:text-red-500 rounded"><X className="w-3.5 h-3.5" /></button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {currentPending && !modal && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
+            <div className="p-6 border-b border-slate-200 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Describe document</h2>
+                <p className="text-xs text-slate-400 mt-0.5">File {pendingIndex + 1} of {pendingQueue.length} · {currentPending.file.name}</p>
+              </div>
+              <button onClick={() => { setPendingQueue([]); setPendingIndex(0); }} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5">Document title <span className="text-red-500">*</span></label>
+                <input value={currentPending.title} onChange={e => updateCurrentPending({ title: e.target.value })} className={ic} placeholder="e.g. Ground floor door schedule" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5">What is this document?</label>
+                <select value={currentPending.document_type} onChange={e => updateCurrentPending({ document_type: e.target.value })} className={ic}>
+                  <option value="">Select type…</option>
+                  {TECH_DOC_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5">System</label>
+                <select value={currentPending.system_name} onChange={e => updateCurrentPending({ system_name: e.target.value })} className={ic}>
+                  {projectSystems.map(system => <option key={system.name} value={system.name}>{system.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5">Notes</label>
+                <textarea value={currentPending.notes} onChange={e => updateCurrentPending({ notes: e.target.value })} rows={2} className={`${ic} resize-none`} placeholder="Optional description" />
+              </div>
+            </div>
+            <div className="px-6 pb-6 flex justify-end gap-3">
+              <button onClick={() => { setPendingQueue([]); setPendingIndex(0); }} className="px-4 py-2 text-slate-600 font-medium text-sm">Cancel</button>
+              <button onClick={() => void startParseFromDescribe()} disabled={!currentPending.title.trim() || pdfParsing} className="inline-flex items-center gap-2 px-5 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 font-medium text-sm disabled:opacity-40">
+                Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingDoc && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4">
+            <h2 className="text-lg font-semibold text-slate-900">Edit document</h2>
+            <input value={editingDoc.title} onChange={e => setEditingDoc({ ...editingDoc, title: e.target.value })} className={ic} />
+            <select value={editingDoc.document_type ?? ''} onChange={e => setEditingDoc({ ...editingDoc, document_type: e.target.value })} className={ic}>
+              <option value="">Select type…</option>
+              {TECH_DOC_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <select value={editingDoc.system_type ?? ''} onChange={e => setEditingDoc({ ...editingDoc, system_type: e.target.value })} className={ic}>
+              {projectSystems.map(system => <option key={system.name} value={system.name}>{system.name}</option>)}
+            </select>
+            <textarea value={editingDoc.notes ?? ''} onChange={e => setEditingDoc({ ...editingDoc, notes: e.target.value })} rows={2} className={`${ic} resize-none`} />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setEditingDoc(null)} className="px-3 py-1.5 text-sm text-slate-600 border border-slate-300 rounded-lg">Cancel</button>
+              <button onClick={() => void saveDocumentMeta()} className="px-3 py-1.5 text-sm bg-cyan-600 text-white rounded-lg">Save</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── PDF Table Selector Modal ──────────────────────────────────────────── */}
@@ -839,7 +1076,7 @@ export default function TechnicalDocsPage() {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between px-6 py-5 border-b border-slate-200 flex-shrink-0">
               <div>
-                <h3 className="text-base font-semibold text-slate-900">Import — {modal.system}</h3>
+                <h3 className="text-base font-semibold text-slate-900">Import — {pendingMeta?.title || modal.file.name}</h3>
                 <p className="text-xs text-slate-500 mt-0.5">
                   {modal.file.name} · {modal.previewRows.length} rows · {modal.rawHeaders.length} columns detected
                 </p>
@@ -947,7 +1184,7 @@ export default function TechnicalDocsPage() {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[80vh] flex flex-col">
             <div className="flex items-center justify-between px-6 py-5 border-b border-slate-200 flex-shrink-0">
               <div>
-                <h3 className="text-base font-semibold text-slate-900">Columns — {modal.system}</h3>
+                <h3 className="text-base font-semibold text-slate-900">Columns — {documents.find(d => String(d.id) === modal.system)?.title ?? 'Document'}</h3>
                 <p className="text-xs text-slate-500 mt-0.5">Toggle visibility and rename headings</p>
               </div>
               <button onClick={() => setModal(null)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>

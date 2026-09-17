@@ -16,6 +16,7 @@ import type { Device, CommissioningRecord, HandoverDocument, Datasheet, ProjectS
 import { isEndUser } from '../lib/appRoles';
 import { useUserAccess } from '../lib/userAccess';
 import { OmClientInvitePanel } from '../components/OmClientInvitePanel';
+import { MarkdownDocEditor } from '../components/MarkdownDocEditor';
 import {
   Printer, BookOpen, FileText, ClipboardCheck, Award, Wrench,
   Upload, X, CheckCircle, AlertCircle, ExternalLink, ChevronRight,
@@ -130,7 +131,7 @@ const SECTIONS: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: 'maintenance_plan', label: 'Maintenance Plan',    icon: CalendarCheck },
   { id: 'commissioning',    label: 'Commissioning Pack',  icon: CheckCircle },
   { id: 'handover',         label: 'Handover Certificate', icon: Award },
-  { id: 'as_fitted',        label: 'As Fitted Drawings',  icon: Layers },
+  { id: 'as_fitted',        label: 'As Fitted',           icon: Layers },
   { id: 'datasheets',       label: 'Datasheet Index',     icon: ExternalLink },
   { id: 'user_manuals',     label: 'User Manuals',        icon: BookMarked },
 ];
@@ -224,6 +225,13 @@ function systemsWithTechImport(
 
 type TechDocColumn = { key: string; display_name: string; visible: boolean; order: number };
 type TechDocPrintRow = { id: number; row_index: number; data: Record<string, string> };
+type TechDocBundle = {
+  key: string;
+  title: string;
+  system: string;
+  rows: TechDocPrintRow[];
+  colConfig: TechDocColumn[];
+};
 
 const TECH_DOC_PRINT_ROWS = 18;
 
@@ -451,6 +459,7 @@ export function ProjectOMExportPage() {
 
   // Tech doc imported data: { rows, colConfig } per system
   const [techDocState, setTechDocState] = useState<Partial<Record<string, { rows: { id: number; row_index: number; data: Record<string, string> }[]; colConfig: { key: string; display_name: string; visible: boolean; order: number }[] }>>>({});
+  const [techDocBundles, setTechDocBundles] = useState<TechDocBundle[]>([]);
 
   const [pdfPageImages, setPdfPageImages] = useState<Record<string, PdfRenderState>>({});
   const pdfRenderStarted = useRef(new Set<string>());
@@ -492,6 +501,7 @@ export function ProjectOMExportPage() {
       { data: techRowData },
       { data: techCfgData },
       { data: systemData },
+      techDocDocsRes,
     ] = await Promise.all([
       supabase.from('devices').select('*').eq('project_id', pid).neq('status', 'pending_review').order('system_type').order('device_name'),
       supabase.from('project_documents').select('*').eq('project_id', pid),
@@ -507,6 +517,7 @@ export function ProjectOMExportPage() {
       supabase.from('tech_doc_rows').select('*').eq('project_id', pid).order('system_type').order('row_index'),
       supabase.from('tech_doc_column_configs').select('*').eq('project_id', pid),
       fetchProjectSystems(pid).catch(() => [] as ProjectSystemRecord[]),
+      supabase.from('tech_doc_documents').select('*').eq('project_id', pid).order('created_at', { ascending: true }),
     ]);
 
     const enriched: DeviceWithDatasheet[] = (devData ?? []).map(d => {
@@ -545,23 +556,75 @@ export function ProjectOMExportPage() {
     // Build techDocState per project system / cost centre
     const baseSystems = deriveProjectSystems(enriched, systemData ?? []);
     const extraTechNames = [
-      ...new Set((techRowData ?? []).map((row: { system_type: string }) => row.system_type).filter(Boolean)),
+      ...new Set([
+        ...(techRowData ?? []).map((row: { system_type: string }) => row.system_type),
+        ...(techDocDocsRes.data ?? []).map((doc: { system_type: string | null }) => doc.system_type),
+      ].filter(Boolean)),
     ] as string[];
     const documentSystems = mergeDocumentSystemNames(baseSystems, extraTechNames);
     const tdState: typeof techDocState = {};
+    const mappedRows = (techRowData ?? []).map((r: { id: number; row_index: number; data: unknown; system_type: string; document_id?: number | null }) => ({
+      id: r.id,
+      row_index: r.row_index,
+      system_type: r.system_type,
+      document_id: r.document_id ?? null,
+      data: asTechDocData(r.data),
+    }));
     for (const system of documentSystems) {
-      const rows = (techRowData ?? [])
-        .filter((r: { system_type: string }) => sameSystemName(r.system_type, system.name))
-        .map((r: { id: number; row_index: number; data: unknown }) => ({
-          id: r.id,
-          row_index: r.row_index,
-          data: asTechDocData(r.data),
-        }))
+      const rows = mappedRows
+        .filter(r => sameSystemName(r.system_type, system.name))
         .sort((a, b) => a.row_index - b.row_index);
       const cfg = (techCfgData ?? []).find((c: { system_type: string }) => sameSystemName(c.system_type, system.name));
       tdState[system.name] = { rows, colConfig: (cfg?.columns ?? []) };
     }
     setTechDocState(tdState);
+
+    const namedDocs = techDocDocsRes.data ?? [];
+    const bundles: TechDocBundle[] = [];
+    if (namedDocs.length > 0) {
+      for (const doc of namedDocs) {
+        const rows = mappedRows.filter(r => r.document_id === doc.id).sort((a, b) => a.row_index - b.row_index);
+        const cfg = (techCfgData ?? []).find((c: { document_id?: number | null }) => c.document_id === doc.id)
+          ?? (techCfgData ?? []).find((c: { system_type: string; document_id?: number | null }) => !c.document_id && sameSystemName(c.system_type, doc.system_type));
+        bundles.push({
+          key: `doc-${doc.id}`,
+          title: doc.title || doc.file_name || `${doc.system_type || 'Technical'} table`,
+          system: doc.system_type || '',
+          rows,
+          colConfig: (cfg?.columns ?? []) as TechDocColumn[],
+        });
+      }
+      const orphanRows = mappedRows.filter(r => !r.document_id || !namedDocs.some((d: { id: number }) => d.id === r.document_id));
+      const bySystem = new Map<string, typeof orphanRows>();
+      for (const row of orphanRows) {
+        const key = row.system_type || 'Technical Documentation';
+        const bucket = bySystem.get(key) ?? [];
+        bucket.push(row);
+        bySystem.set(key, bucket);
+      }
+      for (const [system, rows] of bySystem) {
+        const cfg = (techCfgData ?? []).find((c: { system_type: string; document_id?: number | null }) => !c.document_id && sameSystemName(c.system_type, system));
+        bundles.push({
+          key: `legacy-${system}`,
+          title: `${system} table`,
+          system,
+          rows,
+          colConfig: (cfg?.columns ?? []) as TechDocColumn[],
+        });
+      }
+    } else {
+      for (const [system, state] of Object.entries(tdState)) {
+        if ((state?.rows.length ?? 0) === 0) continue;
+        bundles.push({
+          key: `system-${system}`,
+          title: `${system} — Technical Documentation`,
+          system,
+          rows: state!.rows,
+          colConfig: state!.colConfig,
+        });
+      }
+    }
+    setTechDocBundles(bundles);
 
     // Build per-system maintenance plan content from project_documents
     const planMap: Record<string, string> = {};
@@ -673,6 +736,8 @@ export function ProjectOMExportPage() {
     Object.keys(techDocState).filter(name => (techDocState[name]?.rows.length ?? 0) > 0),
   );
   const importedTechSystems = systemsWithTechImport(documentSystems, techDocState);
+  const namedTechBundles = techDocBundles.filter(bundle => bundle.rows.length > 0);
+  const asFittedScope = projectDocs.find(d => d.document_type === 'as_fitted_scope')?.content ?? '';
 
   const systemGroups = projectSystems.map(system => ({
     system: system.name,
@@ -690,7 +755,7 @@ export function ProjectOMExportPage() {
     if (s === 'scope') return scopeContent ? 'complete' : 'empty';
     if (s === 'schedule') return devices.length > 0 ? 'complete' : 'empty';
     if (s === 'technical_docs') {
-      const hasTechData = importedTechSystems.length > 0;
+      const hasTechData = namedTechBundles.length > 0 || importedTechSystems.length > 0;
       const techDevices = devices.filter(d =>
         d.ip_address || d.mac_address || d.firmware_version || d.username_hint || d.password_hint || d.controller_address || d.vlan || d.network_zone
       );
@@ -704,7 +769,7 @@ export function ProjectOMExportPage() {
       const otherReady = otherHandoverDocs.some(doc => doc.file_url);
       return hUploads.length > 0 || scReady || otherReady ? 'complete' : handoverDocs.length > 0 || scHandoverDocs.length > 0 ? 'partial' : 'empty';
     }
-    if (s === 'as_fitted') return asFittedDrawings.length > 0 ? 'complete' : 'empty';
+    if (s === 'as_fitted') return asFittedScope.trim() || asFittedDrawings.length > 0 ? 'complete' : 'empty';
     if (s === 'datasheets') return devices.some(d => d.datasheet) ? 'complete' : 'empty';
     if (s === 'user_manuals') return projectManuals.length > 0 ? 'complete' : 'empty';
     return 'empty';
@@ -1048,7 +1113,7 @@ export function ProjectOMExportPage() {
         'print-section-maintenance_plan': 'Maintenance Plan',
         'print-section-commissioning':    'Commissioning Pack',
         'print-section-handover':         'Handover Documents',
-        'print-section-as_fitted':        'As Fitted Drawings',
+        'print-section-as_fitted':        'As Fitted',
         'print-section-datasheets':       'Datasheets',
         'print-section-user_manuals':     'User Manuals',
       };
@@ -1198,6 +1263,7 @@ export function ProjectOMExportPage() {
               scope: scopeContent ? 'Scope of works document ready' : 'Not yet generated',
               schedule: devices.length > 0 ? `${devices.length} device${devices.length !== 1 ? 's' : ''} across ${systemGroups.length} system${systemGroups.length !== 1 ? 's' : ''}` : 'No devices added',
               technical_docs: (() => {
+                if (namedTechBundles.length > 0) return namedTechBundles.map(b => b.title).join(', ');
                 const imported = importedTechSystems;
                 if (imported.length > 0) return `Imported data for: ${imported.join(', ')}`;
                 const n = devices.filter(d => d.ip_address || d.mac_address || d.firmware_version || d.username_hint || d.password_hint).length;
@@ -1211,7 +1277,7 @@ export function ProjectOMExportPage() {
                 const total = hUploads.length + scHandoverDocs.filter(d => d.file_url).length + otherHandoverDocs.filter(d => d.file_url).length;
                 return total > 0 ? `${total} document${total !== 1 ? 's' : ''} ready` : handoverDocs.length > 0 || scHandoverDocs.length > 0 ? 'Handover data available' : 'Not yet uploaded';
               })(),
-              as_fitted: asFittedDrawings.length > 0 ? `${asFittedDrawings.length} drawing${asFittedDrawings.length !== 1 ? 's' : ''} uploaded` : 'No drawings uploaded',
+              as_fitted: [asFittedScope.trim() ? 'As-fitted record' : null, asFittedDrawings.length > 0 ? `${asFittedDrawings.length} drawing${asFittedDrawings.length !== 1 ? 's' : ''} uploaded` : null].filter(Boolean).join(' · ') || 'No as-fitted record or drawings',
               datasheets: (() => { const found = devices.filter(d => d.datasheet).length; return found > 0 ? `${found} of ${devices.length} devices have datasheets` : 'No datasheets found'; })(),
               user_manuals: projectManuals.length > 0 ? `${projectManuals.length} manual${projectManuals.length !== 1 ? 's' : ''} attached` : 'No manuals attached',
             };
@@ -1304,21 +1370,24 @@ export function ProjectOMExportPage() {
           })()}
           {activeSection === 'cover' && <CoverSection project={project} devices={devices} systemGroups={systemGroups} contractor={contractorProfile} authority={docAuthority} />}
           {activeSection === 'scope' && (
-            <ScopeSection
+            <MarkdownDocEditor
+              title="Scope of Works"
               content={scopeContent}
               onChange={setScopeContent}
               onSave={handleSaveScope}
-              onRegenerate={handleRegenerateScope}
               saving={scopeSaving}
-              regenerating={scopeRegenerating}
-              activeSystems={activeSystems}
+              placeholder="Enter Scope of Works here (supports Markdown formatting)..."
+              emptyHint="No Scope of Works found. You can type it below, or use Create Project (upload your quote/proposal) to auto-generate it."
               isAiGenerated={!!projectDocs.find(d => d.document_type === 'scope_of_works' && d.generated_by === 'ai')}
+              onRegenerate={handleRegenerateScope}
+              regenerating={scopeRegenerating}
+              missingSystems={activeSystems}
               readOnly={packReadOnly}
             />
           )}
           {activeSection === 'schedule' && <ScheduleSection systemGroups={systemGroups} />}
           {activeSection === 'technical_docs' && (
-            <TechnicalDocsSection devices={devices} techDocState={techDocState} documentSystems={documentSystems} />
+            <TechnicalDocsSection devices={devices} techDocState={techDocState} techDocBundles={namedTechBundles} documentSystems={documentSystems} />
           )}
           {activeSection === 'maintenance_plan' && (
             <MaintenancePlanSection
@@ -1360,6 +1429,7 @@ export function ProjectOMExportPage() {
               drawings={asFittedDrawings}
               pageImages={pdfPageImages}
               documentSystems={documentSystems}
+              scopeContent={asFittedScope}
             />
           )}
           {activeSection === 'datasheets' && <DatasheetsSection systemGroups={systemGroups} />}
@@ -1387,11 +1457,11 @@ export function ProjectOMExportPage() {
           project={project}
           hasScope={!!scopeContent}
           hasSchedule={devices.length > 0}
-          hasTechDocs={importedTechSystems.length > 0 || devices.some(d => d.ip_address || d.mac_address || d.firmware_version || d.username_hint || d.password_hint || d.controller_address || d.vlan || d.network_zone)}
+          hasTechDocs={namedTechBundles.length > 0 || importedTechSystems.length > 0 || devices.some(d => d.ip_address || d.mac_address || d.firmware_version || d.username_hint || d.password_hint || d.controller_address || d.vlan || d.network_zone)}
           hasMaintPlan={systemGroups.some(g => maintPlanContent[g.system]?.trim())}
           hasCommissioning={!!(getUpload('commissioning') || commRecords.length > 0)}
           hasHandover={handoverPackPdfs.length > 0 || handoverDocs.length > 0 || scHandoverDocs.length > 0}
-          hasAsFitted={asFittedDrawings.length > 0}
+          hasAsFitted={!!asFittedScope.trim() || asFittedDrawings.length > 0}
           hasDatasheets={devices.some(d => d.datasheet)}
           hasUserManuals={projectManuals.length > 0}
         />
@@ -1416,9 +1486,41 @@ export function ProjectOMExportPage() {
         )}
 
         {(() => {
-          const hasTechImport = importedTechSystems.length > 0;
+          const hasTechImport = namedTechBundles.length > 0 || importedTechSystems.length > 0;
           const techDevices = devices.filter(d => d.ip_address || d.mac_address || d.firmware_version || d.username_hint || d.password_hint || d.controller_address || d.vlan || d.network_zone);
           if (!hasTechImport && techDevices.length === 0) return null;
+          if (namedTechBundles.length > 0) {
+            let firstSection = true;
+            return (
+              <>
+                {namedTechBundles.flatMap(bundle => {
+                  const columns = resolveTechDocColumns(bundle.colConfig, bundle.rows);
+                  const rowChunks = chunkTechDocRows(bundle.rows, TECH_DOC_PRINT_ROWS);
+                  const colChunks = chunkTechDocRows(columns, TECH_DOC_PRINT_COLS);
+                  return rowChunks.flatMap((rows, rowIdx) =>
+                    colChunks.map((cols, colIdx) => {
+                      const isFirst = firstSection;
+                      firstSection = false;
+                      const continued = rowIdx > 0 || colIdx > 0;
+                      const title = continued ? `${bundle.title} (continued)` : bundle.title;
+                      return (
+                        <PrintSection
+                          key={`${bundle.key}-${rowIdx}-${colIdx}`}
+                          title={title}
+                          subtitle={bundle.system || undefined}
+                          anchorId={isFirst ? 'print-section-technical_docs' : undefined}
+                          forcePageBreak={!isFirst}
+                        >
+                          <PrintTechnicalDocsTable columns={cols} rows={rows} />
+                        </PrintSection>
+                      );
+                    }),
+                  );
+                })}
+                <div className="page-break" />
+              </>
+            );
+          }
           if (hasTechImport) {
             const systemsWithData = importedTechSystems;
             let firstSection = true;
@@ -1528,9 +1630,16 @@ export function ProjectOMExportPage() {
           return null;
         })()}
 
-        {asFittedDrawings.length > 0 && (
+        {(asFittedScope.trim() || asFittedDrawings.length > 0) && (
           <>
-            <PrintAsFittedDrawings drawings={asFittedDrawings} pageImages={pdfPageImages} documentSystems={documentSystems} />
+            {asFittedScope.trim() && (
+              <PrintSection title="As Fitted" anchorId="print-section-as_fitted">
+                <div dangerouslySetInnerHTML={{ __html: renderMarkdown(asFittedScope) }} />
+              </PrintSection>
+            )}
+            {asFittedDrawings.length > 0 && (
+              <PrintAsFittedDrawings drawings={asFittedDrawings} pageImages={pdfPageImages} documentSystems={documentSystems} skipAnchor={!!asFittedScope.trim()} />
+            )}
             <div className="page-break" />
           </>
         )}
@@ -1645,11 +1754,57 @@ export function ProjectOMExportPage() {
 
 // ─── Technical Docs Section ───────────────────────────────────────────────────
 
-function TechnicalDocsSection({ devices, techDocState, documentSystems }: {
+function TechnicalDocsSection({ devices, techDocState, techDocBundles, documentSystems }: {
   devices: DeviceWithDatasheet[];
   techDocState: Partial<Record<string, { rows: { id: number; row_index: number; data: Record<string, string> }[]; colConfig: { key: string; display_name: string; visible: boolean; order: number }[] }>>;
+  techDocBundles?: TechDocBundle[];
   documentSystems: ProjectSystem[];
 }) {
+  const named = (techDocBundles ?? []).filter(bundle => bundle.rows.length > 0);
+  if (named.length > 0) {
+    return (
+      <div className="space-y-6">
+        {named.map(bundle => {
+          const visibleCols = resolveTechDocColumns(bundle.colConfig, bundle.rows);
+          return (
+            <div key={bundle.key} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+              <div className="flex items-center gap-2 px-6 py-4 border-b border-slate-200 bg-slate-50">
+                <Wifi className="w-4 h-4 text-slate-400" />
+                <h3 className="font-semibold text-slate-800">{bundle.title}</h3>
+                {bundle.system && <span className="text-xs text-slate-500">{bundle.system}</span>}
+                <span className="text-xs text-slate-500 bg-slate-200 px-2 py-0.5 rounded-full ml-1">{bundle.rows.length} rows</span>
+              </div>
+              {visibleCols.length === 0 ? (
+                <p className="text-sm text-slate-400 px-6 py-4">No columns configured. Go to Technical Docs to configure columns.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200">
+                        {visibleCols.map(col => (
+                          <th key={col.key} className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">{col.display_name}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {bundle.rows.map(row => (
+                        <tr key={row.id} className="hover:bg-slate-50">
+                          {visibleCols.map(col => (
+                            <td key={col.key} className="px-4 py-2.5 font-mono text-xs text-slate-700">{techDocCell(row.data, col) || <span className="text-slate-300">-</span>}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
   const systemsWithImport = systemsWithTechImport(documentSystems, techDocState);
 
   if (systemsWithImport.length > 0) {
@@ -2156,89 +2311,6 @@ function InfoRow({ icon: Icon, label, value }: { icon: React.ElementType; label:
         <p className="text-xs text-slate-400 font-medium">{label}</p>
         <p className="text-sm font-semibold text-slate-800">{value || '—'}</p>
       </div>
-    </div>
-  );
-}
-
-function ScopeSection({ content, onChange, onSave, onRegenerate, saving, regenerating, isAiGenerated, activeSystems, readOnly }: {
-  content: string; onChange: (v: string) => void; onSave: () => void;
-  onRegenerate: () => void; saving: boolean; regenerating: boolean; isAiGenerated: boolean; activeSystems: string[];
-  readOnly?: boolean;
-}) {
-  const [preview, setPreview] = useState(!!readOnly);
-
-  const missingSystems = activeSystems.filter(sys => !content.includes(sys));
-
-  return (
-    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-      <div className="flex items-center gap-2 mb-4">
-        <FileText className="w-4 h-4 text-slate-400" />
-        <h3 className="font-semibold text-slate-800">Scope of Works</h3>
-        {isAiGenerated && <span className="text-xs text-cyan-600 bg-cyan-50 px-2 py-0.5 rounded-full font-medium ml-1">AI Generated</span>}
-        {!readOnly && (
-        <div className="ml-auto flex items-center gap-2">
-          <button onClick={() => setPreview(p => !p)} disabled={regenerating}
-            className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 rounded-lg border border-slate-200 hover:border-slate-300 transition-colors disabled:opacity-40">
-            {preview ? 'Edit' : 'Preview'}
-          </button>
-          <button onClick={onSave} disabled={saving || regenerating}
-            className="text-xs font-medium px-3 py-1 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 transition-colors disabled:opacity-50">
-            {saving ? 'Saving…' : 'Save'}
-          </button>
-        </div>
-        )}
-      </div>
-
-      {missingSystems.length > 0 && !regenerating && !readOnly && (
-        <div className="mb-4 flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
-          <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-amber-800 mb-0.5">
-              {missingSystems.length} system{missingSystems.length > 1 ? 's' : ''} not in scope
-            </p>
-            <p className="text-xs text-amber-700">
-              <strong>{missingSystems.join(', ')}</strong> {missingSystems.length > 1 ? 'have' : 'has'} devices but {missingSystems.length > 1 ? 'are' : 'is'} not mentioned in this scope of works.
-            </p>
-          </div>
-          <button
-            onClick={onRegenerate}
-            disabled={saving}
-            className="flex-shrink-0 text-xs font-semibold px-3 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-50 whitespace-nowrap"
-          >
-            Regenerate scope
-          </button>
-        </div>
-      )}
-
-      {regenerating && (
-        <div className="mb-4 flex items-center gap-3 bg-cyan-50 border border-cyan-200 rounded-xl px-4 py-3">
-          <Loader2 className="w-4 h-4 text-cyan-600 animate-spin flex-shrink-0" />
-          <div>
-            <p className="text-sm font-semibold text-cyan-800">Generating scope of works…</p>
-            <p className="text-xs text-cyan-600">Claude is writing a scope based on your installed devices</p>
-          </div>
-        </div>
-      )}
-
-      {!content && !preview && !readOnly && missingSystems.length === 0 && !regenerating && (
-        <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
-          No Scope of Works found. You can type it below, or use Create Project (upload your quote/proposal) to auto-generate it.
-        </div>
-      )}
-
-      {preview || readOnly ? (
-        <div className="min-h-64 p-4 border border-slate-200 rounded-lg bg-slate-50 prose prose-sm max-w-none"
-          dangerouslySetInnerHTML={{ __html: content ? renderMarkdown(content) : '<p class="text-slate-400 text-sm">Nothing to preview.</p>' }} />
-      ) : (
-        <textarea
-          value={content}
-          onChange={e => onChange(e.target.value)}
-          disabled={regenerating}
-          rows={20}
-          placeholder="Enter Scope of Works here (supports Markdown formatting)..."
-          className="w-full border border-slate-300 rounded-lg px-4 py-3 text-sm text-slate-800 font-mono focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-none disabled:opacity-50 disabled:bg-slate-50"
-        />
-      )}
     </div>
   );
 }
@@ -2963,19 +3035,20 @@ function UploadSection({ sectionId, title, description, upload, uploading, onUpl
 
 // ─── As Fitted Drawings — screen view ────────────────────────────────────────
 
-function AsFittedDrawingsSection({ drawings, pageImages, documentSystems }: {
+function AsFittedDrawingsSection({ drawings, pageImages, documentSystems, scopeContent }: {
   drawings: AsBuiltDrawing[];
   pageImages: Record<string, PdfRenderState>;
   documentSystems: ProjectSystem[];
+  scopeContent?: string;
 }) {
   const [previewId, setPreviewId] = useState<number | null>(null);
-  if (drawings.length === 0) {
+  if (!scopeContent?.trim() && drawings.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-8 text-center">
         <Layers className="w-10 h-10 text-slate-200 mx-auto mb-3" />
-        <p className="text-sm font-medium text-slate-500">No as-fitted drawings uploaded</p>
+        <p className="text-sm font-medium text-slate-500">No as-fitted record or drawings yet</p>
         <p className="text-xs text-slate-400 mt-1">
-          Upload drawings in the <strong>As Fitted Drawings</strong> section — they will appear here full-size in the O&M pack.
+          Edit the as-fitted copy of the Scope of Works and upload drawings in the <strong>As Fitted</strong> section.
         </p>
       </div>
     );
@@ -2985,7 +3058,27 @@ function AsFittedDrawingsSection({ drawings, pageImages, documentSystems }: {
 
   return (
     <div className="space-y-6">
-      {drawingGroups.map(group => (
+      {scopeContent?.trim() && (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+          <div className="flex items-center gap-2 mb-4">
+            <FileText className="w-4 h-4 text-slate-400" />
+            <h3 className="font-semibold text-slate-800">As Fitted</h3>
+          </div>
+          <div
+            className="min-h-24 p-4 border border-slate-200 rounded-lg bg-slate-50 prose prose-sm max-w-none"
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(scopeContent) }}
+          />
+        </div>
+      )}
+      {drawings.length === 0 ? (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-8 text-center">
+          <Layers className="w-10 h-10 text-slate-200 mx-auto mb-3" />
+          <p className="text-sm font-medium text-slate-500">No as-fitted drawings uploaded</p>
+          <p className="text-xs text-slate-400 mt-1">
+            Upload drawings in the <strong>As Fitted</strong> section — they will appear here full-size in the O&M pack.
+          </p>
+        </div>
+      ) : drawingGroups.map(group => (
         <div key={group.label} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="flex items-center gap-2 px-6 py-4 border-b border-slate-100 bg-slate-50">
             {group.system ? (
@@ -3048,13 +3141,14 @@ function AsFittedDrawingsSection({ drawings, pageImages, documentSystems }: {
 
 // ─── As Fitted Drawings — print view ─────────────────────────────────────────
 
-function PrintAsFittedDrawings({ drawings, pageImages, documentSystems }: {
+function PrintAsFittedDrawings({ drawings, pageImages, documentSystems, skipAnchor }: {
   drawings: AsBuiltDrawing[];
   pageImages: Record<string, PdfRenderState>;
   documentSystems: ProjectSystem[];
+  skipAnchor?: boolean;
 }) {
   const drawingGroups = groupRecordsByProjectSystems(documentSystems, drawings);
-  let anchorAssigned = false;
+  let anchorAssigned = !!skipAnchor;
 
   return (
     <>
@@ -3270,7 +3364,7 @@ function PrintTableOfContents({
   if (hasMaintPlan) entries.push({ label: 'Maintenance Plan', anchorId: 'print-section-maintenance_plan', number: num++ });
   if (hasCommissioning) entries.push({ label: 'Commissioning Pack', anchorId: 'print-section-commissioning', number: num++ });
   if (hasHandover) entries.push({ label: 'Handover Documents', anchorId: 'print-section-handover', number: num++ });
-  if (hasAsFitted) entries.push({ label: 'As Fitted Drawings', anchorId: 'print-section-as_fitted', number: num++ });
+  if (hasAsFitted) entries.push({ label: 'As Fitted', anchorId: 'print-section-as_fitted', number: num++ });
   if (hasDatasheets) entries.push({ label: 'Datasheets', anchorId: 'print-section-datasheets', number: num++ });
   if (hasUserManuals) entries.push({ label: 'User Manuals', anchorId: 'print-section-user_manuals', number: num++ });
 

@@ -11,6 +11,7 @@ import {
   ImageIcon, Hash, RefreshCw, AlertCircle, FileType,
 } from 'lucide-react';
 import { AsFittedItemsPanel } from '../components/AsFittedItemsPanel';
+import { MarkdownDocEditor } from '../components/MarkdownDocEditor';
 
 const DRAWING_TYPES = [
   'General Arrangement',
@@ -72,21 +73,26 @@ export default function AsBuiltDrawingsPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [asFittedScope, setAsFittedScope] = useState('');
+  const [asFittedScopeId, setAsFittedScopeId] = useState<number | null>(null);
+  const [proposedScope, setProposedScope] = useState('');
+  const [scopeSaving, setScopeSaving] = useState(false);
 
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editState, setEditState] = useState<EditState>({ title: '', drawing_number: '', revision: '', drawing_type: '', notes: '' });
+  const [editState, setEditState] = useState<EditState>({ title: '', drawing_number: '', revision: '', drawing_type: '', system_name: '', notes: '' });
 
   const [previewId, setPreviewId] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
-  // Upload modal state
-  const [pendingUpload, setPendingUpload] = useState<PendingUpload | null>(null);
+  const [pendingQueue, setPendingQueue] = useState<PendingUpload[]>([]);
+  const [pendingIndex, setPendingIndex] = useState(0);
+  const pendingUpload = pendingQueue[pendingIndex] ?? null;
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     if (!pid) return;
-    const [{ data }, { data: devData }] = await Promise.all([
+    const [{ data }, { data: devData }, { data: docs }] = await Promise.all([
       supabase
         .from('as_fitted_drawings')
         .select('*')
@@ -96,40 +102,71 @@ export default function AsBuiltDrawingsPage() {
         .from('devices')
         .select('id, project_id, system_type, system_category, project_system_id')
         .eq('project_id', pid),
+      supabase
+        .from('project_documents')
+        .select('id, document_type, content')
+        .eq('project_id', pid)
+        .in('document_type', ['scope_of_works', 'as_fitted_scope']),
     ]);
     setDrawings(data ?? []);
     const systems = await loadDocumentProjectSystems(pid, devData ?? []);
     setProjectSystems(systems);
+    const asFitted = (docs ?? []).find(d => d.document_type === 'as_fitted_scope');
+    const proposed = (docs ?? []).find(d => d.document_type === 'scope_of_works');
+    setProposedScope(proposed?.content ?? '');
+    if (asFitted) {
+      setAsFittedScopeId(asFitted.id);
+      setAsFittedScope(asFitted.content ?? '');
+    } else if (proposed?.content) {
+      const { data: inserted } = await supabase.from('project_documents').insert({
+        project_id: pid,
+        document_type: 'as_fitted_scope',
+        title: 'As Fitted',
+        content: proposed.content,
+        status: 'draft',
+        generated_by: 'manual',
+      }).select('id, content').single();
+      setAsFittedScopeId(inserted?.id ?? null);
+      setAsFittedScope(inserted?.content ?? proposed.content);
+    } else {
+      setAsFittedScopeId(null);
+      setAsFittedScope('');
+    }
     setLoading(false);
   }, [pid]);
 
   useEffect(() => { load(); }, [load]);
 
-  const openUploadModal = (file: File) => {
-    if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
-      setUploadError('Only PDF files are accepted');
-      return;
+  const openUploadModal = (files: File[]) => {
+    const queued: PendingUpload[] = [];
+    for (const file of files) {
+      if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
+        setUploadError('Only PDF files are accepted');
+        continue;
+      }
+      if (file.size > 100 * 1024 * 1024) {
+        setUploadError('File must be under 100 MB');
+        continue;
+      }
+      const baseName = file.name.replace(/\.pdf$/i, '').replace(/[_-]/g, ' ');
+      queued.push({
+        file,
+        title: baseName,
+        drawing_type: '',
+        drawing_number: '',
+        revision: '',
+        system_name: projectSystems[0]?.name ?? '',
+        notes: '',
+      });
     }
-    if (file.size > 100 * 1024 * 1024) {
-      setUploadError('File must be under 100 MB');
-      return;
-    }
+    if (queued.length === 0) return;
     setUploadError(null);
-    const baseName = file.name.replace(/\.pdf$/i, '').replace(/[_-]/g, ' ');
-    setPendingUpload({
-      file,
-      title: baseName,
-      drawing_type: '',
-      drawing_number: '',
-      revision: '',
-      system_name: projectSystems[0]?.name ?? '',
-      notes: '',
-    });
+    setPendingQueue(queued);
+    setPendingIndex(0);
   };
 
   const handleFiles = (files: FileList | File[]) => {
-    const arr = Array.from(files);
-    if (arr.length > 0) openUploadModal(arr[0]); // one at a time via modal
+    openUploadModal(Array.from(files));
   };
 
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -168,13 +205,56 @@ export default function AsBuiltDrawingsPage() {
         ...systemFields,
       });
       if (dbErr) throw dbErr;
-      setPendingUpload(null);
+      setPendingQueue(prev => {
+        if (pendingIndex + 1 < prev.length) return prev;
+        return [];
+      });
+      if (pendingIndex + 1 < pendingQueue.length) {
+        setPendingIndex(i => i + 1);
+      } else {
+        setPendingIndex(0);
+      }
       await load();
     } catch (err: any) {
       setUploadError(err.message ?? 'Upload failed');
     } finally {
       setUploading(false);
     }
+  };
+
+  const saveAsFittedScope = async () => {
+    if (!pid) return;
+    setScopeSaving(true);
+    if (asFittedScopeId) {
+      await supabase.from('project_documents').update({ content: asFittedScope, status: 'final' }).eq('id', asFittedScopeId);
+    } else {
+      const { data } = await supabase.from('project_documents').insert({
+        project_id: pid,
+        document_type: 'as_fitted_scope',
+        title: 'As Fitted',
+        content: asFittedScope,
+        status: 'final',
+        generated_by: 'manual',
+      }).select('id').single();
+      setAsFittedScopeId(data?.id ?? null);
+    }
+    setScopeSaving(false);
+  };
+
+  const copyFromScope = () => {
+    if (!proposedScope) return;
+    if (asFittedScope.trim() && asFittedScope !== proposedScope && !window.confirm('Replace the as-fitted record with the current Scope of Works?')) return;
+    setAsFittedScope(proposedScope);
+  };
+
+  const updatePending = (patch: Partial<PendingUpload>) => {
+    setPendingQueue(prev => prev.map((item, i) => i === pendingIndex ? { ...item, ...patch } : item));
+  };
+
+  const cancelPending = () => {
+    setPendingQueue([]);
+    setPendingIndex(0);
+    setUploadError(null);
   };
 
   const startEdit = (d: AsBuiltDrawing) => {
@@ -228,8 +308,8 @@ export default function AsBuiltDrawingsPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-lg font-semibold text-slate-900">As Fitted Drawings</h2>
-          <p className="text-sm text-slate-500 mt-0.5">Upload final installation drawings. These appear full-size in the O&M pack.</p>
+          <h2 className="text-lg font-semibold text-slate-900">As Fitted</h2>
+          <p className="text-sm text-slate-500 mt-0.5">Starts as a copy of the Scope of Works. Edit it if the installed works differ, then add drawings.</p>
         </div>
         <button
           onClick={() => fileInputRef.current?.click()}
@@ -237,6 +317,19 @@ export default function AsBuiltDrawingsPage() {
         >
           <Plus className="w-4 h-4" />Add Drawing
         </button>
+      </div>
+
+      <div className="mb-6">
+        <MarkdownDocEditor
+          title="As Fitted"
+          content={asFittedScope}
+          onChange={setAsFittedScope}
+          onSave={() => void saveAsFittedScope()}
+          saving={scopeSaving}
+          placeholder="Enter as-fitted works here (supports Markdown formatting)..."
+          emptyHint="No as-fitted record yet. It copies the Scope of Works when that exists, or you can type it here."
+          extraAction={proposedScope ? { label: 'Copy from Scope of Works', onClick: copyFromScope } : undefined}
+        />
       </div>
 
       <AsFittedItemsPanel projectId={pid} />
@@ -251,11 +344,11 @@ export default function AsBuiltDrawingsPage() {
           dragOver ? 'border-cyan-400 bg-cyan-50' : 'border-slate-300 hover:border-cyan-400 hover:bg-cyan-50'
         }`}
       >
-        <input ref={fileInputRef} type="file" accept=".pdf,application/pdf"
+        <input ref={fileInputRef} type="file" accept=".pdf,application/pdf" multiple
           className="hidden" onChange={e => e.target.files && handleFiles(e.target.files)} />
         <Upload className={`w-8 h-8 mx-auto mb-2 transition-colors ${dragOver ? 'text-cyan-500' : 'text-slate-300'}`} />
-        <p className="text-sm font-medium text-slate-500">Drop a PDF drawing here or click to browse</p>
-        <p className="text-xs text-slate-400 mt-1">PDF format · Max 100 MB</p>
+        <p className="text-sm font-medium text-slate-500">Drop PDF drawings here or click to browse</p>
+        <p className="text-xs text-slate-400 mt-1">PDF format · Max 100 MB · Multiple files allowed</p>
       </div>
 
       {uploadError && !pendingUpload && (
@@ -389,10 +482,10 @@ export default function AsBuiltDrawingsPage() {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
             <div className="p-6 border-b border-slate-200 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-semibold text-slate-900">Add Drawing</h2>
-                <p className="text-xs text-slate-400 mt-0.5 font-mono truncate max-w-xs">{pendingUpload.file.name}</p>
+                <h2 className="text-lg font-semibold text-slate-900">Describe drawing</h2>
+                <p className="text-xs text-slate-400 mt-0.5">File {pendingIndex + 1} of {pendingQueue.length} · {pendingUpload.file.name}</p>
               </div>
-              <button onClick={() => { setPendingUpload(null); setUploadError(null); }}
+              <button onClick={cancelPending}
                 className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
                 <X className="w-5 h-5" />
               </button>
@@ -406,13 +499,13 @@ export default function AsBuiltDrawingsPage() {
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1.5">Drawing Title <span className="text-red-500">*</span></label>
                 <input value={pendingUpload.title}
-                  onChange={e => setPendingUpload(p => p ? { ...p, title: e.target.value } : p)}
+                  onChange={e => updatePending({ title: e.target.value })}
                   className={ic} placeholder="e.g. Ground Floor CCTV Layout" />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1.5">System / Cost Centre</label>
                 <select value={pendingUpload.system_name}
-                  onChange={e => setPendingUpload(p => p ? { ...p, system_name: e.target.value } : p)}
+                  onChange={e => updatePending({ system_name: e.target.value })}
                   className={ic}>
                   {projectSystems.length === 0 ? (
                     <option value="">No systems available</option>
@@ -425,7 +518,7 @@ export default function AsBuiltDrawingsPage() {
                 <div className="col-span-2">
                   <label className="block text-xs font-semibold text-slate-600 mb-1.5">Drawing Type</label>
                   <select value={pendingUpload.drawing_type}
-                    onChange={e => setPendingUpload(p => p ? { ...p, drawing_type: e.target.value } : p)}
+                    onChange={e => updatePending({ drawing_type: e.target.value })}
                     className={ic}>
                     <option value="">Select type…</option>
                     {DRAWING_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
@@ -434,25 +527,25 @@ export default function AsBuiltDrawingsPage() {
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1.5">Drawing No.</label>
                   <input value={pendingUpload.drawing_number}
-                    onChange={e => setPendingUpload(p => p ? { ...p, drawing_number: e.target.value } : p)}
+                    onChange={e => updatePending({ drawing_number: e.target.value })}
                     className={ic} placeholder="e.g. DWG-001" />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1.5">Revision</label>
                   <input value={pendingUpload.revision}
-                    onChange={e => setPendingUpload(p => p ? { ...p, revision: e.target.value } : p)}
+                    onChange={e => updatePending({ revision: e.target.value })}
                     className={ic} placeholder="e.g. Rev A" />
                 </div>
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1.5">Notes</label>
                 <textarea value={pendingUpload.notes}
-                  onChange={e => setPendingUpload(p => p ? { ...p, notes: e.target.value } : p)}
+                  onChange={e => updatePending({ notes: e.target.value })}
                   rows={2} className={`${ic} resize-none`} placeholder="Optional description or notes about this drawing" />
               </div>
             </div>
             <div className="px-6 pb-6 flex justify-end gap-3">
-              <button onClick={() => { setPendingUpload(null); setUploadError(null); }}
+              <button onClick={cancelPending}
                 className="px-4 py-2 text-slate-600 font-medium text-sm hover:text-slate-800 transition-colors">
                 Cancel
               </button>
