@@ -268,6 +268,13 @@ export default function HandoverPage() {
   const activeDocumentSystem = resolveActiveDocumentSystem(projectSystems, activeSystemKey);
   const activeSystemFields = systemAssignmentFields(activeDocumentSystem);
 
+  useEffect(() => {
+    if (activeSystemKey === PROJECT_WIDE_SYSTEM_KEY) return;
+    if (!projectSystems.some(system => system.name === activeSystemKey)) {
+      setActiveSystemKey(PROJECT_WIDE_SYSTEM_KEY);
+    }
+  }, [projectSystems, activeSystemKey]);
+
   const activeTypeOptions = useMemo(() => {
     if (activeSystemKey === PROJECT_WIDE_SYSTEM_KEY) {
       return documentTypes.filter(type => type.key === PROJECT_WIDE_DOCUMENT_TYPE_KEY);

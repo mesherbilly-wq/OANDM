@@ -664,7 +664,7 @@ export default function DeviceSchedulePage() {
     <div className="p-6 space-y-6">
       {/* Summary Stats */}
       <div className="flex flex-wrap items-center gap-3 p-4 bg-white rounded-lg border border-gray-200">
-        {projectSystems.map((system) => {
+        {projectSystems.filter(system => system.deviceCount > 0).map((system) => {
           const style = getCategoryStyle(system.category);
           return (
             <div key={system.slug} className={`text-sm font-medium px-3 py-1 rounded-full border ${style.badgeClass}`}>

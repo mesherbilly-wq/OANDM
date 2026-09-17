@@ -259,6 +259,11 @@ export function deriveProjectSystems(
   return deriveProjectSystemsFromDevices(devices);
 }
 
+/** Systems currently included in the O&M — those with at least one assigned device. */
+export function populatedProjectSystems(systems: ProjectSystem[]): ProjectSystem[] {
+  return systems.filter(system => system.deviceCount > 0);
+}
+
 export function findProjectSystemBySlug(systems: ProjectSystem[], slug: string | undefined): ProjectSystem | null {
   if (!slug) return null;
   return systems.find(system => system.slug === slug) ?? null;

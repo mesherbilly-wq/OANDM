@@ -1,6 +1,6 @@
 import type { Device, SystemCategory } from '../types';
 import type { ProjectSystem } from './systems';
-import { deriveProjectSystems, legacySystemNameToCategory, systemNameToSlug } from './systems';
+import { deriveProjectSystems, legacySystemNameToCategory, populatedProjectSystems } from './systems';
 import { loadProjectSystemsForProject } from './projectSystemsDb';
 
 export const PROJECT_WIDE_SYSTEM_KEY = '__project_wide__';
@@ -12,28 +12,23 @@ export async function loadDocumentProjectSystems(
   devices: Device[] = [],
 ): Promise<ProjectSystem[]> {
   const systemRows = await loadProjectSystemsForProject(projectId, devices);
-  return deriveProjectSystems(devices, systemRows);
+  return populatedProjectSystems(deriveProjectSystems(devices, systemRows));
 }
 
-/** Merge extra system names from stored documents (e.g. legacy tech_doc imports). */
+/** Keep only systems still included in the O&M. Leftover document names are ignored. */
 export function mergeDocumentSystemNames(
   projectSystems: ProjectSystem[],
-  extraNames: string[],
+  _extraNames: string[] = [],
 ): ProjectSystem[] {
-  const byName = new Map(projectSystems.map(system => [system.name, system]));
+  return populatedProjectSystems(projectSystems);
+}
 
-  for (const rawName of extraNames) {
-    const name = rawName?.trim();
-    if (!name || byName.has(name)) continue;
-    byName.set(name, {
-      name,
-      slug: systemNameToSlug(name),
-      category: null,
-      deviceCount: 0,
-    });
-  }
-
-  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+export function documentBelongsToProjectSystems(
+  record: { system_type?: string | null; project_system_id?: number | null },
+  systems: Array<Pick<ProjectSystem, 'id' | 'name'>>,
+): boolean {
+  if (isProjectWideDocument(record)) return true;
+  return systems.some(system => documentMatchesSystem(record, system));
 }
 
 export function documentMatchesSystem(
@@ -103,18 +98,6 @@ export function groupRecordsByProjectSystems<
   projectWide.forEach(record => matched.add(record));
   if (projectWide.length > 0) {
     groups.push({ system: null, label: PROJECT_WIDE_SYSTEM_LABEL, records: projectWide });
-  }
-
-  const byLegacyName = new Map<string, T[]>();
-  for (const record of records) {
-    if (matched.has(record)) continue;
-    const name = record.system_type?.trim() || 'Unassigned';
-    const bucket = byLegacyName.get(name) ?? [];
-    bucket.push(record);
-    byLegacyName.set(name, bucket);
-  }
-  for (const [name, legacyRecords] of byLegacyName.entries()) {
-    groups.push({ system: null, label: name, records: legacyRecords });
   }
 
   return groups;

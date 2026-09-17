@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useProject } from './ProjectLayout';
 import { supabase } from '../lib/supabase';
-import { CommissioningRecord, SYSTEM_TYPES } from '../types';
+import { CommissioningRecord } from '../types';
 import type { Device } from '../types';
 import {
   Plus, CheckCircle, XCircle, Circle, Save, Loader2,
@@ -153,7 +153,7 @@ export default function CommissioningPage() {
 
   // Filter tabs to only show installed systems
   const installedSystems = [...new Set(devices.map(d => d.system_type).filter(Boolean))] as string[];
-  const visibleTabs = SYSTEM_TYPES.filter(t => installedSystems.includes(t));
+  const visibleTabs = [...installedSystems].sort((a, b) => a.localeCompare(b));
 
   useEffect(() => {
     if (visibleTabs.length > 0 && !visibleTabs.includes(activeTab as any)) {

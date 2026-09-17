@@ -2,10 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { groupDevices } from '../lib/deviceGrouping';
-import { deriveProjectSystems, deviceBelongsToSystem, getCategoryStyle, type ProjectSystem } from '../lib/systems';
+import { deriveProjectSystems, deviceBelongsToSystem, getCategoryStyle, populatedProjectSystems, type ProjectSystem } from '../lib/systems';
 import {
+  documentBelongsToProjectSystems,
   groupRecordsByProjectSystems,
-  mergeDocumentSystemNames,
 } from '../lib/documentProjectSystems';
 import { fetchProjectSystems } from '../lib/projectSystemsDb';
 import { findDatasheetForDeviceFields } from '../lib/datasheetMatching';
@@ -19,6 +19,7 @@ import { useUserAccess } from '../lib/userAccess';
 import { OmClientInvitePanel } from '../components/OmClientInvitePanel';
 import { MarkdownDocEditor, documentPreviewClassName, renderDocumentHtml, usesSimproLayout } from '../components/MarkdownDocEditor';
 import { MaintenancePlanSection, PrintMaintenancePlan } from '../components/MaintenancePlanSection';
+import { PACIFIC_INK, PACIFIC_LABEL_GREY, PACIFIC_LOGO_SRC, PACIFIC_RED } from '../components/FormLetterhead';
 import {
   createDefaultMaintenancePlan,
   hydrateStoredMaintenancePlan,
@@ -70,6 +71,22 @@ interface AsBuiltDrawing {
 // Returns an array of data URL strings (one per page), or null on error.
 
 type PdfRenderState = { pages: string[]; loading: boolean; failed: boolean };
+
+async function fetchPdfBytes(url: string): Promise<Uint8Array | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return new Uint8Array(await res.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+async function pdfPageCount(bytes: Uint8Array): Promise<number> {
+  const { PDFDocument } = await import('pdf-lib');
+  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+  return doc.getPageCount();
+}
 
 async function renderPdfToImages(url: string): Promise<string[] | null> {
   try {
@@ -179,12 +196,8 @@ function systemsWithTechImport(
   documentSystems: ReturnType<typeof deriveProjectSystems>,
   techDocState: Partial<Record<string, { rows: { length: number }[] }>>,
 ): string[] {
-  const names = new Set<string>();
-  for (const system of documentSystems) names.add(system.name);
-  for (const [name, state] of Object.entries(techDocState)) {
-    if ((state?.rows.length ?? 0) > 0) names.add(name);
-  }
-  return [...names]
+  return documentSystems
+    .map(system => system.name)
     .filter(name => (techDocState[name]?.rows.length ?? 0) > 0)
     .sort((a, b) => a.localeCompare(b));
 }
@@ -199,9 +212,28 @@ type TechDocBundle = {
   colConfig: TechDocColumn[];
 };
 
+const PACIFIC_RED_RGB: [number, number, number] = [192, 0, 0];
+const PACIFIC_INK_RGB: [number, number, number] = [64, 64, 64];
+const PACIFIC_MUTED_RGB: [number, number, number] = [120, 120, 120];
 const TECH_DOC_PRINT_ROWS = 18;
 const TECH_DOC_PRINT_ROWS_LANDSCAPE = 12;
 const PRINT_LANDSCAPE_COL_THRESHOLD = 6;
+
+async function loadPacificLogoDataUrl(): Promise<string | null> {
+  try {
+    const response = await fetch(PACIFIC_LOGO_SRC);
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return null;
+  }
+}
 
 function sameSystemName(a: string | null | undefined, b: string | null | undefined): boolean {
   return (a ?? '').trim().toLowerCase() === (b ?? '').trim().toLowerCase();
@@ -526,14 +558,8 @@ export function ProjectOMExportPage() {
     setDocAuthority(authData ?? null);
 
     // Build techDocState per project system / cost centre
-    const baseSystems = deriveProjectSystems(enriched, systemData ?? []);
-    const extraTechNames = [
-      ...new Set([
-        ...(techRowData ?? []).map((row: { system_type: string }) => row.system_type),
-        ...(techDocDocsRes.data ?? []).map((doc: { system_type: string | null }) => doc.system_type),
-      ].filter(Boolean)),
-    ] as string[];
-    const documentSystems = mergeDocumentSystemNames(baseSystems, extraTechNames);
+    const baseSystems = populatedProjectSystems(deriveProjectSystems(enriched, systemData ?? []));
+    const documentSystems = baseSystems;
     const tdState: typeof techDocState = {};
     const mappedRows = (techRowData ?? []).map((r: { id: number; row_index: number; data: unknown; system_type: string; document_id?: number | null }) => ({
       id: r.id,
@@ -744,13 +770,21 @@ export function ProjectOMExportPage() {
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
-  const projectSystems = deriveProjectSystems(devices, systemRows);
-  const documentSystems = mergeDocumentSystemNames(
-    projectSystems,
-    Object.keys(techDocState).filter(name => (techDocState[name]?.rows.length ?? 0) > 0),
-  );
+  const projectSystems = populatedProjectSystems(deriveProjectSystems(devices, systemRows));
+  const documentSystems = projectSystems;
+  const includedSystemNames = new Set(projectSystems.map(system => system.name));
   const importedTechSystems = systemsWithTechImport(documentSystems, techDocState);
-  const namedTechBundles = techDocBundles.filter(bundle => bundle.rows.length > 0);
+  const namedTechBundles = techDocBundles.filter(bundle =>
+    bundle.rows.length > 0 && (!bundle.system || includedSystemNames.has(bundle.system)),
+  );
+
+  const includedHandoverUploads = omUploads.filter(upload =>
+    HANDOVER_SECTIONS.has(upload.section) && documentBelongsToProjectSystems(upload, documentSystems),
+  );
+  const includedScHandoverDocs = scHandoverDocs.filter(doc => documentBelongsToProjectSystems(doc, documentSystems));
+  const includedOtherHandoverDocs = otherHandoverDocs.filter(doc => documentBelongsToProjectSystems(doc, documentSystems));
+  const includedAsFittedDrawings = asFittedDrawings.filter(drawing => documentBelongsToProjectSystems(drawing, documentSystems));
+  const includedCommRecords = commRecords.filter(record => !record.system_type || includedSystemNames.has(record.system_type));
 
   const systemGroups = projectSystems.map(system => ({
     system: system.name,
@@ -775,14 +809,13 @@ export function ProjectOMExportPage() {
       return hasTechData || techDevices.length > 0 ? 'complete' : 'empty';
     }
     if (s === 'maintenance_plan') return systemGroups.some(g => g.devices.length > 0 && maintenancePlanHasContent(maintPlans[g.system])) ? 'complete' : 'empty';
-    if (s === 'commissioning') return getUpload('commissioning') ? 'complete' : commRecords.length > 0 ? 'partial' : 'empty';
+    if (s === 'commissioning') return getUpload('commissioning') ? 'complete' : includedCommRecords.length > 0 ? 'partial' : 'empty';
     if (s === 'handover') {
-      const hUploads = omUploads.filter(u => HANDOVER_SECTIONS.has(u.section));
-      const scReady = scHandoverDocs.some(doc => doc.file_url);
-      const otherReady = otherHandoverDocs.some(doc => doc.file_url);
-      return hUploads.length > 0 || scReady || otherReady ? 'complete' : handoverDocs.length > 0 || scHandoverDocs.length > 0 ? 'partial' : 'empty';
+      const scReady = includedScHandoverDocs.some(doc => doc.file_url);
+      const otherReady = includedOtherHandoverDocs.some(doc => doc.file_url);
+      return includedHandoverUploads.length > 0 || scReady || otherReady ? 'complete' : handoverDocs.length > 0 || includedScHandoverDocs.length > 0 ? 'partial' : 'empty';
     }
-    if (s === 'as_fitted') return asFittedDrawings.length > 0 ? 'complete' : 'empty';
+    if (s === 'as_fitted') return includedAsFittedDrawings.length > 0 ? 'complete' : 'empty';
     if (s === 'datasheets') return devices.some(d => d.datasheet) ? 'complete' : 'empty';
     if (s === 'user_manuals') return projectManuals.length > 0 ? 'complete' : 'empty';
     return 'empty';
@@ -907,7 +940,7 @@ export function ProjectOMExportPage() {
 
   // ── Print ─────────────────────────────────────────────────────────────────────
 
-  const hUploads = omUploads.filter(u => HANDOVER_SECTIONS.has(u.section));
+  const hUploads = includedHandoverUploads;
   const handoverPackPdfs = useMemo(() => {
     const docs: { key: string; title: string; file_name: string | null; file_url: string }[] = [];
     const seen = new Set<string>();
@@ -917,10 +950,10 @@ export function ProjectOMExportPage() {
       docs.push({ key, title, file_name: file_name ?? null, file_url });
     };
     for (const upload of hUploads) add(`upload-${upload.id}`, handoverSectionLabel(upload.section), upload.file_name, upload.file_url);
-    for (const doc of scHandoverDocs) add(`sc-${doc.id ?? doc.document_type}`, doc.title, doc.file_name, doc.file_url);
-    for (const doc of otherHandoverDocs) add(`other-${doc.id}`, doc.title, doc.file_name, doc.file_url);
+    for (const doc of includedScHandoverDocs) add(`sc-${doc.id ?? doc.document_type}`, doc.title, doc.file_name, doc.file_url);
+    for (const doc of includedOtherHandoverDocs) add(`other-${doc.id}`, doc.title, doc.file_name, doc.file_url);
     return docs;
-  }, [hUploads, scHandoverDocs, otherHandoverDocs]);
+  }, [hUploads, includedScHandoverDocs, includedOtherHandoverDocs]);
   const printRendering = packPdfUrls.some(url => pdfPageImages[url]?.loading);
 
   const handlePrint = () => window.print();
@@ -941,8 +974,8 @@ export function ProjectOMExportPage() {
       const pageMetrics = (landscape: boolean) => {
         const pageW = landscape ? 297 : 210;
         const pageH = landscape ? 210 : 297;
-        const mTop = landscape ? 15 : 20;
-        const mBottom = landscape ? 15 : 20;
+        const mTop = landscape ? 20 : 24;
+        const mBottom = landscape ? 14 : 18;
         const mLeft = landscape ? 12 : 15;
         const mRight = landscape ? 12 : 15;
         return {
@@ -954,7 +987,7 @@ export function ProjectOMExportPage() {
           mRight,
           contentW: pageW - mLeft - mRight,
           contentH: pageH - mTop - mBottom,
-          footerY: pageH - 10,
+          footerY: pageH - 8,
         };
       };
       const PORTRAIT = pageMetrics(false);
@@ -990,7 +1023,8 @@ export function ProjectOMExportPage() {
         if (el.classList.contains('page-break')) return false;
         if (!allowedAnchors) return true;
         const anchorId = el.id || el.querySelector('[id]')?.id || '';
-        return allowedAnchors.has(anchorId);
+        const sectionKey = el.getAttribute('data-print-section');
+        return allowedAnchors.has(anchorId) || (sectionKey != null && allowedAnchors.has(`print-section-${sectionKey}`));
       });
 
       if (pageEls.length === 0) {
@@ -1001,7 +1035,10 @@ export function ProjectOMExportPage() {
 
       // ── PASS 1: Render all sections, calculate real page numbers ──────────
       type RenderedSection = {
-        canvas: HTMLCanvasElement;
+        kind: 'canvas' | 'native-pdf';
+        canvas?: HTMLCanvasElement;
+        nativePdf?: Uint8Array;
+        nativePageCount?: number;
         anchorId: string | null;
         isCover: boolean;
         landscape: boolean;
@@ -1012,13 +1049,32 @@ export function ProjectOMExportPage() {
         const el = pageEls[i];
         const landscape = i !== 0 && sectionIsLandscape(el);
         const renderW = landscape ? LANDSCAPE_RENDER_W_PX : RENDER_W_PX;
+        const anchorIdRaw = el.id || el.querySelector('[id]')?.id || null;
+        const anchorId = anchorIdRaw?.startsWith('print-section-') ? anchorIdRaw : null;
+        const sourcePdf = el.getAttribute('data-om-source-pdf');
+
+        if (sourcePdf) {
+          const bytes = await fetchPdfBytes(sourcePdf);
+          if (bytes && bytes.length > 0) {
+            renderedSections.push({
+              kind: 'native-pdf',
+              nativePdf: bytes,
+              nativePageCount: await pdfPageCount(bytes),
+              anchorId,
+              isCover: false,
+              landscape: false,
+            });
+            continue;
+          }
+        }
+
         applyPrintRootWidth(renderW);
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-        const anchorId = el.id || el.querySelector('[id]')?.id || null;
         const canvas = await capturePrintElement(el, html2canvas as (element: HTMLElement, options?: Record<string, unknown>) => Promise<HTMLCanvasElement>, renderW);
         renderedSections.push({
+          kind: 'canvas',
           canvas,
-          anchorId: anchorId?.startsWith('print-section-') ? anchorId : null,
+          anchorId,
           isCover: i === 0,
           landscape,
         });
@@ -1031,9 +1087,11 @@ export function ProjectOMExportPage() {
         if (section.anchorId) {
           sectionPageMap[section.anchorId] = dryPage;
         }
-        if (section.isCover) {
+        if (section.kind === 'native-pdf') {
+          dryPage += Math.max(1, section.nativePageCount ?? 1);
+        } else if (section.isCover) {
           dryPage++;
-        } else {
+        } else if (section.canvas) {
           const metrics = pageMetrics(section.landscape);
           const contentH_mm = (section.canvas.height / section.canvas.width) * metrics.contentW;
           const pagesNeeded = Math.max(1, Math.ceil(contentH_mm / metrics.contentH));
@@ -1072,8 +1130,24 @@ export function ProjectOMExportPage() {
       }
 
       // ── PASS 3: Build the actual PDF ──────────────────────────────────────
+      const ANCHOR_LABELS: Record<string, string> = {
+        'print-section-toc':              'Table of Contents',
+        'print-section-cover':            'Cover Page',
+        'print-section-scope':            'Scope of Works',
+        'print-section-schedule':         'Device Schedule',
+        'print-section-technical_docs':   'Technical Documentation',
+        'print-section-maintenance_plan': 'Maintenance Plan',
+        'print-section-commissioning':    'Commissioning Pack',
+        'print-section-handover':         'Handover Documents',
+        'print-section-as_fitted':        'As Fitted',
+        'print-section-datasheets':       'Datasheets',
+        'print-section-user_manuals':     'User Manuals',
+      };
+
+      const logoDataUrl = await loadPacificLogoDataUrl();
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
       let currentPage = 0;
+      let runningTitle = 'Operations & Maintenance Manual';
 
       const newPage = (landscape: boolean) => {
         if (currentPage > 0) pdf.addPage('a4', landscape ? 'landscape' : 'portrait');
@@ -1081,10 +1155,16 @@ export function ProjectOMExportPage() {
       };
 
       const drawFooter = (pageNum: number, metrics: ReturnType<typeof pageMetrics>) => {
-        pdf.setFontSize(7.5);
-        pdf.setTextColor(148, 163, 184);
+        pdf.setDrawColor(...PACIFIC_RED_RGB);
+        pdf.setLineWidth(0.35);
+        pdf.line(metrics.mLeft, metrics.pageH - 12, metrics.pageW - metrics.mRight, metrics.pageH - 12);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(7);
+        pdf.setTextColor(...PACIFIC_MUTED_RGB);
+        pdf.text('Pacific Fire & Security', metrics.mLeft, metrics.footerY);
+        pdf.setTextColor(...PACIFIC_RED_RGB);
         pdf.text(`Page ${pageNum}`, metrics.pageW / 2, metrics.footerY, { align: 'center' });
-        pdf.setFontSize(6.5);
+        pdf.setTextColor(...PACIFIC_MUTED_RGB);
         pdf.text(
           project?.project_name || 'O&M Pack',
           metrics.pageW - metrics.mRight, metrics.footerY,
@@ -1092,14 +1172,39 @@ export function ProjectOMExportPage() {
         );
       };
 
-      const drawHeaderLine = (metrics: ReturnType<typeof pageMetrics>) => {
-        pdf.setDrawColor(226, 232, 240);
-        pdf.setLineWidth(0.3);
+      const drawPageHeader = (metrics: ReturnType<typeof pageMetrics>, title: string) => {
+        pdf.setFillColor(...PACIFIC_RED_RGB);
+        pdf.rect(0, 0, metrics.pageW, 3.2, 'F');
+        if (logoDataUrl) {
+          try {
+            pdf.addImage(logoDataUrl, 'PNG', metrics.mLeft, 5.2, 42, 11);
+          } catch {
+            // Logo is optional if the PNG cannot be embedded.
+          }
+        }
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(8);
+        pdf.setTextColor(...PACIFIC_RED_RGB);
+        pdf.text(title.toUpperCase(), metrics.pageW - metrics.mRight, 12, { align: 'right' });
+        pdf.setDrawColor(...PACIFIC_RED_RGB);
+        pdf.setLineWidth(0.45);
         pdf.line(metrics.mLeft, metrics.mTop - 3, metrics.pageW - metrics.mRight, metrics.mTop - 3);
       };
 
+      const nativeInserts: { index: number; bytes: Uint8Array }[] = [];
+
       for (const section of renderedSections) {
-        const { canvas, isCover, landscape } = section;
+        const { isCover, landscape, anchorId } = section;
+        if (anchorId && ANCHOR_LABELS[anchorId]) runningTitle = ANCHOR_LABELS[anchorId];
+        else if (anchorId?.startsWith('print-section-technical_docs')) runningTitle = 'Technical Documentation';
+
+        if (section.kind === 'native-pdf' && section.nativePdf) {
+          nativeInserts.push({ index: currentPage, bytes: section.nativePdf });
+          continue;
+        }
+
+        const canvas = section.canvas;
+        if (!canvas) continue;
         const metrics = pageMetrics(landscape);
         const contentH_mm = (canvas.height / canvas.width) * metrics.contentW;
         const pxPerMm = canvas.width / metrics.contentW;
@@ -1114,11 +1219,10 @@ export function ProjectOMExportPage() {
 
         let srcY_px = 0;
         let remainingH_mm = contentH_mm;
-        let isFirstSlice = true;
 
         while (remainingH_mm > 0.5) {
           newPage(landscape);
-          if (!isFirstSlice) drawHeaderLine(metrics);
+          drawPageHeader(metrics, runningTitle);
 
           const sliceH_mm = Math.min(remainingH_mm, metrics.contentH);
           const sliceH_px = Math.round(sliceH_mm * pxPerMm);
@@ -1144,35 +1248,23 @@ export function ProjectOMExportPage() {
 
           srcY_px += sliceH_px;
           remainingH_mm -= sliceH_mm;
-          isFirstSlice = false;
         }
       }
 
       // ── Add PDF bookmarks ─────────────────────────────────────────────────
-      const ANCHOR_LABELS: Record<string, string> = {
-        'print-section-toc':              'Table of Contents',
-        'print-section-cover':            'Cover Page',
-        'print-section-scope':            'Scope of Works',
-        'print-section-schedule':         'Device Schedule',
-        'print-section-technical_docs':   'Technical Documentation',
-        'print-section-maintenance_plan': 'Maintenance Plan',
-        'print-section-commissioning':    'Commissioning Pack',
-        'print-section-handover':         'Handover Documents',
-        'print-section-as_fitted':        'As Fitted',
-        'print-section-datasheets':       'Datasheets',
-        'print-section-user_manuals':     'User Manuals',
-      };
-      for (const [anchorId, pageNum] of Object.entries(sectionPageMap)) {
-        const label = ANCHOR_LABELS[anchorId] ?? anchorId.replace('print-section-', '');
-        if ((pdf as any).outline) {
-          (pdf as any).outline.add(null, label, { pageNumber: pageNum });
+      if (nativeInserts.length === 0) {
+        for (const [anchorId, pageNum] of Object.entries(sectionPageMap)) {
+          const label = ANCHOR_LABELS[anchorId] ?? anchorId.replace('print-section-', '');
+          if ((pdf as any).outline) {
+            (pdf as any).outline.add(null, label, { pageNumber: pageNum });
+          }
         }
       }
 
       // ── Add clickable internal links on ToC page ──────────────────────────
       const tocPageNum = sectionPageMap['print-section-toc'];
       const tocNode = tocEl as HTMLElement | null;
-      if (tocPageNum && tocNode && tocNode.offsetWidth > 0) {
+      if (nativeInserts.length === 0 && tocPageNum && tocNode && tocNode.offsetWidth > 0) {
         pdf.setPage(tocPageNum);
         const cssToMm = PORTRAIT.contentW / tocNode.offsetWidth;
         const tocBox = tocNode.getBoundingClientRect();
@@ -1193,7 +1285,34 @@ export function ProjectOMExportPage() {
       printRoot.style.cssText = savedStyles;
 
       const filename = `OM-Pack-${(project?.project_name || project?.site_name || 'document').replace(/[^a-z0-9]/gi, '-').toLowerCase()}-${new Date().toISOString().split('T')[0]}.pdf`;
-      pdf.save(filename);
+
+      if (nativeInserts.length === 0) {
+        pdf.save(filename);
+      } else {
+        const { PDFDocument } = await import('pdf-lib');
+        const out = currentPage > 0
+          ? await PDFDocument.load(pdf.output('arraybuffer'))
+          : await PDFDocument.create();
+        let offset = 0;
+        for (const insert of nativeInserts) {
+          const src = await PDFDocument.load(insert.bytes, { ignoreEncryption: true });
+          const copied = await out.copyPages(src, src.getPageIndices());
+          let at = Math.min(insert.index + offset, out.getPageCount());
+          for (const page of copied) {
+            out.insertPage(at, page);
+            at += 1;
+          }
+          offset += copied.length;
+        }
+        const merged = await out.save();
+        const blob = new Blob([merged], { type: 'application/pdf' });
+        const href = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = href;
+        link.download = filename;
+        link.click();
+        URL.revokeObjectURL(href);
+      }
     } catch (err) {
       console.error('PDF generation failed:', err);
       alert('PDF generation failed. Please use the Print button and save as PDF from the print dialog.');
@@ -1326,12 +1445,12 @@ export function ProjectOMExportPage() {
               maintenance_plan: systemGroups.filter(g => g.devices.length > 0 && maintenancePlanHasContent(maintPlans[g.system])).length > 0
                 ? `Plans for ${systemGroups.filter(g => g.devices.length > 0 && maintenancePlanHasContent(maintPlans[g.system])).map(g => g.system).join(', ')}`
                 : 'Not yet created',
-              commissioning: getUpload('commissioning') ? 'PDF uploaded' : commRecords.length > 0 ? `${commRecords.length} test records in database` : 'Not yet uploaded',
+              commissioning: getUpload('commissioning') ? 'PDF uploaded' : includedCommRecords.length > 0 ? `${includedCommRecords.length} test records in database` : 'Not yet uploaded',
               handover: (() => {
-                const total = hUploads.length + scHandoverDocs.filter(d => d.file_url).length + otherHandoverDocs.filter(d => d.file_url).length;
-                return total > 0 ? `${total} document${total !== 1 ? 's' : ''} ready` : handoverDocs.length > 0 || scHandoverDocs.length > 0 ? 'Handover data available' : 'Not yet uploaded';
+                const total = hUploads.length + includedScHandoverDocs.filter(d => d.file_url).length + includedOtherHandoverDocs.filter(d => d.file_url).length;
+                return total > 0 ? `${total} document${total !== 1 ? 's' : ''} ready` : handoverDocs.length > 0 || includedScHandoverDocs.length > 0 ? 'Handover data available' : 'Not yet uploaded';
               })(),
-              as_fitted: asFittedDrawings.length > 0 ? `${asFittedDrawings.length} drawing${asFittedDrawings.length !== 1 ? 's' : ''} uploaded` : 'No drawings uploaded',
+              as_fitted: includedAsFittedDrawings.length > 0 ? `${includedAsFittedDrawings.length} drawing${includedAsFittedDrawings.length !== 1 ? 's' : ''} uploaded` : 'No drawings uploaded',
               datasheets: (() => { const found = devices.filter(d => d.datasheet).length; return found > 0 ? `${found} of ${devices.length} devices have datasheets` : 'No datasheets found'; })(),
               user_manuals: projectManuals.length > 0 ? `${projectManuals.length} manual${projectManuals.length !== 1 ? 's' : ''} attached` : 'No manuals attached',
             };
@@ -1462,25 +1581,25 @@ export function ProjectOMExportPage() {
               uploading={uploading === 'commissioning'}
               onUpload={() => triggerUpload('commissioning')}
               onRemove={handleRemoveUpload}
-              fallbackContent={commRecords.length > 0 ? <CommSummary records={commRecords} /> : null}
-              fallbackLabel={`${commRecords.length} commissioning test records in database`}
+              fallbackContent={includedCommRecords.length > 0 ? <CommSummary records={includedCommRecords} /> : null}
+              fallbackLabel={`${includedCommRecords.length} commissioning test records in database`}
               readOnly={packReadOnly}
             />
           )}
           {activeSection === 'handover' && (
             <HandoverPackSection
-              uploads={omUploads.filter(u => HANDOVER_SECTIONS.has(u.section))}
+              uploads={includedHandoverUploads}
               onRemove={handleRemoveUpload}
               handoverDocs={handoverDocs}
-              scHandoverDocs={scHandoverDocs}
-              otherHandoverDocs={otherHandoverDocs}
+              scHandoverDocs={includedScHandoverDocs}
+              otherHandoverDocs={includedOtherHandoverDocs}
               documentSystems={documentSystems}
               readOnly={packReadOnly}
             />
           )}
           {activeSection === 'as_fitted' && (
             <AsFittedDrawingsSection
-              drawings={asFittedDrawings}
+              drawings={includedAsFittedDrawings}
               pageImages={pdfPageImages}
               documentSystems={documentSystems}
             />
@@ -1512,9 +1631,9 @@ export function ProjectOMExportPage() {
           hasSchedule={devices.length > 0}
           hasTechDocs={namedTechBundles.length > 0 || importedTechSystems.length > 0 || devices.some(d => d.ip_address || d.mac_address || d.firmware_version || d.username_hint || d.password_hint || d.controller_address || d.vlan || d.network_zone)}
           hasMaintPlan={systemGroups.some(g => g.devices.length > 0 && maintenancePlanHasContent(maintPlans[g.system]))}
-          hasCommissioning={!!(getUpload('commissioning') || commRecords.length > 0)}
-          hasHandover={handoverPackPdfs.length > 0 || handoverDocs.length > 0 || scHandoverDocs.length > 0}
-          hasAsFitted={asFittedDrawings.length > 0}
+          hasCommissioning={!!(getUpload('commissioning') || includedCommRecords.length > 0)}
+          hasHandover={handoverPackPdfs.length > 0 || handoverDocs.length > 0 || includedScHandoverDocs.length > 0}
+          hasAsFitted={includedAsFittedDrawings.length > 0}
           hasDatasheets={devices.some(d => d.datasheet)}
           hasUserManuals={projectManuals.length > 0}
         />
@@ -1557,12 +1676,13 @@ export function ProjectOMExportPage() {
                   return rowChunks.map((rows, rowIdx) => {
                     const isFirst = firstSection;
                     firstSection = false;
-                    const title = rowIdx > 0 ? `${bundle.title} (continued)` : bundle.title;
+                    const title = rowIdx > 0 ? 'Technical Documentation (continued)' : 'Technical Documentation';
+                    const subtitle = [bundle.system, bundle.title].filter(Boolean).join(' — ') || undefined;
                     return (
                       <PrintSection
                         key={`${bundle.key}-${rowIdx}`}
                         title={title}
-                        subtitle={bundle.system || undefined}
+                        subtitle={subtitle}
                         anchorId={isFirst ? 'print-section-technical_docs' : undefined}
                         forcePageBreak={!isFirst}
                         landscape={landscape}
@@ -1591,12 +1711,13 @@ export function ProjectOMExportPage() {
                     firstSection = false;
                     const slug = sys.toLowerCase().replace(/\s+/g, '_');
                     const title = rowIdx > 0
-                      ? `${sys} — Technical Documentation (continued)`
-                      : `${sys} — Technical Documentation`;
+                      ? 'Technical Documentation (continued)'
+                      : 'Technical Documentation';
                     return (
                       <PrintSection
                         key={`${sys}-${rowIdx}`}
                         title={title}
+                        subtitle={sys}
                         anchorId={isFirst ? 'print-section-technical_docs' : rowIdx === 0 ? `print-section-technical_docs_${slug}` : undefined}
                         forcePageBreak={!isFirst}
                         landscape={landscape}
@@ -1648,10 +1769,10 @@ export function ProjectOMExportPage() {
             </PrintSection>
             <div className="page-break" />
           </>
-        ) : commRecords.length > 0 && (
+        ) : includedCommRecords.length > 0 && (
           <>
             <PrintSection title="Commissioning Records" anchorId="print-section-commissioning">
-              <CommSummary records={commRecords} />
+              <CommSummary records={includedCommRecords} />
             </PrintSection>
             <div className="page-break" />
           </>
@@ -1685,9 +1806,9 @@ export function ProjectOMExportPage() {
           return null;
         })()}
 
-        {asFittedDrawings.length > 0 && (
+        {includedAsFittedDrawings.length > 0 && (
           <>
-            <PrintAsFittedDrawings drawings={asFittedDrawings} pageImages={pdfPageImages} documentSystems={documentSystems} />
+            <PrintAsFittedDrawings drawings={includedAsFittedDrawings} pageImages={pdfPageImages} documentSystems={documentSystems} />
             <div className="page-break" />
           </>
         )}
@@ -1751,13 +1872,13 @@ export function ProjectOMExportPage() {
               content: "Page " counter(page) " of " counter(pages);
               font-family: system-ui, -apple-system, sans-serif;
               font-size: 8pt;
-              color: #94a3b8;
+              color: #C00000;
             }
             @bottom-right {
               content: string(section-title);
               font-family: system-ui, -apple-system, sans-serif;
               font-size: 7pt;
-              color: #cbd5e1;
+              color: #404040;
             }
           }
 
@@ -1768,13 +1889,13 @@ export function ProjectOMExportPage() {
               content: "Page " counter(page) " of " counter(pages);
               font-family: system-ui, -apple-system, sans-serif;
               font-size: 8pt;
-              color: #94a3b8;
+              color: #C00000;
             }
             @bottom-right {
               content: string(section-title);
               font-family: system-ui, -apple-system, sans-serif;
               font-size: 7pt;
-              color: #cbd5e1;
+              color: #404040;
             }
           }
 
@@ -2327,21 +2448,24 @@ function CoverSection({ project, devices, systemGroups, contractor, authority }:
         <span className="ml-auto text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full font-medium">Auto-populated</span>
       </div>
 
-      <div className="border-2 border-slate-900 rounded-lg overflow-hidden">
-        {/* Header */}
-        <div className="bg-slate-900 px-8 py-10 text-white">
+      <div className="border-2 border-[#C00000] rounded-lg overflow-hidden relative">
+        <div className="absolute right-0 top-0 bottom-0 w-3 bg-[#C00000]" aria-hidden />
+        <div className="bg-white px-8 py-8 pr-10 border-b-2 border-[#C00000]">
           <img
-            src="https://www.pacific-uk.co.uk/wp-content/uploads/2018/07/pacific-logo.png"
-            alt="Pacific Fire and Security Systems"
-            className="h-10 object-contain mb-5 brightness-0 invert"
+            src={PACIFIC_LOGO_SRC}
+            alt="Pacific Fire & Security"
+            className="h-12 object-contain mb-3"
           />
+          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#C00000] mb-4">
+            Specialists in fire; experts in security
+          </p>
           {contractor?.company_name && (
-            <p className="text-xs font-semibold uppercase tracking-widest text-cyan-400 mb-1">{contractor.company_name}</p>
+            <p className="text-xs font-semibold uppercase tracking-widest text-[#404040] mb-1">{contractor.company_name}</p>
           )}
-          <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-3">Operations & Maintenance Manual</p>
-          <h1 className="text-2xl font-bold leading-tight">{project.project_name || 'Untitled Project'}</h1>
-          {project.site_name && <p className="text-slate-300 mt-2 text-sm">{project.site_name}</p>}
-          {project.site_address && <p className="text-slate-400 mt-0.5 text-xs">{project.site_address}</p>}
+          <p className="text-xs font-semibold uppercase tracking-widest text-[#C00000] mb-2">Operations & Maintenance Manual</p>
+          <h1 className="text-2xl font-bold leading-tight text-[#404040]">{project.project_name || 'Untitled Project'}</h1>
+          {project.site_name && <p className="text-[#58595B] mt-2 text-sm">{project.site_name}</p>}
+          {project.site_address && <p className="text-[#737373] mt-0.5 text-xs">{project.site_address}</p>}
         </div>
 
         {/* Project info grid */}
@@ -2385,11 +2509,11 @@ function CoverSection({ project, devices, systemGroups, contractor, authority }:
 
         {/* Contractor footer */}
         {contractor && (contractor.company_name || contractor.telephone || contractor.email) && (
-          <div className="bg-slate-900 text-slate-400 px-8 py-3 flex flex-wrap gap-4 text-xs">
-            {contractor.company_name && <span className="font-semibold text-white">{contractor.company_name}</span>}
-            {contractor.telephone && <span>{contractor.telephone}</span>}
-            {contractor.email && <span>{contractor.email}</span>}
-            {contractor.website && <span>{contractor.website}</span>}
+          <div className="bg-[#C00000] text-white px-8 py-3 flex flex-wrap gap-4 text-xs">
+            {contractor.company_name && <span className="font-semibold">{contractor.company_name}</span>}
+            {contractor.telephone && <span className="text-white/80">{contractor.telephone}</span>}
+            {contractor.email && <span className="text-white/80">{contractor.email}</span>}
+            {contractor.website && <span className="text-white/80">{contractor.website}</span>}
             {contractor.nsi_number && <span>NSI: {contractor.nsi_number}</span>}
           </div>
         )}
@@ -2994,7 +3118,12 @@ function PrintAsFittedDrawings({ drawings, pageImages, documentSystems, skipAnch
           const anchorId = !anchorAssigned ? 'print-section-as_fitted' : undefined;
           if (!anchorAssigned) anchorAssigned = true;
           return (
-            <div key={d.id}>
+            <div
+              key={d.id}
+              data-om-source-pdf={d.file_url}
+              data-om-source-title={`${group.label} — ${d.title || d.file_name}`}
+              data-print-section="as_fitted"
+            >
               <PrintSection
                 title={`${group.label} — ${d.title || d.file_name}`}
                 subtitle={[d.drawing_number && `#${d.drawing_number}`, d.revision].filter(Boolean).join(' · ') || undefined}
@@ -3208,18 +3337,18 @@ function PrintTableOfContents({
     <div id="print-section-toc" style={{ padding: '3.5rem 3.5rem 3rem', fontFamily: 'system-ui, -apple-system, sans-serif', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
       <div style={{ flex: '0 0 auto' }}>
-        <p style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.14em', color: '#94a3b8', textTransform: 'uppercase', margin: '0 0 0.5rem' }}>
+        <p style={{ fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.14em', color: PACIFIC_RED, textTransform: 'uppercase', margin: '0 0 0.75rem', textAlign: 'right' }}>
           {[project?.client_name, project?.site_name || project?.project_name].filter(Boolean).join(' — ') || 'O&M Pack'}
         </p>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', borderBottom: '3px solid #0f172a', paddingBottom: '1rem', marginBottom: '0.25rem' }}>
-          <h1 style={{ fontSize: '2rem', fontWeight: 800, color: '#0f172a', margin: 0, letterSpacing: '-0.02em' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', borderBottom: `3px solid ${PACIFIC_RED}`, paddingBottom: '1rem', marginBottom: '0.25rem' }}>
+          <h1 style={{ fontSize: '2rem', fontWeight: 800, color: PACIFIC_INK, margin: 0, letterSpacing: '-0.02em' }}>
             Table of Contents
           </h1>
-          <span style={{ fontSize: '0.7rem', color: '#94a3b8', fontWeight: 400 }}>
+          <span style={{ fontSize: '0.7rem', color: '#737373', fontWeight: 400 }}>
             {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })}
           </span>
         </div>
-        <p style={{ fontSize: '0.65rem', color: '#94a3b8', margin: '0 0 2.5rem', textAlign: 'right' }}>Operations &amp; Maintenance Manual</p>
+        <p style={{ fontSize: '0.65rem', color: PACIFIC_RED, margin: '0 0 2.5rem', textAlign: 'right', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Operations &amp; Maintenance Manual</p>
       </div>
 
       {/* Entries */}
@@ -3239,8 +3368,8 @@ function PrintTableOfContents({
             {/* Number badge */}
             <span style={{
               width: '1.75rem', height: '1.75rem', borderRadius: '50%',
-              background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: '0.7rem', fontWeight: 800, color: '#64748b', flexShrink: 0, marginRight: '0.75rem',
+              background: PACIFIC_RED, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: '0.7rem', fontWeight: 800, color: 'white', flexShrink: 0, marginRight: '0.75rem',
             }}>
               {entry.number}
             </span>
@@ -3264,10 +3393,10 @@ function PrintTableOfContents({
 
       {/* Footer */}
       <div style={{ flex: '0 0 auto', borderTop: '1px solid #e2e8f0', paddingTop: '1.5rem', marginTop: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <p style={{ fontSize: '0.65rem', color: '#94a3b8', margin: 0 }}>
+        <p style={{ fontSize: '0.65rem', color: '#737373', margin: 0 }}>
           This document has been automatically generated. All information should be verified against site records.
         </p>
-        <p style={{ fontSize: '0.65rem', color: '#cbd5e1', margin: 0 }}>SecureOps Platform</p>
+        <p style={{ fontSize: '0.65rem', color: PACIFIC_RED, margin: 0, fontWeight: 700 }}>Pacific Fire &amp; Security</p>
       </div>
     </div>
   );
@@ -3277,36 +3406,38 @@ function PrintCoverPage({ project, devices, systemGroups, contractor, authority 
   project: any; devices: any[]; systemGroups: any[]; contractor: any; authority: any;
 }) {
   return (
-    <div className="om-cover-page" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
-      {/* Dark header band */}
-      <div style={{ background: '#0f172a', padding: '3rem 3.5rem 2.5rem', color: 'white', flex: '0 0 auto' }}>
+    <div className="om-cover-page" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, -apple-system, sans-serif', position: 'relative', color: PACIFIC_INK }}>
+      <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: '14px', background: PACIFIC_RED }} aria-hidden />
+      <div style={{ padding: '2.75rem 3.5rem 1.75rem', borderBottom: `3px solid ${PACIFIC_RED}`, flex: '0 0 auto', paddingRight: '4rem' }}>
         <img
-          src="https://www.pacific-uk.co.uk/wp-content/uploads/2018/07/pacific-logo.png"
-          alt="Pacific Fire and Security Systems"
-          style={{ height: '2.5rem', objectFit: 'contain', marginBottom: '1.5rem', filter: 'brightness(0) invert(1)' }}
+          src={PACIFIC_LOGO_SRC}
+          alt="Pacific Fire & Security"
+          style={{ height: '3.25rem', objectFit: 'contain', marginBottom: '0.85rem' }}
         />
+        <p style={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.16em', textTransform: 'uppercase', color: PACIFIC_RED, margin: 0 }}>
+          Specialists in fire; experts in security
+        </p>
         {contractor?.company_name && (
-          <p style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.15em', textTransform: 'uppercase', color: '#22d3ee', marginBottom: '0.35rem' }}>
+          <p style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: PACIFIC_INK, margin: '0.85rem 0 0' }}>
             {contractor.company_name}
           </p>
         )}
-        <p style={{ fontSize: '0.6rem', fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', color: '#64748b', marginBottom: '1rem' }}>
+      </div>
+
+      <div style={{ background: 'white', padding: '2rem 3.5rem', flex: '1 1 auto', paddingRight: '4rem' }}>
+        <p style={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.16em', textTransform: 'uppercase', color: PACIFIC_RED, margin: '0 0 0.6rem' }}>
           Operations &amp; Maintenance Manual
         </p>
-        <h1 style={{ fontSize: '2.25rem', fontWeight: 800, lineHeight: 1.2, color: 'white', margin: '0 0 0.75rem' }}>
+        <h1 style={{ fontSize: '2.25rem', fontWeight: 800, lineHeight: 1.2, color: PACIFIC_INK, margin: '0 0 0.75rem' }}>
           {project?.project_name || 'Untitled Project'}
         </h1>
         {project?.site_name && (
-          <p style={{ fontSize: '1rem', color: '#94a3b8', margin: '0 0 0.25rem' }}>{project.site_name}</p>
+          <p style={{ fontSize: '1rem', color: '#58595B', margin: '0 0 0.25rem' }}>{project.site_name}</p>
         )}
         {project?.site_address && (
-          <p style={{ fontSize: '0.8rem', color: '#64748b', margin: 0 }}>{project.site_address}</p>
+          <p style={{ fontSize: '0.8rem', color: '#737373', margin: 0 }}>{project.site_address}</p>
         )}
-      </div>
-
-      {/* Project info grid */}
-      <div style={{ background: 'white', padding: '2rem 3.5rem', flex: '1 1 auto' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem 3rem', borderBottom: '1px solid #e2e8f0', paddingBottom: '1.75rem', marginBottom: '1.75rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem 3rem', borderBottom: '1px solid #e2e8f0', paddingBottom: '1.75rem', marginTop: '1.75rem', marginBottom: '1.75rem' }}>
           {[
             ['Client', project?.client_name],
             ['Project Manager', project?.project_manager],
@@ -3331,9 +3462,9 @@ function PrintCoverPage({ project, devices, systemGroups, contractor, authority 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
             {systemGroups.map((g: any) => (
               <span key={g.system} style={{
-                background: '#f1f5f9', border: '1px solid #e2e8f0',
+                background: '#f7f7f7', border: `1px solid ${PACIFIC_RED}`,
                 borderRadius: '0.375rem', padding: '0.25rem 0.75rem',
-                fontSize: '0.75rem', fontWeight: 600, color: '#334155',
+                fontSize: '0.75rem', fontWeight: 600, color: PACIFIC_INK,
               }}>
                 {g.system}
               </span>
@@ -3367,14 +3498,14 @@ function PrintCoverPage({ project, devices, systemGroups, contractor, authority 
 
       {/* Dark contractor footer */}
       {contractor && (contractor.company_name || contractor.telephone || contractor.email) && (
-        <div style={{ background: '#0f172a', padding: '0.9rem 3.5rem', display: 'flex', flexWrap: 'wrap', gap: '1.25rem', alignItems: 'center', flex: '0 0 auto' }}>
+        <div style={{ background: PACIFIC_RED, padding: '0.9rem 3.5rem', display: 'flex', flexWrap: 'wrap', gap: '1.25rem', alignItems: 'center', flex: '0 0 auto', paddingRight: '4rem' }}>
           {contractor.company_name && <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'white' }}>{contractor.company_name}</span>}
-          {contractor.address_line1 && <span style={{ fontSize: '0.65rem', color: '#64748b' }}>{[contractor.address_line1, contractor.city, contractor.postcode].filter(Boolean).join(', ')}</span>}
-          {contractor.telephone && <span style={{ fontSize: '0.65rem', color: '#64748b' }}>Tel: {contractor.telephone}</span>}
-          {contractor.email && <span style={{ fontSize: '0.65rem', color: '#64748b' }}>{contractor.email}</span>}
-          {contractor.nsi_number && <span style={{ fontSize: '0.65rem', color: '#64748b' }}>NSI: {contractor.nsi_number}</span>}
-          {contractor.ssaib_number && <span style={{ fontSize: '0.65rem', color: '#64748b' }}>SSAIB: {contractor.ssaib_number}</span>}
-          {contractor.company_reg_number && <span style={{ fontSize: '0.65rem', color: '#64748b' }}>Reg: {contractor.company_reg_number}</span>}
+          {contractor.address_line1 && <span style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.85)' }}>{[contractor.address_line1, contractor.city, contractor.postcode].filter(Boolean).join(', ')}</span>}
+          {contractor.telephone && <span style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.85)' }}>Tel: {contractor.telephone}</span>}
+          {contractor.email && <span style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.85)' }}>{contractor.email}</span>}
+          {contractor.nsi_number && <span style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.85)' }}>NSI: {contractor.nsi_number}</span>}
+          {contractor.ssaib_number && <span style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.85)' }}>SSAIB: {contractor.ssaib_number}</span>}
+          {contractor.company_reg_number && <span style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.85)' }}>Reg: {contractor.company_reg_number}</span>}
         </div>
       )}
     </div>
@@ -3396,11 +3527,11 @@ function PrintTechnicalDocsTable({ columns, rows, compact }: {
   const headSize = compact ? '0.46rem' : '0.52rem';
   const pad = compact ? '0.28rem 0.32rem' : '0.32rem 0.4rem';
   return (
-    <table style={{ width: '100%', tableLayout: 'fixed', fontSize, borderCollapse: 'collapse', border: '1px solid #e2e8f0' }}>
+    <table style={{ width: '100%', tableLayout: 'fixed', fontSize, borderCollapse: 'collapse', border: '1px solid #d4d4d4' }}>
       <thead>
-        <tr style={{ background: '#f8fafc' }}>
+        <tr style={{ background: PACIFIC_LABEL_GREY }}>
           {columns.map(col => (
-            <th key={col.key} style={{ textAlign: 'left', padding: pad, fontSize: headSize, fontWeight: 700, color: '#64748b', textTransform: 'uppercase' as const, letterSpacing: '0.04em', borderBottom: '2px solid #e2e8f0', borderRight: '1px solid #f1f5f9', wordBreak: 'break-word' }}>
+            <th key={col.key} style={{ textAlign: 'left', padding: pad, fontSize: headSize, fontWeight: 700, color: PACIFIC_INK, textTransform: 'uppercase' as const, letterSpacing: '0.04em', borderBottom: `2px solid ${PACIFIC_RED}`, borderRight: '1px solid #ececec', wordBreak: 'break-word' }}>
               {col.display_name}
             </th>
           ))}
@@ -3435,7 +3566,7 @@ function PrintTechnicalDocs({ techDocState }: {
         if (visibleCols.length === 0) return null;
         return (
           <div key={sys} style={{ marginBottom: '2rem' }}>
-            <div style={{ background: '#0f172a', padding: '0.5rem 0.75rem', borderRadius: '0.375rem 0.375rem 0 0' }}>
+            <div style={{ background: PACIFIC_RED, padding: '0.5rem 0.75rem', borderRadius: '0.375rem 0.375rem 0 0' }}>
               <h3 style={{ fontSize: '0.7rem', fontWeight: 700, color: 'white', textTransform: 'uppercase', letterSpacing: '0.08em', margin: 0 }}>
                 {sys}
               </h3>
@@ -3520,16 +3651,24 @@ function PrintSection({ title, subtitle, anchorId, forcePageBreak, landscape, ch
       id={anchorId}
       data-print-orientation={landscape ? 'landscape' : 'portrait'}
       style={{
-        padding: landscape ? '1.75rem 1.5rem 1.25rem' : '2.5rem 3rem 2rem',
+        padding: landscape ? '1.5rem 1.35rem 1.1rem' : '2.25rem 3rem 2rem',
         fontFamily: 'system-ui, -apple-system, sans-serif',
         pageBreakBefore: breakBefore,
         breakBefore,
+        color: PACIFIC_INK,
       }}
     >
-      {/* Section header bar */}
-      <div style={{ borderBottom: '3px solid #0f172a', marginBottom: landscape ? '1.1rem' : '1.75rem', paddingBottom: '0.75rem' }}>
-        <h2 style={{ fontSize: landscape ? '1.2rem' : '1.5rem', fontWeight: 800, color: '#0f172a', margin: 0, letterSpacing: '-0.01em' }}>{title}</h2>
-        {subtitle && <p style={{ fontSize: '0.8rem', color: '#64748b', margin: '0.35rem 0 0' }}>{subtitle}</p>}
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '1rem', marginBottom: '0.35rem' }}>
+        <span style={{ fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: PACIFIC_RED }}>
+          Pacific Fire &amp; Security
+        </span>
+        <span style={{ fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#737373', textAlign: 'right' }}>
+          Operations &amp; Maintenance Manual
+        </span>
+      </div>
+      <div style={{ borderBottom: `3px solid ${PACIFIC_RED}`, marginBottom: landscape ? '0.9rem' : '1.35rem', paddingBottom: '0.55rem' }}>
+        <h2 style={{ fontSize: landscape ? '1.15rem' : '1.45rem', fontWeight: 800, color: PACIFIC_INK, margin: 0, letterSpacing: '-0.01em' }}>{title}</h2>
+        {subtitle && <p style={{ fontSize: '0.8rem', color: '#58595B', margin: '0.3rem 0 0' }}>{subtitle}</p>}
       </div>
       {children}
     </div>
@@ -3540,16 +3679,16 @@ function PrintDeviceTable({ system, devices }: { system: SystemType; devices: De
   const equipmentGroups = groupDevices(devices);
   return (
     <div style={{ marginBottom: '2rem' }}>
-      <div style={{ background: '#0f172a', padding: '0.5rem 0.75rem', borderRadius: '0.375rem 0.375rem 0 0', marginBottom: 0 }}>
+      <div style={{ background: PACIFIC_RED, padding: '0.5rem 0.75rem', borderRadius: '0.375rem 0.375rem 0 0', marginBottom: 0 }}>
         <h3 style={{ fontSize: '0.75rem', fontWeight: 700, color: 'white', textTransform: 'uppercase', letterSpacing: '0.08em', margin: 0 }}>
-          {system} <span style={{ color: '#64748b', fontWeight: 400 }}>— {devices.length} device{devices.length !== 1 ? 's' : ''}</span>
+          {system} <span style={{ color: 'rgba(255,255,255,0.75)', fontWeight: 400 }}>— {devices.length} device{devices.length !== 1 ? 's' : ''}</span>
         </h3>
       </div>
       <table style={{ width: '100%', fontSize: '0.7rem', borderCollapse: 'collapse', border: '1px solid #e2e8f0' }}>
         <thead>
-          <tr style={{ background: '#f8fafc' }}>
+          <tr style={{ background: PACIFIC_LABEL_GREY }}>
             {['Description', 'Manufacturer', 'Model', 'Qty', 'Location', 'Warranty'].map(h => (
-              <th key={h} style={{ textAlign: 'left', padding: '0.5rem 0.6rem', fontSize: '0.6rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', borderBottom: '2px solid #e2e8f0', borderRight: '1px solid #f1f5f9' }}>{h}</th>
+              <th key={h} style={{ textAlign: 'left', padding: '0.5rem 0.6rem', fontSize: '0.6rem', fontWeight: 700, color: PACIFIC_INK, textTransform: 'uppercase', letterSpacing: '0.06em', borderBottom: `2px solid ${PACIFIC_RED}`, borderRight: '1px solid #f1f5f9' }}>{h}</th>
             ))}
           </tr>
         </thead>

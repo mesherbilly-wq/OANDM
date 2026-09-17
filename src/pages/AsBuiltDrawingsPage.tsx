@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import {
+  documentBelongsToProjectSystems,
   loadDocumentProjectSystems,
   systemAssignmentFields,
 } from '../lib/documentProjectSystems';
@@ -81,6 +82,7 @@ export default function AsBuiltDrawingsPage() {
   const [pendingQueue, setPendingQueue] = useState<PendingUpload[]>([]);
   const [pendingIndex, setPendingIndex] = useState(0);
   const pendingUpload = pendingQueue[pendingIndex] ?? null;
+  const visibleDrawings = drawings.filter(drawing => documentBelongsToProjectSystems(drawing, projectSystems));
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -287,7 +289,7 @@ export default function AsBuiltDrawingsPage() {
       )}
 
       {/* Drawings list */}
-      {drawings.length === 0 ? (
+      {visibleDrawings.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
           <ImageIcon className="w-10 h-10 text-slate-200 mx-auto mb-3" />
           <p className="text-sm font-medium text-slate-500">No drawings uploaded yet</p>
@@ -297,10 +299,10 @@ export default function AsBuiltDrawingsPage() {
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="flex items-center gap-2 px-6 py-4 border-b border-slate-100 bg-slate-50">
             <ImageIcon className="w-4 h-4 text-slate-400" />
-            <span className="text-sm font-semibold text-slate-700">{drawings.length} drawing{drawings.length !== 1 ? 's' : ''}</span>
+            <span className="text-sm font-semibold text-slate-700">{visibleDrawings.length} drawing{visibleDrawings.length !== 1 ? 's' : ''}</span>
           </div>
           <div className="divide-y divide-slate-100">
-            {drawings.map(d => (
+            {visibleDrawings.map(d => (
               <div key={d.id}>
                 {editingId === d.id ? (
                   <div className="px-6 py-4 bg-slate-50 space-y-3">

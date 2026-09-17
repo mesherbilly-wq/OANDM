@@ -3,7 +3,6 @@ import { useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import {
   loadDocumentProjectSystems,
-  mergeDocumentSystemNames,
   systemAssignmentFields,
 } from '../lib/documentProjectSystems';
 import { getCategoryStyle, type ProjectSystem } from '../lib/systems';
@@ -356,9 +355,14 @@ export default function TechnicalDocsPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const includedDocuments = useMemo(() => {
+    const included = new Set(projectSystems.map(system => system.name));
+    return documents.filter(doc => !doc.system_type || included.has(doc.system_type));
+  }, [documents, projectSystems]);
+
   const visibleDocuments = useMemo(
-    () => documents.filter(doc => !activeSystem || doc.system_type === activeSystem),
-    [documents, activeSystem],
+    () => includedDocuments.filter(doc => !activeSystem || doc.system_type === activeSystem),
+    [includedDocuments, activeSystem],
   );
 
   const currentPending = pendingQueue[pendingIndex] ?? null;
@@ -376,15 +380,7 @@ export default function TechnicalDocsPage() {
     ]);
 
     const devices = devData ?? [];
-    const baseSystems = await loadDocumentProjectSystems(pid, devices);
-    const extraNames = [
-      ...new Set([
-        ...(rowData ?? []).map((row: { system_type: string }) => row.system_type),
-        ...(cfgData ?? []).map((cfg: { system_type: string }) => cfg.system_type),
-        ...(docsRes.data ?? []).map((doc: { system_type: string | null }) => doc.system_type),
-      ].filter(Boolean)),
-    ] as string[];
-    const systems = mergeDocumentSystemNames(baseSystems, extraNames);
+    const systems = await loadDocumentProjectSystems(pid, devices);
     setProjectSystems(systems);
 
     if (docsRes.error && missingTable(docsRes.error)) {
@@ -482,6 +478,12 @@ export default function TechnicalDocsPage() {
   }, [pid]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (activeSystem && !projectSystems.some(system => system.name === activeSystem)) {
+      setActiveSystem('');
+    }
+  }, [projectSystems, activeSystem]);
 
   // ── File pick handler ────────────────────────────────────────────────────────
 
@@ -860,9 +862,9 @@ export default function TechnicalDocsPage() {
               }`}
             >
               All
-              {documents.length > 0 && (
+              {includedDocuments.length > 0 && (
                 <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${!activeSystem ? 'bg-cyan-500 text-white' : 'bg-slate-300 text-slate-700'}`}>
-                  {documents.length}
+                  {includedDocuments.length}
                 </span>
               )}
             </button>
