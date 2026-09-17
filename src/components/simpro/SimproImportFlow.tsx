@@ -191,7 +191,10 @@ export function SimproImportFlow({ onBack }: { onBack: () => void }) {
     setReviewError(null);
 
     try {
-      const draft = normalizeSimproJob(rawJobDetail, { jobId: loadedJobId ?? selectedMatchId });
+      const draft = normalizeSimproJob(rawJobDetail, {
+        jobId: loadedJobId ?? selectedMatchId,
+        jobNumber: selectedMatch?.jobNumber ?? jobNumber.trim(),
+      });
       const { products, error } = await fetchAllProductModels();
       if (error) {
         setReviewError(`Product Database could not be loaded (${error}). Import Review will open without autofill.`);

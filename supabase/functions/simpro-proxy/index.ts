@@ -203,6 +203,7 @@ function isNumericJobQuery(query: string): boolean {
 
 const SEARCH_PAGE_SIZE = 100;
 const SEARCH_MAX_PAGES = 20;
+const JOB_LIST_COLUMNS = "ID,Name,OrderNo,RequestNo,Customer,Site,Description,ProjectManager";
 
 async function fetchJobById(
   config: SimproConfig,
@@ -246,6 +247,7 @@ async function searchJobsPaged(
     const params = new URLSearchParams({
       pageSize: String(SEARCH_PAGE_SIZE),
       page: String(page),
+      columns: JOB_LIST_COLUMNS,
     });
     const list = await fetchJobList(config, params);
     if (!list.ok) {
@@ -280,6 +282,20 @@ async function searchJobsPaged(
 }
 
 async function fetchJobList(
+  config: SimproConfig,
+  params: URLSearchParams,
+): Promise<
+  | { ok: true; status: number; raw: unknown; url: string }
+  | { ok: false; status: number; url: string; endpoint: string; simpro_body: unknown; error: string }
+> {
+  const first = await fetchJobListOnce(config, params);
+  if (first.ok || !params.has("columns")) return first;
+  const retry = new URLSearchParams(params);
+  retry.delete("columns");
+  return fetchJobListOnce(config, retry);
+}
+
+async function fetchJobListOnce(
   config: SimproConfig,
   params: URLSearchParams,
 ): Promise<
@@ -433,7 +449,7 @@ Deno.serve(async (req: Request) => {
     const configError = assertSimproConfig(config);
     if (configError) return json({ error: configError });
 
-    const params = new URLSearchParams({ pageSize: "100", page: "1" });
+    const params = new URLSearchParams({ pageSize: "100", page: "1", columns: JOB_LIST_COLUMNS });
     const list = await fetchJobList(config, params);
     log("list_jobs", list.url);
 

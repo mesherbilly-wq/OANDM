@@ -65,6 +65,7 @@ interface PendingSimproSystem {
 
 export interface NormalizeSimproJobOptions {
   jobId?: string | number | null;
+  jobNumber?: string | number | null;
 }
 
 export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOptions = {}): ImportReviewDraft {
@@ -73,10 +74,10 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
     throw new Error('Simpro job payload is not an object.');
   }
 
-  const mapped = mapSimproJobFields(record);
+  const mapped = mapSimproJobFields(record, { jobNumberHint: options.jobNumber });
   const issues: ImportReviewIssue[] = [];
   const jobId = mapped.jobId ?? pickSimproJobId(record, options.jobId);
-  const jobNumber = mapped.jobNumber ?? pickSimproJobNumber(record);
+  const jobNumber = mapped.jobNumber ?? pickSimproJobNumber(record, options.jobNumber);
   const scopeOfWorks = mapped.scopeOfWorks;
 
   const project = {
@@ -121,7 +122,7 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
   if (!jobNumber) {
     issues.push({
       code: 'simpro.missing_job_number',
-      message: 'No JobNo, OrderNo, RequestNo, or Reference found on this job.',
+      message: 'No Simpro job ID, JobNo, or search job number was found on this job.',
       severity: 'info',
     });
   }

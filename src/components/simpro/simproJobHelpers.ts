@@ -137,13 +137,13 @@ export function formatDiscoveryCellValue(job: Record<string, unknown>, column: J
 }
 
 export function pickJobNumber(job: Record<string, unknown>): string | null {
-  for (const key of ['JobNo', 'OrderNo', 'RequestNo', 'Reference', 'Name']) {
+  for (const key of ['JobNo', 'jobNo', 'JobNumber', 'OrderNo', 'RequestNo', 'Reference']) {
     const value = job[key];
     if (value == null) continue;
     const text = String(value).trim();
     if (text) return text;
   }
-  return null;
+  return pickJobId(job);
 }
 
 export interface SimproJobSearchRow {

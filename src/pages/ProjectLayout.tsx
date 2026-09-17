@@ -101,9 +101,9 @@ export function ProjectLayout() {
                 </span>
               </div>
               <div className="flex items-center gap-3 mt-1 flex-wrap">
-                {project.job_number && (
+                {(project.job_number || project.project_number) && (
                   <span className="inline-flex items-center gap-1 text-xs font-mono font-semibold text-cyan-700 bg-cyan-50 border border-cyan-200 px-2 py-0.5 rounded-full">
-                    {project.job_number}
+                    {project.job_number || project.project_number}
                   </span>
                 )}
                 {project.client_name && <span className="text-sm text-slate-500">{project.client_name}</span>}

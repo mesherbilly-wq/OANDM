@@ -91,7 +91,19 @@ export default function ProjectInfoPage() {
     try {
       const { error } = await supabase
         .from('projects')
-        .update(formData)
+        .update({
+          job_number: formData.job_number || formData.project_number || null,
+          project_name: formData.project_name || null,
+          client_name: formData.client_name || null,
+          site_name: formData.site_name || null,
+          site_address: formData.site_address || null,
+          quote_number: formData.quote_number || null,
+          project_manager: formData.project_manager || null,
+          start_date: formData.start_date || null,
+          completion_date: formData.completion_date || null,
+          project_status: formData.project_status || null,
+          project_notes: formData.project_notes || null,
+        })
         .eq('id', id);
 
       if (error) throw error;
@@ -219,7 +231,7 @@ export default function ProjectInfoPage() {
             <input
               type="text"
               name="job_number"
-              value={formData.job_number || ''}
+              value={formData.job_number || formData.project_number || ''}
               onChange={handleInputChange}
               placeholder="e.g. NCP104"
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-cyan-600 focus:border-transparent font-mono text-base"

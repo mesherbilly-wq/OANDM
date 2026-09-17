@@ -11,6 +11,32 @@ export function pickString(value: unknown): string | null {
   return text || null;
 }
 
+/** Pull a usable string out of Simpro scalars or `{ Value / HTML / Text }` wrappers. */
+export function pickScalarString(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    const text = String(value).trim();
+    return text || null;
+  }
+  const record = asRecord(value);
+  if (!record) return null;
+  return (
+    pickScalarString(record.Value) ??
+    pickScalarString(record.value) ??
+    pickScalarString(record.HTML) ??
+    pickScalarString(record.Html) ??
+    pickScalarString(record.html) ??
+    pickScalarString(record.Text) ??
+    pickScalarString(record.text) ??
+    pickScalarString(record.Description)
+  );
+}
+
+/** Short codes users type as a job number (NCP104, 8821, J-100) — not a project title. */
+export function looksLikeJobReference(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._/-]{0,39}$/.test(value.trim());
+}
+
 export function pickNestedName(value: unknown): string | null {
   const record = asRecord(value);
   if (!record) return pickString(value);
@@ -31,6 +57,7 @@ const RICH_TEXT_TAGS = new Set([
   'UL', 'OL', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
   'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TD', 'TH', 'COLGROUP', 'COL',
   'BLOCKQUOTE', 'HR', 'FONT', 'SUB', 'SUP', 'A', 'PRE',
+  'CENTER', 'SECTION', 'ARTICLE', 'SMALL', 'BIG',
 ]);
 
 const FONT_SIZE_PT: Record<string, string> = {
@@ -57,6 +84,48 @@ function sanitizeStyleValue(style: string): string {
       return isAllowedStyleProperty(name);
     })
     .join('; ');
+}
+
+/** Copy Word/Simpro `<style>` rules onto matching elements before classes are stripped. */
+function applyEmbeddedStyles(doc: Document): void {
+  const css = Array.from(doc.querySelectorAll('style'))
+    .map(el => el.textContent ?? '')
+    .join('\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+
+  for (const block of css.split('}')) {
+    const [selectorPart, body] = block.split('{');
+    if (!selectorPart || !body) continue;
+    const decls = sanitizeStyleValue(body);
+    if (!decls) continue;
+
+    for (const rawSelector of selectorPart.split(',')) {
+      const selector = rawSelector.trim();
+      if (!selector || selector === '*') continue;
+      if (/^(html|head|body)$/i.test(selector)) continue;
+      if (/[:@\[]/.test(selector)) continue;
+      try {
+        doc.querySelectorAll(selector).forEach(el => {
+          const existing = el.getAttribute('style');
+          el.setAttribute('style', existing ? `${decls}; ${existing}` : decls);
+        });
+      } catch {
+        // Ignore selectors the browser cannot parse.
+      }
+    }
+  }
+}
+
+export function decodeEscapedHtml(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return trimmed;
+  if (looksLikeHtml(trimmed) || !/&lt;\/?[a-z]/i.test(trimmed)) return trimmed;
+  try {
+    const doc = new DOMParser().parseFromString(trimmed, 'text/html');
+    return (doc.body.textContent ?? trimmed).trim() || trimmed;
+  } catch {
+    return trimmed;
+  }
 }
 
 function copySafeAttributes(source: Element, target: Element): void {
@@ -126,11 +195,13 @@ function sanitizeNode(doc: Document, node: Node): Node | null {
 
 /** Keep Simpro/Word layout (paragraphs, lists, font size) and drop scripts. */
 export function sanitizeSimproHtml(html: string): string {
+  const source = decodeEscapedHtml(html);
   if (typeof DOMParser === 'undefined') {
-    return html.replace(/<script[\s\S]*?<\/script>/gi, '').trim();
+    return source.replace(/<script[\s\S]*?<\/script>/gi, '').trim();
   }
   try {
-    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const doc = new DOMParser().parseFromString(source, 'text/html');
+    applyEmbeddedStyles(doc);
     const wrap = doc.createElement('div');
     for (const child of Array.from(doc.body.childNodes)) {
       const kept = sanitizeNode(doc, child);
@@ -138,7 +209,7 @@ export function sanitizeSimproHtml(html: string): string {
     }
     return wrap.innerHTML.trim();
   } catch {
-    return html.replace(/<script[\s\S]*?<\/script>/gi, '').trim();
+    return source.replace(/<script[\s\S]*?<\/script>/gi, '').trim();
   }
 }
 
@@ -176,22 +247,40 @@ export function cleanTextField(value: unknown): string | null {
 
 /** Preserve Simpro Description HTML when present; otherwise return plain text. */
 export function pickRichTextField(value: unknown): string | null {
-  if (value == null) return null;
-  const raw = String(value).trim();
+  const raw = pickScalarString(value);
   if (!raw) return null;
-  if (looksLikeHtml(raw)) {
-    return sanitizeSimproHtml(raw) || htmlToPlainText(raw);
+  const decoded = decodeEscapedHtml(raw);
+  if (looksLikeHtml(decoded)) {
+    return sanitizeSimproHtml(decoded) || htmlToPlainText(decoded);
   }
-  return raw;
+  return decoded;
 }
 
-/** User-facing job number — not the internal Simpro ID and not the job title. */
-export function pickSimproJobNumber(record: Record<string, unknown>): string | null {
-  for (const key of ['JobNo', 'OrderNo', 'RequestNo', 'Reference']) {
-    const value = pickString(record[key]);
+/**
+ * Simpro's user-facing job number is Job.ID. JobNo is not a documented field;
+ * OrderNo is the customer PO. Accept a search hint when the user typed NCP104 etc.
+ */
+export function pickSimproJobNumber(
+  record: Record<string, unknown>,
+  hint?: string | number | null,
+): string | null {
+  for (const key of ['JobNo', 'jobNo', 'JobNumber', 'job_number']) {
+    const value = pickScalarString(record[key]);
     if (value) return value;
   }
-  return null;
+
+  const trimmedHint = pickScalarString(hint);
+  if (trimmedHint && looksLikeJobReference(trimmedHint)) return trimmedHint;
+
+  return (
+    pickScalarString(record.ID) ??
+    pickScalarString(record.Id) ??
+    pickScalarString(record.id) ??
+    pickScalarString(record.OrderNo) ??
+    pickScalarString(record.orderNo) ??
+    pickScalarString(record.RequestNo) ??
+    pickScalarString(record.Reference)
+  );
 }
 
 export function pickSimproJobId(
@@ -225,10 +314,7 @@ export function pickScopeOfWorks(record: Record<string, unknown>): string | null
 }
 
 export function pickRawDescriptionHtml(record: Record<string, unknown>): string | null {
-  const raw = record.Description;
-  if (raw == null) return null;
-  const text = String(raw).trim();
-  return text || null;
+  return pickScalarString(record.Description);
 }
 
 const CATEGORY_RULES: { category: SystemCategory; patterns: RegExp[] }[] = [

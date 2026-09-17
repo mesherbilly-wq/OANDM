@@ -27,6 +27,18 @@ const mapped = mapSimproJobFields({
 });
 
 assert('maps job number from JobNo', mapped.jobNumber === 'J-100');
+assert('maps job number from Simpro ID when JobNo is absent', mapSimproJobFields({
+  ID: 8821,
+  Name: 'Gatehouse cameras',
+}).jobNumber === '8821');
+assert('maps typed job number hint over internal ID', mapSimproJobFields({
+  ID: 8821,
+  Name: 'Gatehouse cameras',
+}, { jobNumberHint: 'NCP104' }).jobNumber === 'NCP104');
+assert('does not use a project title as the job number hint', mapSimproJobFields({
+  ID: 8821,
+  Name: 'Gatehouse cameras',
+}, { jobNumberHint: 'Gatehouse cameras' }).jobNumber === '8821');
 assert('maps customer', mapped.customerOrganisation === 'HMP Example');
 assert('maps site address', /1 Site Road/.test(mapped.siteAddress || ''));
 assert('maps engineer', mapped.engineer === 'Pat Engineer');

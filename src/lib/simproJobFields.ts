@@ -1,4 +1,4 @@
-import { cleanTextField, looksLikeHtml, pickNestedName, pickRichTextField, pickString } from '../integrations/connectors/simpro/simproImportHelpers';
+import { cleanTextField, looksLikeHtml, pickNestedName, pickRichTextField, pickSimproJobNumber, pickString } from '../integrations/connectors/simpro/simproImportHelpers';
 
 export interface SimproFieldSource {
   path: string;
@@ -129,9 +129,11 @@ export function pickSimproScopeOfWorks(job: Record<string, unknown>): {
   return { text: text || null, sources };
 }
 
-export function mapSimproJobFields(raw: unknown): MappedSimproJobFields {
+export function mapSimproJobFields(
+  raw: unknown,
+  options: { jobNumberHint?: string | number | null } = {},
+): MappedSimproJobFields {
   const job = asRecord(raw) ?? {};
-  const site = asRecord(job.Site);
   const convertedFrom = asRecord(job.ConvertedFrom);
   const convertedQuote = asRecord(job.ConvertedFromQuote);
   const quote = asRecord(job.Quote);
@@ -151,8 +153,8 @@ export function mapSimproJobFields(raw: unknown): MappedSimproJobFields {
   const customerRepresentative = personName(job.CustomerContact) ?? personName(job.SiteContact);
   const siteName = pickNestedName(job.Site);
   const siteAddress = pickSimproSiteAddress(job.Site);
-  const jobNumber = pickString(job.JobNo) ?? pickString(job.OrderNo) ?? pickString(job.RequestNo) ?? pickString(job.Reference);
   const jobId = pickString(job.ID ?? job.Id ?? job.id);
+  const jobNumber = pickSimproJobNumber(job, options.jobNumberHint);
   const projectTitle = pickString(job.Name);
   const engineer = pickNestedName(firstTechnician) ?? pickNestedName(job.Technician);
   const projectManager = pickNestedName(job.ProjectManager);
@@ -160,7 +162,7 @@ export function mapSimproJobFields(raw: unknown): MappedSimproJobFields {
   if (!customerOrganisation) missing.push('Customer.Name / Customer.CompanyName');
   if (!customerRepresentative) missing.push('CustomerContact.GivenName + FamilyName');
   if (!siteAddress) missing.push('Site.Address (installation address)');
-  if (!jobNumber) missing.push('JobNo / OrderNo');
+  if (!jobNumber) missing.push('Job.ID / JobNo');
   if (!projectTitle) missing.push('Name');
   if (!engineer) missing.push('Technicians[0].Name / Technician.Name');
   if (!scope.text) missing.push('Description, Info custom fields, Notes');

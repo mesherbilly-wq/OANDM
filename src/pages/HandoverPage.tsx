@@ -1080,7 +1080,9 @@ export default function HandoverPage() {
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
                 <p className="text-xs font-medium text-slate-700 mb-1">Auto-populated fields:</p>
                 <div className="text-xs text-slate-500 space-y-0.5">
-                  {project.job_number && <p>Job Number: {project.job_number}</p>}
+                  {(project.job_number || project.project_number) && (
+                    <p>Job Number: {project.job_number || project.project_number}</p>
+                  )}
                   {project.project_name && <p>Project: {project.project_name}</p>}
                   {project.client_name && <p>Client: {project.client_name}</p>}
                   {project.site_name && <p>Site: {project.site_name}</p>}

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AlertCircle, FileText, Loader2 } from 'lucide-react';
-import { looksLikeHtml, sanitizeSimproHtml } from '../integrations/connectors/simpro/simproImportHelpers';
+import { decodeEscapedHtml, looksLikeHtml, sanitizeSimproHtml } from '../integrations/connectors/simpro/simproImportHelpers';
 
 export function renderMarkdown(md: string): string {
   const lines = md.split('\n');
@@ -42,14 +42,33 @@ function inline(t: string): string {
     .replace(/`(.+?)`/g, '<code class="font-mono text-xs bg-slate-100 px-1 rounded">$1</code>');
 }
 
+function looksLikeMarkdown(text: string): boolean {
+  return /^(#{1,6} )/m.test(text) || /^\|.+\|/m.test(text);
+}
+
+function renderPlainDocument(text: string): string {
+  return text
+    .replace(/\r\n/g, '\n')
+    .split(/\n{2,}/)
+    .map(block => `<p>${inline(block).replace(/\n/g, '<br>') || '&nbsp;'}</p>`)
+    .join('');
+}
+
+export function usesSimproLayout(content: string): boolean {
+  const decoded = decodeEscapedHtml(content);
+  return looksLikeHtml(decoded) || !looksLikeMarkdown(decoded);
+}
+
 export function renderDocumentHtml(content: string): string {
-  if (looksLikeHtml(content)) return sanitizeSimproHtml(content);
-  return renderMarkdown(content);
+  const decoded = decodeEscapedHtml(content);
+  if (looksLikeHtml(decoded)) return sanitizeSimproHtml(decoded);
+  if (looksLikeMarkdown(decoded)) return renderMarkdown(decoded);
+  return renderPlainDocument(decoded);
 }
 
 export function documentPreviewClassName(content: string, extra = 'min-h-64'): string {
   const base = `p-4 border border-slate-200 rounded-lg max-w-none ${extra}`.trim();
-  return looksLikeHtml(content)
+  return usesSimproLayout(content)
     ? `${base} bg-white simpro-html`
     : `${base} bg-slate-50 prose prose-sm`;
 }
@@ -83,7 +102,7 @@ export function MarkdownDocEditor({
   missingSystems?: string[];
   extraAction?: { label: string; onClick: () => void; disabled?: boolean };
 }) {
-  const htmlDoc = looksLikeHtml(content);
+  const htmlDoc = looksLikeHtml(decodeEscapedHtml(content));
   const [preview, setPreview] = useState(!!readOnly || htmlDoc);
   const missing = (missingSystems ?? []).filter(sys => !content.includes(sys));
 

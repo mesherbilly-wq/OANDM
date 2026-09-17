@@ -16,8 +16,7 @@ import type { Device, CommissioningRecord, HandoverDocument, Datasheet, ProjectS
 import { isEndUser } from '../lib/appRoles';
 import { useUserAccess } from '../lib/userAccess';
 import { OmClientInvitePanel } from '../components/OmClientInvitePanel';
-import { MarkdownDocEditor, documentPreviewClassName, renderDocumentHtml } from '../components/MarkdownDocEditor';
-import { looksLikeHtml } from '../integrations/connectors/simpro/simproImportHelpers';
+import { MarkdownDocEditor, documentPreviewClassName, renderDocumentHtml, usesSimproLayout } from '../components/MarkdownDocEditor';
 import {
   Printer, BookOpen, FileText, ClipboardCheck, Award, Wrench,
   Upload, X, CheckCircle, AlertCircle, ExternalLink, ChevronRight,
@@ -1499,7 +1498,7 @@ export function ProjectOMExportPage() {
         {scopeContent && (
           <>
             <PrintSection title="Scope of Works" anchorId="print-section-scope">
-              <div className={looksLikeHtml(scopeContent) ? 'simpro-html' : undefined} dangerouslySetInnerHTML={{ __html: renderDocumentHtml(scopeContent) }} />
+              <div className={usesSimproLayout(scopeContent) ? 'simpro-html' : undefined} dangerouslySetInnerHTML={{ __html: renderDocumentHtml(scopeContent) }} />
             </PrintSection>
             <div className="page-break" />
           </>
@@ -1667,7 +1666,7 @@ export function ProjectOMExportPage() {
           <>
             {asFittedScope.trim() && (
               <PrintSection title="As Fitted" anchorId="print-section-as_fitted">
-                <div className={looksLikeHtml(asFittedScope) ? 'simpro-html' : undefined} dangerouslySetInnerHTML={{ __html: renderDocumentHtml(asFittedScope) }} />
+                <div className={usesSimproLayout(asFittedScope) ? 'simpro-html' : undefined} dangerouslySetInnerHTML={{ __html: renderDocumentHtml(asFittedScope) }} />
               </PrintSection>
             )}
             {asFittedDrawings.length > 0 && (
@@ -2324,7 +2323,8 @@ function CoverSection({ project, devices, systemGroups, contractor, authority }:
           <InfoRow icon={Building2} label="Client" value={project.client_name} />
           <InfoRow icon={User} label="Project Manager" value={project.project_manager} />
           {project.engineer && <InfoRow icon={User} label="Engineer" value={project.engineer} />}
-          <InfoRow icon={Tag} label="Project / Quote Ref" value={project.project_number || project.quote_number} />
+          <InfoRow icon={Tag} label="Job Number" value={project.job_number || project.project_number} />
+          {project.quote_number && <InfoRow icon={Tag} label="Quote Ref" value={project.quote_number} />}
           {project.main_contractor && <InfoRow icon={Building2} label="Main Contractor" value={project.main_contractor} />}
           <InfoRow icon={Calendar} label="Date" value={new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })} />
           {project.completion_date && <InfoRow icon={Calendar} label="Completion Date" value={new Date(project.completion_date).toLocaleDateString('en-GB')} />}
