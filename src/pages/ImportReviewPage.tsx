@@ -8,8 +8,8 @@ import {
   getImportReviewCreateConfirmationIssues,
   importSelectionSummary,
   partitionImportReviewNotes,
-  resolvedEquipmentCategory,
-  resolvedCategory,
+  resolvedInstallSystemType,
+  resolvedEquipmentInstallType,
   type ImportReviewDraft,
 } from '../integrations';
 import { pickRawDescriptionHtml, looksLikeHtml, sanitizeSimproHtml } from '../integrations/connectors/simpro/simproImportHelpers';
@@ -43,8 +43,7 @@ import {
 } from '../lib/importEquipmentValidation';
 import type { ImportEquipmentDraft } from '../integrations';
 import type { ProductLookupRecord } from '../lib/productLookupIndex';
-import { SYSTEM_CATEGORIES } from '../lib/systems';
-import type { SystemCategory } from '../types';
+import { INSTALL_SYSTEM_TYPE_NAMES, categoryForSystemName } from '../lib/inferSystemType';
 
 type ReviewTab = 'project' | 'systems' | 'notes' | 'debug';
 
@@ -58,7 +57,8 @@ type EditableEquipmentField =
   | 'location'
   | 'notes'
   | 'quantity'
-  | 'category';
+  | 'category'
+  | 'systemType';
 
 function displayValue(value: string | null | undefined): string {
   return value?.trim() ? value : '—';
@@ -120,15 +120,15 @@ function ReadOnlyMultilineField({ label, value }: {
   );
 }
 
-function CategorySelect({
+function SystemTypeSelect({
   value,
   onChange,
   disabled,
   allowDefault = false,
   className = '',
 }: {
-  value: SystemCategory | null;
-  onChange: (value: SystemCategory | null) => void;
+  value: string | null;
+  onChange: (value: string | null) => void;
   disabled?: boolean;
   allowDefault?: boolean;
   className?: string;
@@ -137,13 +137,13 @@ function CategorySelect({
     <select
       value={value ?? ''}
       disabled={disabled}
-      onChange={event => onChange(event.target.value ? (event.target.value as SystemCategory) : null)}
+      onChange={event => onChange(event.target.value || null)}
       className={`${cellInputClass(Boolean(disabled))} ${className}`}
     >
       {allowDefault && <option value="">Use system default</option>}
-      {!allowDefault && !value && <option value="">Select category</option>}
-      {SYSTEM_CATEGORIES.map(category => (
-        <option key={category} value={category}>{category}</option>
+      {!allowDefault && !value && <option value="">Select CCTV, Access Control, Intruder or Fire</option>}
+      {INSTALL_SYSTEM_TYPE_NAMES.map(type => (
+        <option key={type} value={type}>{type}</option>
       ))}
     </select>
   );
@@ -387,7 +387,7 @@ export function ImportReviewPage() {
     }));
   };
 
-  const updateSystemCategory = (systemDraftId: string, category: SystemCategory | null) => {
+  const updateSystemCategory = (systemDraftId: string, systemType: string | null) => {
     updateDraft(current => ({
       ...current,
       systems: current.systems.map(system =>
@@ -396,8 +396,9 @@ export function ImportReviewPage() {
               ...system,
               category: {
                 ...system.category,
-                confirmedCategory: category,
-                method: category ? 'user' : system.category.method,
+                confirmedSystemType: systemType,
+                confirmedCategory: systemType ? categoryForSystemName(systemType) : null,
+                method: systemType ? 'user' : system.category.method,
               },
             }
           : system,
@@ -438,8 +439,13 @@ export function ImportReviewPage() {
             if (field === 'quantity') {
               return { ...item, quantity: normalizeQuantity(value) };
             }
-            if (field === 'category') {
-              return { ...item, category: value ? (value as SystemCategory) : null };
+            if (field === 'systemType' || field === 'category') {
+              const systemType = value.trim() || null;
+              return {
+                ...item,
+                systemType,
+                category: systemType ? categoryForSystemName(systemType) : null,
+              };
             }
             if (field === 'warrantyYears') {
               const parsed = parseInt(value, 10);
@@ -561,8 +567,8 @@ export function ImportReviewPage() {
         <p className="font-semibold">Before you proceed</p>
         <p className="mt-1">
           Delete any lines from the cost model you do not want the customer to see — uncheck labour,
-          prelims, extras, sundries, and similar commercial lines. Then set the system category on
-          each remaining system.
+          prelims, extras, sundries, and similar commercial lines. Then set each remaining system to
+          CCTV, Access Control, Intruder or Fire before you create the project.
         </p>
       </div>
 
@@ -690,7 +696,8 @@ export function ImportReviewPage() {
       {tab === 'systems' && (
         <div className="space-y-4">
           <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-            Uncheck any cost-model line the customer should not see, then confirm each system category.
+            Uncheck any cost-model line the customer should not see, then confirm CCTV, Access Control,
+            Intruder or Fire on each remaining system.
             {summary.selectedSystems} of {summary.totalSystems} systems ·{' '}
             {summary.selectedLines} of {summary.totalLines} equipment lines ·{' '}
             {summary.deviceUnits} device units selected.
@@ -759,8 +766,8 @@ export function ImportReviewPage() {
                     </div>
                     <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
                       <div className="min-w-[12rem]" onClick={event => event.stopPropagation()}>
-                        <CategorySelect
-                          value={resolvedCategory(system)}
+                        <SystemTypeSelect
+                          value={resolvedInstallSystemType(system)}
                           onChange={value => updateSystemCategory(system.draftId, value)}
                           disabled={rowDisabled}
                           className="text-xs"
@@ -782,7 +789,7 @@ export function ImportReviewPage() {
                         <thead className="bg-white border-b border-slate-100 text-slate-500">
                           <tr>
                             <th className="px-3 py-2.5 font-semibold w-12">Import</th>
-                            <th className="px-3 py-2.5 font-semibold min-w-[9rem]">System category</th>
+                            <th className="px-3 py-2.5 font-semibold min-w-[9rem]">System type</th>
                             <th className="px-3 py-2.5 font-semibold min-w-[10rem]">Product Description</th>
                             <th className="px-3 py-2.5 font-semibold min-w-[8rem]">Manufacturer</th>
                             <th className="px-3 py-2.5 font-semibold min-w-[9rem]">Part Number</th>
@@ -797,7 +804,7 @@ export function ImportReviewPage() {
                         <tbody className="divide-y divide-slate-100">
                           {system.equipment.map(item => {
                             const lineDisabled = rowDisabled || !item.selected;
-                            const lineCategory = resolvedEquipmentCategory(system, item);
+                            const lineSystemType = resolvedEquipmentInstallType(system, item);
                             const missingRequired = getEquipmentMissingRequiredFields(item);
                             const ambiguousManufacturer = isAmbiguousManufacturerLookup(item);
                             const showProductPicker =
@@ -825,21 +832,21 @@ export function ImportReviewPage() {
                                   />
                                 </td>
                                 <td className="px-3 py-2">
-                                  <CategorySelect
-                                    value={item.category}
+                                  <SystemTypeSelect
+                                    value={item.systemType}
                                     onChange={value =>
                                       updateEquipmentField(
                                         system.draftId,
                                         item.draftId,
-                                        'category',
+                                        'systemType',
                                         value ?? '',
                                       )
                                     }
                                     disabled={lineDisabled}
                                     allowDefault
                                   />
-                                  {!item.category && lineCategory ? (
-                                    <p className="mt-1 text-[11px] text-slate-400">Default: {lineCategory}</p>
+                                  {!item.systemType && lineSystemType ? (
+                                    <p className="mt-1 text-[11px] text-slate-400">Default: {lineSystemType}</p>
                                   ) : null}
                                 </td>
                                 <td className="px-3 py-2">

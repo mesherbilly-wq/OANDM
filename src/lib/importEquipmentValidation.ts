@@ -1,7 +1,7 @@
 import type { ImportEquipmentDraft, ImportReviewDraft, ImportReviewIssue } from '../integrations';
 import { selectedSystems } from '../integrations/core/draftHelpers';
-import type { ProductModel, SystemCategory } from '../types';
-import { inferTradeCategoryFromTexts } from './inferSystemType';
+import type { ProductModel } from '../types';
+import { categoryForSystemName, inferSystemTypeName } from './inferSystemType';
 import { normalizePart, normalizeToken, pickMetadataString } from './equipmentMatchUtils';
 import {
   buildProductPartIndex,
@@ -229,12 +229,15 @@ function applyProductMatchFields(
     filledFields.push('Warranty');
   }
 
-  if (!next.category) {
-    const inferred = inferTradeCategoryFromTexts(textsForImportEquipmentCategory(next));
-    if (inferred) next.category = inferred;
+  if (!next.systemType) {
+    const inferred = inferSystemTypeName(textsForImportEquipmentCategory(next));
+    if (inferred) {
+      next.systemType = inferred;
+      if (!next.category) next.category = categoryForSystemName(inferred);
+    }
   }
 
-  if (filledFields.length === 0 && next.category === item.category) return item;
+  if (filledFields.length === 0 && next.category === item.category && next.systemType === item.systemType) return item;
 
   return {
     ...next,
@@ -414,43 +417,50 @@ export function textsForImportEquipmentCategory(item: ImportEquipmentDraft): str
   ];
 }
 
-function majorityCategory(categories: SystemCategory[]): SystemCategory | null {
-  if (categories.length === 0) return null;
-  const votes = new Map<SystemCategory, number>();
-  for (const category of categories) {
-    votes.set(category, (votes.get(category) ?? 0) + 1);
+function majorityValue(values: string[]): string | null {
+  if (values.length === 0) return null;
+  const votes = new Map<string, number>();
+  for (const value of values) {
+    votes.set(value, (votes.get(value) ?? 0) + 1);
   }
   const ranked = [...votes.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   return ranked[0]?.[0] ?? null;
 }
 
-/** Fill blank trade categories from part numbers, Product Database category, and product text. */
+/** Fill blank CCTV / Access Control / Intruder / Fire types from part numbers and product text. */
 export function applyInferredCategoriesToImportDraft(draft: ImportReviewDraft): ImportReviewDraft {
   return {
     ...draft,
     systems: draft.systems.map(system => {
       const equipment = system.equipment.map(item => {
-        if (item.category) return item;
-        const inferred = inferTradeCategoryFromTexts(textsForImportEquipmentCategory(item));
-        return inferred ? { ...item, category: inferred } : item;
+        if (item.systemType?.trim()) {
+          return item.category ? item : { ...item, category: categoryForSystemName(item.systemType) };
+        }
+        const inferred = inferSystemTypeName(textsForImportEquipmentCategory(item));
+        if (!inferred) return item;
+        return {
+          ...item,
+          systemType: inferred,
+          category: item.category ?? categoryForSystemName(inferred),
+        };
       });
 
-      if (system.category.confirmedCategory) {
+      if (system.category.confirmedSystemType || system.category.confirmedCategory) {
         return { ...system, equipment };
       }
 
-      const lineCategories = equipment
-        .filter(item => item.selected && item.category)
-        .map(item => item.category) as SystemCategory[];
-      const fromLines = majorityCategory(lineCategories);
-      const fromTexts = inferTradeCategoryFromTexts([
+      const lineTypes = equipment
+        .filter(item => item.selected && item.systemType?.trim())
+        .map(item => item.systemType!.trim());
+      const fromLines = majorityValue(lineTypes);
+      const fromTexts = inferSystemTypeName([
         system.name,
         system.description,
         system.sourceCostCentreName,
         ...equipment.flatMap(textsForImportEquipmentCategory),
       ]);
-      const suggestedCategory = fromLines ?? fromTexts ?? system.category.suggestedCategory;
-      if (!suggestedCategory) {
+      const suggestedSystemType = fromLines ?? fromTexts ?? system.category.suggestedSystemType;
+      if (!suggestedSystemType) {
         return { ...system, equipment };
       }
 
@@ -459,9 +469,10 @@ export function applyInferredCategoriesToImportDraft(draft: ImportReviewDraft): 
         equipment,
         category: {
           ...system.category,
-          suggestedCategory,
-          method: fromLines ? 'product_match' : fromTexts ? 'keyword_rule' : system.category.method,
-          confidence: Math.max(system.category.confidence, fromLines || fromTexts ? 0.75 : 0),
+          suggestedSystemType,
+          suggestedCategory: categoryForSystemName(suggestedSystemType),
+          method: fromLines ? 'product_match' : 'keyword_rule',
+          confidence: Math.max(system.category.confidence, 0.75),
         },
       };
     }),

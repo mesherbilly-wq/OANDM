@@ -5,6 +5,9 @@ import type { ImportEquipmentDraft, CategoryInferenceMethod } from './ImportEqui
 export interface CategoryInference {
   suggestedCategory: SystemCategory | null;
   confirmedCategory: SystemCategory | null;
+  /** CCTV, Access Control, Intruder, Fire — not the generic Security trade bucket. */
+  suggestedSystemType: string | null;
+  confirmedSystemType: string | null;
   method: CategoryInferenceMethod;
   confidence: number;
 }
@@ -47,6 +50,8 @@ export function createSystemDraft(
     category: {
       suggestedCategory: null,
       confirmedCategory: null,
+      suggestedSystemType: null,
+      confirmedSystemType: null,
       method: 'unresolved',
       confidence: 0,
       ...partial.category,
@@ -61,4 +66,16 @@ export type SystemTypeInference = CategoryInference;
 /** Resolved category for a system draft (user confirmation wins). */
 export function resolvedSystemCategory(system: ImportSystemDraft): SystemCategory | null {
   return system.category.confirmedCategory ?? system.category.suggestedCategory;
+}
+
+/** CCTV / Access Control / Intruder / Fire — user confirmation wins. */
+export function resolvedInstallSystemType(system: ImportSystemDraft): string | null {
+  return system.category.confirmedSystemType?.trim() || system.category.suggestedSystemType?.trim() || null;
+}
+
+export function resolvedEquipmentInstallType(
+  system: ImportSystemDraft,
+  item: ImportEquipmentDraft,
+): string | null {
+  return item.systemType?.trim() || resolvedInstallSystemType(system);
 }

@@ -2,7 +2,9 @@ import type { Device, SystemCategory } from '../types';
 import { getDeviceProductDescription, extractProductCategoryFromNotes } from './deviceProductFields';
 import { isLegacySystemTypeName, legacySystemNameToCategory, LEGACY_SYSTEM_TYPE_NAMES } from './systems';
 
-const KNOWN_INSTALL_SYSTEMS = [...LEGACY_SYSTEM_TYPE_NAMES, 'Fire'] as const;
+export const INSTALL_SYSTEM_TYPE_NAMES = [...LEGACY_SYSTEM_TYPE_NAMES, 'Fire'] as const;
+
+const KNOWN_INSTALL_SYSTEMS = INSTALL_SYSTEM_TYPE_NAMES;
 
 const SYSTEM_TYPE_RULES: { name: string; patterns: RegExp[] }[] = [
   { name: 'ANPR', patterns: [/\banpr\b/i, /\blpr\b/i, /number\s*plate/i, /licence\s*plate/i, /license\s*plate/i] },

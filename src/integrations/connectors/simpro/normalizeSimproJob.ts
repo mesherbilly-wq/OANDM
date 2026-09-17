@@ -8,6 +8,7 @@ import {
 } from '../../models/ImportReviewDraft';
 import { createSystemDraft } from '../../models/ImportSystemDraft';
 import type { ImportEquipmentDraft } from '../../models/ImportEquipmentDraft';
+import { categoryForSystemName, inferSystemTypeName } from '../../../lib/inferSystemType';
 import { mapSimproJobFields } from '../../../lib/simproJobFields';
 import {
   buildSimproSystemMergeKey,
@@ -198,6 +199,15 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
           issues.push({ ...issue, draftId: mapped.sourceLineRef ?? mergeKey });
         }
 
+        const lineSystemType = inferSystemTypeName([
+          mapped.deviceType,
+          mapped.modelName,
+          mapped.modelNumber,
+          mapped.partNumber,
+          mapped.manufacturer,
+          costCentreProductDescription,
+        ]);
+
         return createEquipmentDraft({
           draftId: createDraftId('equip'),
           systemDraftId: mergeKey,
@@ -208,7 +218,8 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
           quantity: mapped.quantity,
           location: locationName ?? sectionName,
           notes: mapped.notes,
-          category: null,
+          category: lineSystemType ? categoryForSystemName(lineSystemType) : null,
+          systemType: lineSystemType,
           productCategory: null,
           warrantyYears: null,
           matched: false,
@@ -293,11 +304,15 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
 
   const systems = [...pendingSystems.values()].map(pending => {
     const categoryInference = inferCategoryFromTexts(pending.inferenceTexts);
+    const suggestedSystemType =
+      inferSystemTypeName(pending.inferenceTexts)
+      ?? pending.equipment.map(item => item.systemType).find(Boolean)
+      ?? null;
 
-    if (!categoryInference.suggestedCategory) {
+    if (!suggestedSystemType && !categoryInference.suggestedCategory) {
       issues.push({
         code: 'simpro.unresolved_category',
-        message: `No category suggested for system "${pending.name}" — you can set one during review.`,
+        message: `No CCTV / Access Control / Intruder / Fire type suggested for "${pending.name}" — set one during review.`,
         severity: 'info',
         draftId: pending.draftId,
       });
@@ -313,10 +328,12 @@ export function normalizeSimproJob(raw: unknown, options: NormalizeSimproJobOpti
       sourceCostCentreName: pending.sourceCostCentreNames.join('; ') || null,
       sourceCostCentreLabel: pending.sourceCostCentreLabels.join('; '),
       category: {
-        suggestedCategory: categoryInference.suggestedCategory,
+        suggestedCategory: suggestedSystemType ? categoryForSystemName(suggestedSystemType) : categoryInference.suggestedCategory,
         confirmedCategory: null,
-        method: categoryInference.method,
-        confidence: categoryInference.confidence,
+        suggestedSystemType,
+        confirmedSystemType: null,
+        method: suggestedSystemType ? 'keyword_rule' : categoryInference.method,
+        confidence: suggestedSystemType ? 0.7 : categoryInference.confidence,
       },
       equipment: pending.equipment,
     });

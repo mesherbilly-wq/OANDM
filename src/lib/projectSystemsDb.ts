@@ -1,8 +1,7 @@
-import type { ImportReviewDraft, ImportSystemDraft } from '../integrations';
-import { resolvedCategory } from '../integrations';
-import { buildSimproPersistSourceReference } from '../integrations/connectors/simpro/simproImportHelpers';
+import type { ImportReviewDraft, ImportSystemDraft, ImportEquipmentDraft } from '../integrations';
+import { resolvedCategory, resolvedEquipmentCategory, resolvedEquipmentInstallType } from '../integrations';
 import type { Device, ProjectSystemRecord, SystemCategory } from '../types';
-import { categoryForSystemName } from './inferSystemType';
+import { categoryForSystemName, isKnownInstallSystemName } from './inferSystemType';
 import { notifyProjectDevicesChanged, legacySystemNameToCategory, normalizeSystemCategory, resolveSystemName } from './systems';
 import { supabase } from './supabase';
 
@@ -84,44 +83,49 @@ export async function loadProjectSystemsForProject(
   return backfillProjectSystemsFromDevices(projectId, devices);
 }
 
+export function persistNameForImportEquipment(
+  system: ImportSystemDraft,
+  item: ImportEquipmentDraft,
+  persistSystemNames: Map<string, string>,
+): string {
+  const installType = resolvedEquipmentInstallType(system, item);
+  if (installType) return installType;
+  return persistSystemNames.get(system.draftId) ?? system.name.trim() ?? 'Unnamed System';
+}
+
 export async function insertProjectSystemsFromSimproDraft(
   draft: ImportReviewDraft,
   projectId: number,
   persistSystemNames: Map<string, string>,
 ): Promise<Map<string, number>> {
-  const systemIdByDraftId = new Map<string, number>();
-  let displayOrder = 0;
+  const categoryByName = new Map<string, SystemCategory | null>();
 
   for (const system of draft.systems) {
     if (!system.selected) continue;
-
-    displayOrder += 1;
-    const systemName =
-      persistSystemNames.get(system.draftId) ??
-      (system.name.trim() || 'Unnamed System');
-
-    const { data: row, error } = await supabase
-      .from('project_systems')
-      .insert({
-        project_id: projectId,
-        system_name: systemName,
-        system_category: resolvedCategory(system),
-        source_type: 'simpro',
-        source_reference: buildSimproPersistSourceReference(system) ?? system.sourceSectionRef,
-        notes: system.description,
-        display_order: displayOrder,
-      })
-      .select('id')
-      .single();
-
-    if (error || !row) {
-      throw error ?? new Error(`Failed to create project system "${systemName}".`);
+    for (const item of system.equipment) {
+      if (!item.selected) continue;
+      const name = persistNameForImportEquipment(system, item, persistSystemNames);
+      const category = isKnownInstallSystemName(name)
+        ? categoryForSystemName(name)
+        : resolvedEquipmentCategory(system, item) ?? resolvedCategory(system);
+      if (!categoryByName.has(name) || !categoryByName.get(name)) {
+        categoryByName.set(name, category);
+      }
     }
-
-    systemIdByDraftId.set(system.draftId, row.id as number);
   }
 
-  return systemIdByDraftId;
+  const systemIdByName = new Map<string, number>();
+  for (const [systemName, category] of categoryByName) {
+    const id = await ensureProjectSystem(
+      projectId,
+      systemName,
+      category,
+      'simpro',
+    );
+    systemIdByName.set(systemName, id);
+  }
+
+  return systemIdByName;
 }
 
 export async function ensureProjectSystem(

@@ -53,6 +53,8 @@ export {
   resolvedCategory,
   resolvedEquipmentSystemType,
   resolvedEquipmentCategory,
+  resolvedInstallSystemType,
+  resolvedEquipmentInstallType,
   hasSelectedEquipment,
   equipmentLineSelectionSummary,
   importSelectionSummary,

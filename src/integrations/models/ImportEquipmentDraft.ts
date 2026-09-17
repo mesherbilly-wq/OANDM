@@ -29,6 +29,8 @@ export interface ImportEquipmentDraft {
   notes: string | null;
   /** Trade/system category override when a mixed section is split. */
   category: SystemCategory | null;
+  /** CCTV, Access Control, Intruder, Fire, etc. Line override when a cost centre is mixed. */
+  systemType: string | null;
   /** Product Database product category (e.g. CCTV Cameras). */
   productCategory: string | null;
   warrantyYears: number | null;
@@ -44,7 +46,10 @@ export interface ImportEquipmentDraft {
 }
 
 export function createEquipmentDraft(
-  partial: Omit<ImportEquipmentDraft, 'metadata'> & { metadata?: Record<string, unknown> },
+  partial: Omit<ImportEquipmentDraft, 'metadata' | 'systemType'> & {
+    systemType?: string | null;
+    metadata?: Record<string, unknown>;
+  },
 ): ImportEquipmentDraft {
   return {
     matched: false,
@@ -54,6 +59,7 @@ export function createEquipmentDraft(
     quantity: 1,
     ...partial,
     category: partial.category ?? null,
+    systemType: partial.systemType ?? null,
     productCategory: partial.productCategory ?? null,
     warrantyYears: partial.warrantyYears ?? null,
     metadata: partial.metadata ?? {},

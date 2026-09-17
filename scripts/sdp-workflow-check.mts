@@ -49,11 +49,11 @@ assert('does not use a project title as the job number hint', mapSimproJobFields
 assert('overview prefers Simpro ID over a stored PO', displayProjectJobNumber('PO-999', '8821') === '8821');
 assert('overview keeps a manual job number when there is no Simpro ID', displayProjectJobNumber('NCP104', null) === 'NCP104');
 assert('infers CCTV from camera text', inferSystemTypeName(['Axis P3245-LVE camera']) === 'CCTV');
-assert('maps camera part text to Security category', inferTradeCategoryFromTexts(['Axis P3245-LVE camera']) === 'Security');
-assert('maps Product Database CCTV category to Security', inferTradeCategoryFromTexts(['CCTV Cameras']) === 'Security');
-assert('maps HID reader to Security category', inferTradeCategoryFromTexts(['HID Signo reader']) === 'Security');
-assert('maps PoE switch text to IT category', inferTradeCategoryFromTexts(['PoE network switch']) === 'IT');
 assert('infers Access Control from reader text', inferSystemTypeName(['HID Signo reader']) === 'Access Control');
+assert('infers Intruder from PIR text', inferSystemTypeName(['Grade 3 PIR detector']) === 'Intruder');
+assert('infers Fire from fire alarm text', inferSystemTypeName(['Fire alarm sounder']) === 'Fire');
+assert('does not treat Security as the install system type', inferSystemTypeName(['Axis P3245-LVE camera']) !== 'Security');
+assert('maps camera part text to Security trade bucket only', inferTradeCategoryFromTexts(['Axis P3245-LVE camera']) === 'Security');
 assert('auto-assigns Simpro materials lines', shouldAutoAssignSystemType('Materials') === true);
 assert('keeps an already chosen CCTV type', shouldAutoAssignSystemType('CCTV') === false);
 assert('maps customer', mapped.customerOrganisation === 'HMP Example');

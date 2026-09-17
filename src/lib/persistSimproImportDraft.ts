@@ -4,8 +4,6 @@ import type { Datasheet, ProductModel } from '../types';
 import {
   getImportReviewBlockingIssues,
   getImportReviewCreateConfirmationIssues,
-  resolvedCategory,
-  resolvedEquipmentCategory,
 } from '../integrations';
 
 import { clampLineQuantity } from './devicePersistConstants';
@@ -14,10 +12,11 @@ import { displayProjectJobNumber } from './projectJobNumber';
 import { appendProductFieldNotes } from './deviceProductFields';
 import { buildPrefixCounters } from './deviceProjectEdits';
 import { equipmentHasDatasheet } from './datasheetMatching';
-import { getDevicePrefix } from './deviceLabel';
+import { categoryForSystemName } from './inferSystemType';
 import {
   buildPersistSystemNameMap,
   insertProjectSystemsFromSimproDraft,
+  persistNameForImportEquipment,
 } from './projectSystemsDb';
 import { supabase } from './supabase';
 import {
@@ -109,7 +108,7 @@ function buildDeviceRows(
   projectId: number,
   prefixCounters: Record<string, number>,
   persistSystemNames: Map<string, string>,
-  systemIdByDraftId: Map<string, number>,
+  systemIdByName: Map<string, number>,
   productModels: ProductModel[],
   datasheets: Datasheet[],
 ): Record<string, unknown>[] {
@@ -118,20 +117,15 @@ function buildDeviceRows(
   for (const system of draft.systems) {
     if (!system.selected) continue;
 
-    const systemCategory = resolvedCategory(system);
-    const systemName =
-      persistSystemNames.get(system.draftId) ??
-      nullIfEmpty(system.name) ??
-      'Unnamed System';
-    const projectSystemId = systemIdByDraftId.get(system.draftId) ?? null;
-
     for (const item of system.equipment) {
       if (!item.selected) continue;
 
-      const category = resolvedEquipmentCategory(system, item);
+      const systemName = persistNameForImportEquipment(system, item, persistSystemNames);
+      const category = categoryForSystemName(systemName);
+      const projectSystemId = systemIdByName.get(systemName) ?? null;
       const deviceType = nullIfEmpty(item.deviceType ?? item.modelName);
       const productDescription = nullIfEmpty(item.modelName ?? item.deviceType);
-      const prefix = getDevicePrefix(category ?? 'Other', deviceType ?? '');
+      const prefix = getDevicePrefix(systemName, deviceType ?? '');
       const quantity = clampLineQuantity(item.quantity);
       const hasDatasheet = equipmentHasDatasheet(
         item.manufacturer,
@@ -146,7 +140,7 @@ function buildDeviceRows(
           project_id: projectId,
           project_system_id: projectSystemId,
           system_type: systemName,
-          system_category: systemCategory,
+          system_category: category,
           device_type: deviceType,
           device_name: `${prefix}-${String(prefixCounters[prefix]).padStart(3, '0')}`,
           manufacturer: nullIfEmpty(item.manufacturer),
@@ -223,7 +217,7 @@ export async function persistSimproImportReviewDraft(
     supabase.from('datasheets').select('*'),
   ]);
 
-  const systemIdByDraftId = await insertProjectSystemsFromSimproDraft(
+  const systemIdByName = await insertProjectSystemsFromSimproDraft(
     draft,
     project.id,
     persistSystemNames,
@@ -233,7 +227,7 @@ export async function persistSimproImportReviewDraft(
     project.id,
     prefixCounters,
     persistSystemNames,
-    systemIdByDraftId,
+    systemIdByName,
     productModels ?? [],
     datasheets ?? [],
   );
@@ -262,12 +256,12 @@ export async function persistSimproImportReviewDraft(
   const asFittedRows: Record<string, unknown>[] = [];
   for (const system of draft.systems) {
     if (!system.selected) continue;
-    const projectSystemId = systemIdByDraftId.get(system.draftId) ?? null;
     for (const item of system.equipment) {
       if (!item.selected) continue;
+      const persistName = persistNameForImportEquipment(system, item, persistSystemNames);
       asFittedRows.push({
         project_id: project.id,
-        project_system_id: projectSystemId,
+        project_system_id: systemIdByName.get(persistName) ?? null,
         source_quote_line_id: item.sourceLineRef,
         quoted_description: item.modelName || item.deviceType,
         quoted_quantity: item.quantity,

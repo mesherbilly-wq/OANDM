@@ -17,6 +17,8 @@ export {
   resolvedCategory,
   resolvedEquipmentSystemType,
   resolvedEquipmentCategory,
+  resolvedInstallSystemType,
+  resolvedEquipmentInstallType,
   allSelectedSystemsTyped,
   allSelectedSystemsCategorised,
   hasSelectedEquipment,

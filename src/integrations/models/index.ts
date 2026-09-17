@@ -10,7 +10,7 @@ export type {
   CategoryInference,
   SystemTypeInference,
 } from './ImportSystemDraft';
-export { createSystemDraft, resolvedSystemCategory } from './ImportSystemDraft';
+export { createSystemDraft, resolvedSystemCategory, resolvedInstallSystemType, resolvedEquipmentInstallType } from './ImportSystemDraft';
 
 export type { ImportProjectDraft } from './ImportProjectDraft';
 export { createEmptyProjectDraft } from './ImportProjectDraft';

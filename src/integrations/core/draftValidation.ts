@@ -1,5 +1,5 @@
 import type { ImportReviewDraft, ImportReviewIssue } from '../models';
-import { allSelectedSystemsCategorised, hasSelectedEquipment, resolvedCategory, selectedSystems } from './draftHelpers';
+import { allSelectedSystemsCategorised, hasSelectedEquipment, resolvedCategory, resolvedInstallSystemType, selectedSystems } from './draftHelpers';
 
 /**
  * Structural validation for {@link ImportReviewDraft}.
@@ -42,10 +42,10 @@ export function validateImportReviewDraft(draft: ImportReviewDraft): ImportRevie
       });
     }
 
-    if (system.selected && !resolvedCategory(system)) {
+    if (system.selected && !resolvedCategory(system) && !resolvedInstallSystemType(system) && !system.equipment.filter(item => item.selected).every(item => item.systemType?.trim())) {
       issues.push({
         code: 'uncategorised_system',
-        message: `System "${system.name}" has no category assigned.`,
+        message: `System "${system.name}" has no CCTV / Access Control / Intruder / Fire type assigned.`,
         severity: 'warning',
         draftId: system.draftId,
       });

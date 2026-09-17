@@ -3,7 +3,7 @@ import type {
   ImportReviewDraft,
   ImportSystemDraft,
 } from '../models';
-import { resolvedSystemCategory } from '../models/ImportSystemDraft';
+import { resolvedSystemCategory, resolvedEquipmentInstallType, resolvedInstallSystemType } from '../models/ImportSystemDraft';
 import type { SystemCategory } from '../../types';
 import { clampLineQuantity } from '../../lib/devicePersistConstants';
 
@@ -36,6 +36,8 @@ export function resolvedEquipmentCategory(
 ): SystemCategory | null {
   return item.category ?? resolvedSystemCategory(system);
 }
+
+export { resolvedInstallSystemType, resolvedEquipmentInstallType };
 
 /** @deprecated Use resolvedCategory */
 export function resolvedSystemType(system: ImportSystemDraft): SystemCategory | null {
@@ -92,9 +94,13 @@ export function importSelectionSummary(draft: ImportReviewDraft): {
   };
 }
 
-/** Whether every selected system has a confirmed or suggested category. */
+/** Whether every selected system has a CCTV/Access/Intruder/Fire type or a trade category. */
 export function allSelectedSystemsCategorised(draft: ImportReviewDraft): boolean {
-  return selectedSystems(draft).every(system => resolvedCategory(system) !== null);
+  return selectedSystems(draft).every(system => {
+    if (resolvedInstallSystemType(system) || resolvedCategory(system)) return true;
+    const selected = system.equipment.filter(item => item.selected);
+    return selected.length > 0 && selected.every(item => Boolean(item.systemType?.trim()));
+  });
 }
 
 /** @deprecated Use allSelectedSystemsCategorised */
