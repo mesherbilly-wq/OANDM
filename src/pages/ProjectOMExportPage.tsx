@@ -18,8 +18,16 @@ import { displayProjectJobNumber } from '../lib/projectJobNumber';
 import { useUserAccess } from '../lib/userAccess';
 import { OmClientInvitePanel } from '../components/OmClientInvitePanel';
 import { MarkdownDocEditor, documentPreviewClassName, renderDocumentHtml, usesSimproLayout } from '../components/MarkdownDocEditor';
+import { MaintenancePlanSection, PrintMaintenancePlan } from '../components/MaintenancePlanSection';
 import {
-  Printer, BookOpen, FileText, ClipboardCheck, Award, Wrench,
+  createDefaultMaintenancePlan,
+  hydrateStoredMaintenancePlan,
+  maintenancePlanHasContent,
+  serializeMaintenancePlan,
+  type MaintenancePlanDoc,
+} from '../lib/maintenancePlanDefaults';
+import {
+  Printer, BookOpen, FileText, ClipboardCheck, Award,
   Upload, X, CheckCircle, AlertCircle, ExternalLink, ChevronRight,
   Camera, Lock, ShieldAlert, PhoneCall, ScanLine, Radar, Network,
   Building2, Calendar, User, Tag, CalendarCheck, Loader2, Layers,
@@ -166,49 +174,6 @@ function handoverSectionLabel(section: string): string {
 }
 
 const HANDOVER_SECTIONS = new Set([...Object.keys(HANDOVER_SECTION_LABELS), 'handover']);
-
-// ─── Markdown renderer (minimal) ─────────────────────────────────────────────
-
-function renderMarkdown(md: string): string {
-  const lines = md.split('\n');
-  let out = '';
-  let inTable = false;
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (/^\|\s*[-:]+/.test(line)) continue;
-    if (line.startsWith('| ')) {
-      if (!inTable) { out += '<table class="w-full text-sm border-collapse mb-4">'; inTable = true; }
-      const cells = line.slice(1, -1).split('|').map(c =>
-        `<td class="border border-slate-200 px-3 py-1.5">${inline(c.trim())}</td>`).join('');
-      out += `<tr>${cells}</tr>`;
-      continue;
-    }
-    if (inTable) { out += '</table>'; inTable = false; }
-    if (line.startsWith('#### ')) { out += `<h4 class="text-sm font-semibold mt-3 mb-1 text-slate-700">${inline(line.slice(5))}</h4>`; continue; }
-    if (line.startsWith('### ')) { out += `<h3 class="text-base font-bold mt-4 mb-1.5 text-slate-800">${inline(line.slice(4))}</h3>`; continue; }
-    if (line.startsWith('## ')) { out += `<h2 class="text-lg font-bold mt-5 mb-2 text-slate-900">${inline(line.slice(3))}</h2>`; continue; }
-    if (line.startsWith('# ')) { out += `<h1 class="text-xl font-bold mt-6 mb-2 text-slate-900">${inline(line.slice(2))}</h1>`; continue; }
-    if (/^[-*] /.test(line)) { out += `<li class="ml-4 text-sm text-slate-700 list-disc">${inline(line.slice(2))}</li>`; continue; }
-    if (/^\d+\. /.test(line)) { out += `<li class="ml-4 text-sm text-slate-700 list-decimal">${inline(line.replace(/^\d+\. /, ''))}</li>`; continue; }
-    if (line === '') { out += '<div class="h-2"></div>'; continue; }
-    out += `<p class="text-sm text-slate-700 mb-1.5">${inline(line)}</p>`;
-  }
-  if (inTable) out += '</table>';
-  return out;
-}
-
-function inline(t: string): string {
-  // HTML-escape first to prevent injection via user-editable markdown content
-  const safe = t
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-  return safe
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`(.+?)`/g, '<code class="font-mono text-xs bg-slate-100 px-1 rounded">$1</code>');
-}
 
 function systemsWithTechImport(
   documentSystems: ReturnType<typeof deriveProjectSystems>,
@@ -478,7 +443,7 @@ export function ProjectOMExportPage() {
   const [activeSystems, setActiveSystems] = useState<string[]>([]);
 
   // Maintenance plan per-system edit state: Record<systemType, content>
-  const [maintPlanContent, setMaintPlanContent] = useState<Record<string, string>>({});
+  const [maintPlans, setMaintPlans] = useState<Record<string, MaintenancePlanDoc>>({});
   const [maintPlanSaving, setMaintPlanSaving] = useState<string | null>(null);
 
   // Upload state
@@ -633,40 +598,84 @@ export function ProjectOMExportPage() {
     }
     setTechDocBundles(bundles);
 
-    // Build per-system maintenance plan content from project_documents
-    const planMap: Record<string, string> = {};
-    (docData ?? []).filter(d => d.document_type.startsWith('maintenance_plan_')).forEach(d => {
-      const sys = d.document_type.replace('maintenance_plan_', '');
-      planMap[sys] = d.content ?? '';
-    });
+    // Build per-system maintenance plans from project_documents
+    const planMap: Record<string, MaintenancePlanDoc> = {};
+    const selectedSystems = deriveProjectSystems(devData ?? [], systemData ?? [])
+      .filter(system => system.deviceCount > 0)
+      .map(system => system.name);
+    const docs = [...(docData ?? [])] as ProjectDoc[];
 
-    // Auto-seed missing maintenance plans and scope for any newly active systems
-    const activeSystemsList = [...new Set(
-      (devData ?? []).map(d => d.system_type).filter(Boolean) as string[]
-    )];
-    setActiveSystems(activeSystemsList);
+    const persistPlan = async (
+      systemName: string,
+      plan: MaintenancePlanDoc,
+      existingId?: number,
+      generatedBy: 'auto' | 'manual' = 'auto',
+    ): Promise<ProjectDoc | null> => {
+      const payload = {
+        project_id: pid,
+        document_type: `maintenance_plan_${systemName}`,
+        title: `${systemName} Maintenance Plan`,
+        content: serializeMaintenancePlan(plan),
+        status: 'draft' as const,
+        generated_by: generatedBy,
+      };
+      if (existingId) {
+        await supabase.from('project_documents').update({
+          content: payload.content,
+          title: payload.title,
+        }).eq('id', existingId);
+        return { id: existingId, document_type: payload.document_type, title: payload.title, content: payload.content, status: payload.status, generated_by: generatedBy };
+      }
+      const { data: existingRows } = await supabase
+        .from('project_documents')
+        .select('id, document_type, title, content, status, generated_by')
+        .eq('project_id', pid)
+        .eq('document_type', payload.document_type)
+        .limit(1);
+      if (existingRows?.[0]) {
+        await supabase.from('project_documents').update({
+          content: payload.content,
+          title: payload.title,
+        }).eq('id', existingRows[0].id);
+        return { ...existingRows[0], content: payload.content, title: payload.title };
+      }
+      const { data } = await supabase.from('project_documents').insert(payload).select('id, document_type, title, content, status, generated_by').single();
+      return data ?? null;
+    };
 
-    const missingPlans = activeSystemsList.filter(
-      sys => !(docData ?? []).some(d => d.document_type === `maintenance_plan_${sys}`)
-    );
-    if (missingPlans.length > 0 && !packReadOnly) {
-      await Promise.all(missingPlans.map(sys => {
-        const template = MAINT_TEMPLATE[sys] ?? DEFAULT_TEMPLATE;
-        planMap[sys] = template;
-        return supabase.from('project_documents').insert({
-          project_id: pid,
-          document_type: `maintenance_plan_${sys}`,
-          title: `${sys} Maintenance Plan`,
-          content: template,
-          status: 'draft',
-          generated_by: 'auto',
-        });
-      }));
+    for (const systemName of selectedSystems) {
+      const existing = docs.find(d => d.document_type === `maintenance_plan_${systemName}`);
+      if (!existing) {
+        const plan = createDefaultMaintenancePlan(systemName);
+        planMap[systemName] = plan;
+        if (!packReadOnly && plan.tasks.length > 0) {
+          const row = await persistPlan(systemName, plan);
+          if (row) docs.push(row);
+        }
+        continue;
+      }
+      const { plan, converted } = hydrateStoredMaintenancePlan(systemName, existing.content, existing.generated_by);
+      planMap[systemName] = plan;
+      if (converted && !packReadOnly) {
+        await persistPlan(systemName, plan, existing.id, existing.generated_by === 'manual' ? 'manual' : 'auto');
+        const idx = docs.findIndex(d => d.id === existing.id);
+        if (idx >= 0) {
+          docs[idx] = {
+            ...docs[idx],
+            content: serializeMaintenancePlan(plan),
+            title: `${systemName} Maintenance Plan`,
+          };
+        }
+      }
     }
+
+    setProjectDocs(docs);
+    setMaintPlans(planMap);
+    setActiveSystems(selectedSystems);
 
     // Auto-generate scope when there is no existing content — use Claude if possible
     const existingScope = (docData ?? []).find(d => d.document_type === 'scope_of_works');
-    if ((!existingScope || !existingScope.content?.trim()) && activeSystemsList.length > 0 && !packReadOnly) {
+    if ((!existingScope || !existingScope.content?.trim()) && selectedSystems.length > 0 && !packReadOnly) {
       setScopeContent('');
       setScopeRegenerating(true);
       // Fire-and-forget so the rest of the page loads immediately
@@ -674,7 +683,7 @@ export function ProjectOMExportPage() {
         const { data: srcDocs } = await supabase.from('project_source_docs').select('*').eq('project_id', pid!);
         const generated = await callGenerateScope(project, srcDocs ?? [], devData ?? []);
         const finalScope = generated ?? buildAutoScope(
-          activeSystemsList.map(sys => ({
+          selectedSystems.map(sys => ({
             system: sys as string,
             devices: (devData ?? []).filter(d => d.system_type === sys) as any[],
           })),
@@ -699,8 +708,6 @@ export function ProjectOMExportPage() {
     } else {
       setScopeContent(existingScope?.content ?? '');
     }
-
-    setMaintPlanContent(planMap);
 
     setLoading(false);
   }, [pid, productModels, datasheets, project, packReadOnly]);
@@ -744,7 +751,6 @@ export function ProjectOMExportPage() {
   );
   const importedTechSystems = systemsWithTechImport(documentSystems, techDocState);
   const namedTechBundles = techDocBundles.filter(bundle => bundle.rows.length > 0);
-  const asFittedScope = projectDocs.find(d => d.document_type === 'as_fitted_scope')?.content ?? '';
 
   const systemGroups = projectSystems.map(system => ({
     system: system.name,
@@ -768,7 +774,7 @@ export function ProjectOMExportPage() {
       );
       return hasTechData || techDevices.length > 0 ? 'complete' : 'empty';
     }
-    if (s === 'maintenance_plan') return systemGroups.some(g => maintPlanContent[g.system]?.trim()) ? 'complete' : 'empty';
+    if (s === 'maintenance_plan') return systemGroups.some(g => g.devices.length > 0 && maintenancePlanHasContent(maintPlans[g.system])) ? 'complete' : 'empty';
     if (s === 'commissioning') return getUpload('commissioning') ? 'complete' : commRecords.length > 0 ? 'partial' : 'empty';
     if (s === 'handover') {
       const hUploads = omUploads.filter(u => HANDOVER_SECTIONS.has(u.section));
@@ -776,7 +782,7 @@ export function ProjectOMExportPage() {
       const otherReady = otherHandoverDocs.some(doc => doc.file_url);
       return hUploads.length > 0 || scReady || otherReady ? 'complete' : handoverDocs.length > 0 || scHandoverDocs.length > 0 ? 'partial' : 'empty';
     }
-    if (s === 'as_fitted') return asFittedScope.trim() || asFittedDrawings.length > 0 ? 'complete' : 'empty';
+    if (s === 'as_fitted') return asFittedDrawings.length > 0 ? 'complete' : 'empty';
     if (s === 'datasheets') return devices.some(d => d.datasheet) ? 'complete' : 'empty';
     if (s === 'user_manuals') return projectManuals.length > 0 ? 'complete' : 'empty';
     return 'empty';
@@ -833,16 +839,35 @@ export function ProjectOMExportPage() {
   const handleSaveMaintPlan = async (system: string) => {
     if (!pid) return;
     setMaintPlanSaving(system);
+    const plan = maintPlans[system] ?? createDefaultMaintenancePlan(system);
+    const content = serializeMaintenancePlan(plan);
     const docType = `maintenance_plan_${system}`;
-    const content = maintPlanContent[system] ?? '';
-    const existing = projectDocs.find(d => d.document_type === docType);
-    if (existing) {
-      await supabase.from('project_documents').update({ content, status: 'final' }).eq('id', existing.id);
+    const { data: rows } = await supabase
+      .from('project_documents')
+      .select('id')
+      .eq('project_id', pid)
+      .eq('document_type', docType)
+      .limit(1);
+    const existingId = rows?.[0]?.id ?? projectDocs.find(d => d.document_type === docType)?.id;
+    if (existingId) {
+      await supabase.from('project_documents').update({ content, status: 'final', generated_by: 'manual' }).eq('id', existingId);
+      setProjectDocs(prev => prev.map(doc => (
+        doc.id === existingId
+          ? { ...doc, content, status: 'final', generated_by: 'manual', title: `${system} Maintenance Plan` }
+          : doc
+      )));
     } else {
-      await supabase.from('project_documents').insert({ project_id: pid, document_type: docType, title: `${system} Maintenance Plan`, content, status: 'final', generated_by: 'manual' });
+      const { data } = await supabase.from('project_documents').insert({
+        project_id: pid,
+        document_type: docType,
+        title: `${system} Maintenance Plan`,
+        content,
+        status: 'final',
+        generated_by: 'manual',
+      }).select('id, document_type, title, content, status, generated_by').single();
+      if (data) setProjectDocs(prev => [...prev, data]);
     }
     setMaintPlanSaving(null);
-    load();
   };
 
   // ── PDF Upload ────────────────────────────────────────────────────────────────
@@ -1298,15 +1323,15 @@ export function ProjectOMExportPage() {
                 const n = devices.filter(d => d.ip_address || d.mac_address || d.firmware_version || d.username_hint || d.password_hint).length;
                 return n > 0 ? `${n} device${n !== 1 ? 's' : ''} with technical info` : 'No technical data entered';
               })(),
-              maintenance_plan: systemGroups.filter(g => maintPlanContent[g.system]?.trim()).length > 0
-                ? `Plans for ${systemGroups.filter(g => maintPlanContent[g.system]?.trim()).map(g => g.system).join(', ')}`
+              maintenance_plan: systemGroups.filter(g => g.devices.length > 0 && maintenancePlanHasContent(maintPlans[g.system])).length > 0
+                ? `Plans for ${systemGroups.filter(g => g.devices.length > 0 && maintenancePlanHasContent(maintPlans[g.system])).map(g => g.system).join(', ')}`
                 : 'Not yet created',
               commissioning: getUpload('commissioning') ? 'PDF uploaded' : commRecords.length > 0 ? `${commRecords.length} test records in database` : 'Not yet uploaded',
               handover: (() => {
                 const total = hUploads.length + scHandoverDocs.filter(d => d.file_url).length + otherHandoverDocs.filter(d => d.file_url).length;
                 return total > 0 ? `${total} document${total !== 1 ? 's' : ''} ready` : handoverDocs.length > 0 || scHandoverDocs.length > 0 ? 'Handover data available' : 'Not yet uploaded';
               })(),
-              as_fitted: [asFittedScope.trim() ? 'As-fitted record' : null, asFittedDrawings.length > 0 ? `${asFittedDrawings.length} drawing${asFittedDrawings.length !== 1 ? 's' : ''} uploaded` : null].filter(Boolean).join(' · ') || 'No as-fitted record or drawings',
+              as_fitted: asFittedDrawings.length > 0 ? `${asFittedDrawings.length} drawing${asFittedDrawings.length !== 1 ? 's' : ''} uploaded` : 'No drawings uploaded',
               datasheets: (() => { const found = devices.filter(d => d.datasheet).length; return found > 0 ? `${found} of ${devices.length} devices have datasheets` : 'No datasheets found'; })(),
               user_manuals: projectManuals.length > 0 ? `${projectManuals.length} manual${projectManuals.length !== 1 ? 's' : ''} attached` : 'No manuals attached',
             };
@@ -1420,11 +1445,11 @@ export function ProjectOMExportPage() {
           )}
           {activeSection === 'maintenance_plan' && (
             <MaintenancePlanSection
-              systemGroups={systemGroups}
-              content={maintPlanContent}
-              onChange={(sys, val) => setMaintPlanContent(prev => ({ ...prev, [sys]: val }))}
+              systemNames={systemGroups.filter(g => g.devices.length > 0).map(g => g.system)}
+              plans={maintPlans}
+              onChange={(sys, plan) => setMaintPlans(prev => ({ ...prev, [sys]: plan }))}
               onSave={handleSaveMaintPlan}
-              saving={maintPlanSaving}
+              savingSystem={maintPlanSaving}
               readOnly={packReadOnly}
             />
           )}
@@ -1458,7 +1483,6 @@ export function ProjectOMExportPage() {
               drawings={asFittedDrawings}
               pageImages={pdfPageImages}
               documentSystems={documentSystems}
-              scopeContent={asFittedScope}
             />
           )}
           {activeSection === 'datasheets' && <DatasheetsSection systemGroups={systemGroups} />}
@@ -1487,10 +1511,10 @@ export function ProjectOMExportPage() {
           hasScope={!!scopeContent}
           hasSchedule={devices.length > 0}
           hasTechDocs={namedTechBundles.length > 0 || importedTechSystems.length > 0 || devices.some(d => d.ip_address || d.mac_address || d.firmware_version || d.username_hint || d.password_hint || d.controller_address || d.vlan || d.network_zone)}
-          hasMaintPlan={systemGroups.some(g => maintPlanContent[g.system]?.trim())}
+          hasMaintPlan={systemGroups.some(g => g.devices.length > 0 && maintenancePlanHasContent(maintPlans[g.system]))}
           hasCommissioning={!!(getUpload('commissioning') || commRecords.length > 0)}
           hasHandover={handoverPackPdfs.length > 0 || handoverDocs.length > 0 || scHandoverDocs.length > 0}
-          hasAsFitted={!!asFittedScope.trim() || asFittedDrawings.length > 0}
+          hasAsFitted={asFittedDrawings.length > 0}
           hasDatasheets={devices.some(d => d.datasheet)}
           hasUserManuals={projectManuals.length > 0}
         />
@@ -1600,15 +1624,13 @@ export function ProjectOMExportPage() {
           );
         })()}
 
-        {systemGroups.some(g => maintPlanContent[g.system]?.trim()) && (
+        {systemGroups.some(g => g.devices.length > 0 && maintenancePlanHasContent(maintPlans[g.system])) && (
           <>
             <PrintSection title="Maintenance Plan" anchorId="print-section-maintenance_plan">
-              {systemGroups.filter(g => maintPlanContent[g.system]?.trim()).map(g => (
-                <div key={g.system} className="mb-8">
-                  <h3 className="text-base font-bold text-slate-800 mb-3 border-b border-slate-200 pb-2">{g.system}</h3>
-                  <div dangerouslySetInnerHTML={{ __html: renderMarkdown(maintPlanContent[g.system]) }} />
-                </div>
-              ))}
+              <PrintMaintenancePlan
+                systemNames={systemGroups.filter(g => g.devices.length > 0).map(g => g.system)}
+                plans={maintPlans}
+              />
             </PrintSection>
             <div className="page-break" />
           </>
@@ -1663,16 +1685,9 @@ export function ProjectOMExportPage() {
           return null;
         })()}
 
-        {(asFittedScope.trim() || asFittedDrawings.length > 0) && (
+        {asFittedDrawings.length > 0 && (
           <>
-            {asFittedScope.trim() && (
-              <PrintSection title="As Fitted" anchorId="print-section-as_fitted">
-                <div className={usesSimproLayout(asFittedScope) ? 'simpro-html' : undefined} dangerouslySetInnerHTML={{ __html: renderDocumentHtml(asFittedScope) }} />
-              </PrintSection>
-            )}
-            {asFittedDrawings.length > 0 && (
-              <PrintAsFittedDrawings drawings={asFittedDrawings} pageImages={pdfPageImages} documentSystems={documentSystems} skipAnchor={!!asFittedScope.trim()} />
-            )}
+            <PrintAsFittedDrawings drawings={asFittedDrawings} pageImages={pdfPageImages} documentSystems={documentSystems} />
             <div className="page-break" />
           </>
         )}
@@ -1800,6 +1815,15 @@ export function ProjectOMExportPage() {
           thead { display: table-header-group; }
           tbody tr { page-break-inside: avoid; break-inside: avoid; }
           th, td { word-break: break-word; overflow-wrap: anywhere; }
+
+          .om-maint-table {
+            font-size: 9pt;
+          }
+          .om-maint-table th,
+          .om-maint-table td {
+            font-size: 9pt;
+            line-height: 1.35;
+          }
 
           img { page-break-inside: avoid; break-inside: avoid; }
 
@@ -2448,166 +2472,6 @@ function ScheduleSection({ systemGroups }: { systemGroups: { system: SystemType;
   );
 }
 
-function MaintenanceSection({ systemGroups }: { systemGroups: { system: SystemType; devices: DeviceWithDatasheet[] }[] }) {
-  const withMaint = systemGroups.map(g => ({ ...g, devices: g.devices.filter(d => d.maintenanceNotes) })).filter(g => g.devices.length > 0);
-  if (withMaint.length === 0) {
-    return <EmptyState icon={Wrench} message="No maintenance notes found. Add maintenance notes to products in the Product Database." />;
-  }
-  return (
-    <div className="space-y-4">
-      {withMaint.map(g => (
-        <div key={g.system} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-          <SystemHeader system={g.system} count={g.devices.length} />
-          <div className="divide-y divide-slate-100">
-            {g.devices.map(d => (
-              <div key={d.id} className="flex gap-4 px-5 py-3">
-                <span className="font-mono text-xs font-bold text-slate-800 w-28 flex-shrink-0 pt-0.5">{d.device_name || d.model_number}</span>
-                <span className="text-sm text-slate-600 flex-1">{d.maintenanceNotes}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ─── Maintenance Plan Section ─────────────────────────────────────────────────
-
-const MAINT_TEMPLATE: Record<string, string> = {
-  'CCTV':
-`## Annual Maintenance
-
-- Inspect all camera housings, brackets, and mounting hardware for damage or corrosion
-- Clean camera domes and lenses; check for condensation
-- Verify recording is functioning on all channels; check storage health
-- Review retention period settings and ensure compliance
-- Test remote access and monitoring connections
-- Review and update user accounts; remove former staff
-- Check UPS battery health and backup power operation
-
-## Quarterly Checks
-
-- Spot-check live view and playback on all cameras
-- Verify motion detection zones are correctly configured
-- Check network connectivity and latency`,
-
-  'Access Control':
-`## Annual Maintenance
-
-- Inspect all door controllers, readers, and locks for physical condition
-- Test all door locks, strikes, and magnetic lock functions
-- Verify all access levels and cardholder database are current
-- Remove departed staff credentials; audit access logs
-- Test all REX (request to exit) buttons and break-glass units
-- Check battery backup on all controllers
-- Review software version and apply firmware updates
-
-## Quarterly Checks
-
-- Test door override and manual release functions
-- Review access log reports for anomalies
-- Check reader readability and credential response time`,
-
-  'Intruder':
-`## Annual Maintenance (to BS EN 50131)
-
-- Full walk-test of all detection zones
-- Inspect and test all detectors (PIR, door contacts, glass-break)
-- Test control panel tamper protection
-- Test siren and strobe functions (internal & external)
-- Test communication path to monitoring centre (if applicable)
-- Check battery backup; replace batteries if below spec
-- Review and update user codes; remove former users
-- Confirm compliance with applicable grade requirements
-
-## Quarterly Checks
-
-- Part-test detection zones
-- Check event log for any unexplained activations`,
-
-  'Intercom':
-`## Annual Maintenance
-
-- Inspect all door stations, master stations, and sub-stations for physical condition
-- Clean camera lenses and check video quality at all stations
-- Test call, answer, and door release functions between all stations
-- Test electric strike/maglocks activated by the intercom system
-- Check power supply and backup battery operation
-- Review and update directory listings; remove former occupants
-- Apply firmware updates where available
-
-## Quarterly Checks
-
-- Test call and video functions on a sample of stations
-- Verify door release functions at each entry point
-- Check audio clarity and video image quality`,
-
-  'Networking':
-`## Annual Maintenance
-
-- Inspect all switches, routers, patch panels, and cabinets for physical condition
-- Audit all active network ports; remove unused patch leads
-- Review and update network documentation and IP address register
-- Check UPS battery health and backup power duration
-- Review firmware versions on all managed switches and apply updates
-- Test all PoE ports for correct power delivery to connected devices
-- Review VLAN configuration and network segmentation
-
-## Quarterly Checks
-
-- Review switch port utilisation and error/discard counters
-- Spot-check network performance and latency to key devices
-- Check system logs for anomalies or unauthorised access attempts`,
-
-  'ANPR':
-`## Annual Maintenance
-
-- Inspect all ANPR cameras, housings, illuminators, and mounting hardware
-- Clean camera lenses; test IR illuminator operation day and night
-- Verify plate capture accuracy against test plates at entry/exit points
-- Review and update vehicle permit, allow, and block lists
-- Check storage health and review retention period settings
-- Verify software licensing is current and renew if required
-- Test integration with access control, barriers, or third-party systems
-
-## Quarterly Checks
-
-- Spot-check capture accuracy under varying lighting conditions
-- Review alert, exception, and missed-read logs
-- Check integration functions with connected systems`,
-
-  'Perimeter Detection':
-`## Annual Maintenance (to BS EN 50131 / EN 62676 as applicable)
-
-- Full walk-test of all perimeter detection zones
-- Inspect fence-mounted sensors, buried cables, or active beam detectors
-- Check all zone tamper protections
-- Test alarm output and monitoring centre communication path
-- Inspect and test PTZ camera auto-follow/alarm integration (if fitted)
-- Check battery backup on all field devices; replace below-spec cells
-- Review and update zone sensitivity settings for seasonal variation
-
-## Quarterly Checks
-
-- Part-test detection zones in each perimeter sector
-- Check for environmental factors (vegetation, flooding) affecting detection
-- Review false alarm log and adjust sensitivity as required`,
-};
-
-const DEFAULT_TEMPLATE = `## Annual Maintenance
-
-- [Add annual maintenance tasks here]
-- Inspect all equipment for physical damage
-- Test all system functions to manufacturers specification
-- Review configuration and update as required
-- Check and replace backup batteries if required
-- Review user database and remove leavers
-
-## Quarterly Checks
-
-- [Add routine checks here]`;
-
 type ScopeDevice = { device_type?: string | null; manufacturer?: string | null; location?: string | null };
 
 async function callGenerateScope(
@@ -2691,90 +2555,6 @@ function buildAutoScope(
   doc += `\n## Warranty & Support\n\nAll equipment is covered by manufacturer warranty as detailed in the datasheets in this manual. For service and support contact the installing contractor using the details on the cover page.\n`;
 
   return doc;
-}
-
-function MaintenancePlanSection({ systemGroups, content, onChange, onSave, saving, readOnly }: {
-  systemGroups: { system: SystemType; devices: DeviceWithDatasheet[] }[];
-  content: Record<string, string>;
-  onChange: (system: string, value: string) => void;
-  onSave: (system: string) => void;
-  saving: string | null;
-  readOnly?: boolean;
-}) {
-  const [activeSystem, setActiveSystem] = useState<string>(systemGroups[0]?.system ?? '');
-  const [preview, setPreview] = useState(!!readOnly);
-
-  if (systemGroups.length === 0) {
-    return <EmptyState icon={CalendarCheck} message="No systems in this project yet. Add devices to systems first." />;
-  }
-
-  const currentContent = content[activeSystem] ?? '';
-  const template = MAINT_TEMPLATE[activeSystem] ?? DEFAULT_TEMPLATE;
-
-  return (
-    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-      <div className="flex items-center gap-2 px-6 py-4 border-b border-slate-100">
-        <CalendarCheck className="w-4 h-4 text-slate-400" />
-        <h3 className="font-semibold text-slate-800">Maintenance Plan</h3>
-        <span className="text-xs text-slate-400 ml-1">· one schedule per system</span>
-      </div>
-
-      {/* System tabs */}
-      <div className="flex gap-1 px-6 pt-4 flex-wrap">
-        {systemGroups.map(g => {
-          const hasContent = !!content[g.system]?.trim();
-          return (
-            <button key={g.system} onClick={() => { setActiveSystem(g.system); setPreview(false); }}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
-                activeSystem === g.system ? 'bg-cyan-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}>
-              {g.system}
-              {hasContent && <span className={`w-1.5 h-1.5 rounded-full ${activeSystem === g.system ? 'bg-cyan-300' : 'bg-emerald-400'}`} />}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Editor */}
-      <div className="px-6 py-4">
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-xs text-slate-500">{activeSystem}{readOnly ? '' : ' — edit the maintenance schedule for this system type'}</p>
-          {!readOnly && (
-          <div className="flex items-center gap-2">
-            {!currentContent && (
-              <button onClick={() => onChange(activeSystem, template)}
-                className="text-xs text-amber-600 hover:text-amber-700 px-2 py-1 rounded border border-amber-200 hover:border-amber-300 bg-amber-50 transition-colors">
-                Use template
-              </button>
-            )}
-            <button onClick={() => setPreview(p => !p)}
-              className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 rounded border border-slate-200 hover:border-slate-300 transition-colors">
-              {preview ? 'Edit' : 'Preview'}
-            </button>
-            <button onClick={() => onSave(activeSystem)} disabled={saving === activeSystem}
-              className="text-xs font-medium px-3 py-1 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 transition-colors disabled:opacity-50">
-              {saving === activeSystem ? 'Saving…' : 'Save'}
-            </button>
-          </div>
-          )}
-        </div>
-
-        {preview || readOnly ? (
-          <div className="min-h-48 p-4 border border-slate-200 rounded-lg bg-slate-50"
-            dangerouslySetInnerHTML={{ __html: currentContent ? renderMarkdown(currentContent) : '<p class="text-slate-400 text-sm">Nothing to preview.</p>' }} />
-        ) : (
-          <textarea
-            key={activeSystem}
-            value={currentContent}
-            onChange={e => onChange(activeSystem, e.target.value)}
-            rows={16}
-            placeholder={`Enter ${activeSystem} maintenance schedule (supports Markdown formatting)…`}
-            className="w-full border border-slate-300 rounded-lg px-4 py-3 text-sm text-slate-800 font-mono focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-none"
-          />
-        )}
-      </div>
-    </div>
-  );
 }
 
 // ─── Handover Pack Section (screen) ──────────────────────────────────────────
@@ -3112,20 +2892,19 @@ function UploadSection({ sectionId, title, description, upload, uploading, onUpl
 
 // ─── As Fitted Drawings — screen view ────────────────────────────────────────
 
-function AsFittedDrawingsSection({ drawings, pageImages, documentSystems, scopeContent }: {
+function AsFittedDrawingsSection({ drawings, pageImages, documentSystems }: {
   drawings: AsBuiltDrawing[];
   pageImages: Record<string, PdfRenderState>;
   documentSystems: ProjectSystem[];
-  scopeContent?: string;
 }) {
   const [previewId, setPreviewId] = useState<number | null>(null);
-  if (!scopeContent?.trim() && drawings.length === 0) {
+  if (drawings.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-8 text-center">
         <Layers className="w-10 h-10 text-slate-200 mx-auto mb-3" />
-        <p className="text-sm font-medium text-slate-500">No as-fitted record or drawings yet</p>
+        <p className="text-sm font-medium text-slate-500">No as-fitted drawings uploaded</p>
         <p className="text-xs text-slate-400 mt-1">
-          Edit the as-fitted copy of the Scope of Works in <strong>As Fitted</strong> and upload drawings in <strong>As Fitted Drawings</strong>.
+          Upload drawings in <strong>As Fitted Drawings</strong> — they will appear here full-size in the O&M pack.
         </p>
       </div>
     );
@@ -3135,27 +2914,7 @@ function AsFittedDrawingsSection({ drawings, pageImages, documentSystems, scopeC
 
   return (
     <div className="space-y-6">
-      {scopeContent?.trim() && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-          <div className="flex items-center gap-2 mb-4">
-            <FileText className="w-4 h-4 text-slate-400" />
-            <h3 className="font-semibold text-slate-800">As Fitted</h3>
-          </div>
-          <div
-            className={documentPreviewClassName(scopeContent, 'min-h-24')}
-            dangerouslySetInnerHTML={{ __html: renderDocumentHtml(scopeContent) }}
-          />
-        </div>
-      )}
-      {drawings.length === 0 ? (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-8 text-center">
-          <Layers className="w-10 h-10 text-slate-200 mx-auto mb-3" />
-          <p className="text-sm font-medium text-slate-500">No as-fitted drawings uploaded</p>
-          <p className="text-xs text-slate-400 mt-1">
-            Upload drawings in the <strong>As Fitted Drawings</strong> section — they will appear here full-size in the O&M pack.
-          </p>
-        </div>
-      ) : drawingGroups.map(group => (
+      {drawingGroups.map(group => (
         <div key={group.label} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="flex items-center gap-2 px-6 py-4 border-b border-slate-100 bg-slate-50">
             {group.system ? (
@@ -3808,36 +3567,6 @@ function PrintDeviceTable({ system, devices }: { system: SystemType; devices: De
         </tbody>
       </table>
     </div>
-  );
-}
-
-function PrintMaintenanceTable({ groups }: { groups: { system: SystemType; devices: DeviceWithDatasheet[] }[] }) {
-  const rows = groups.flatMap(g => g.devices.filter(d => d.maintenanceNotes).map(d => ({ system: g.system, d })));
-  if (rows.length === 0) {
-    return (
-      <p style={{ color: '#94a3b8', fontSize: '0.85rem', fontStyle: 'italic' }}>No maintenance notes recorded for any device.</p>
-    );
-  }
-  return (
-    <table style={{ width: '100%', fontSize: '0.7rem', borderCollapse: 'collapse', border: '1px solid #e2e8f0' }}>
-      <thead>
-        <tr style={{ background: '#f8fafc' }}>
-          {['System', 'Device', 'Manufacturer / Model', 'Maintenance Notes'].map(h => (
-            <th key={h} style={{ textAlign: 'left', padding: '0.5rem 0.65rem', fontSize: '0.6rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' as const, letterSpacing: '0.06em', borderBottom: '2px solid #e2e8f0', borderRight: '1px solid #f1f5f9' }}>{h}</th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map(({ system, d }, i) => (
-          <tr key={d.id} style={{ background: i % 2 === 0 ? 'white' : '#f8fafc' }}>
-            <td style={{ padding: '0.45rem 0.65rem', color: '#475569', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9', whiteSpace: 'nowrap' as const }}>{system}</td>
-            <td style={{ padding: '0.45rem 0.65rem', fontWeight: 600, color: '#0f172a', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9', fontFamily: 'monospace', whiteSpace: 'nowrap' as const }}>{d.device_name || '—'}</td>
-            <td style={{ padding: '0.45rem 0.65rem', color: '#475569', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9', whiteSpace: 'nowrap' as const }}>{[d.manufacturer, d.model_number].filter(Boolean).join(' ') || '—'}</td>
-            <td style={{ padding: '0.45rem 0.65rem', color: '#334155', borderBottom: '1px solid #f1f5f9' }}>{d.maintenanceNotes}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
   );
 }
 
