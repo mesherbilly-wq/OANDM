@@ -2,7 +2,8 @@ import type { ImportReviewDraft, ImportSystemDraft } from '../integrations';
 import { resolvedCategory } from '../integrations';
 import { buildSimproPersistSourceReference } from '../integrations/connectors/simpro/simproImportHelpers';
 import type { Device, ProjectSystemRecord, SystemCategory } from '../types';
-import { legacySystemNameToCategory, normalizeSystemCategory, resolveSystemName } from './systems';
+import { categoryForSystemName } from './inferSystemType';
+import { notifyProjectDevicesChanged, legacySystemNameToCategory, normalizeSystemCategory, resolveSystemName } from './systems';
 import { supabase } from './supabase';
 
 export async function fetchProjectSystems(projectId: number): Promise<ProjectSystemRecord[]> {
@@ -170,6 +171,46 @@ export async function ensureProjectSystem(
   }
 
   return created.id as number;
+}
+
+export async function assignDevicesToNamedSystem(
+  projectId: number,
+  deviceIds: number[],
+  systemName: string,
+): Promise<{
+  assignment: { system_type: string; project_system_id: number | null; system_category: SystemCategory | null };
+  error: string | null;
+}> {
+  const name = systemName.trim();
+  if (!name) {
+    return {
+      assignment: { system_type: '', project_system_id: null, system_category: null },
+      error: 'System name is required.',
+    };
+  }
+
+  try {
+    const category = categoryForSystemName(name);
+    const systemId = await ensureProjectSystem(projectId, name, category, 'device_schedule');
+    const assignment = {
+      system_type: name,
+      project_system_id: systemId,
+      system_category: category,
+    };
+
+    if (deviceIds.length === 0) {
+      return { assignment, error: null };
+    }
+
+    const { error } = await supabase.from('devices').update(assignment).in('id', deviceIds);
+    if (!error) notifyProjectDevicesChanged();
+    return { assignment, error: error?.message ?? null };
+  } catch (error) {
+    return {
+      assignment: { system_type: name, project_system_id: null, system_category: categoryForSystemName(name) },
+      error: error instanceof Error ? error.message : 'Failed to assign system.',
+    };
+  }
 }
 
 export async function saveProjectSystemRecord(

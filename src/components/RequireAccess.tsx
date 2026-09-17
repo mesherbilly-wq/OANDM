@@ -22,6 +22,10 @@ export function RequireAccess({ children }: { children: React.ReactNode }) {
   }
 
   if (!canAccessPath(location.pathname, role)) {
+    const documentsMatch = location.pathname.match(/^\/projects\/([^/]+)\/documents(?:\/|$)/);
+    if (documentsMatch) {
+      return <Navigate to={defaultProjectPath(documentsMatch[1], role)} replace />;
+    }
     return <Navigate to={defaultHomePath(role)} replace />;
   }
 

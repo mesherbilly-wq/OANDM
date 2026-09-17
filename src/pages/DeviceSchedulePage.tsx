@@ -1,12 +1,16 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useProject } from './ProjectLayout';
 import { supabase } from '../lib/supabase';
 import { groupDevices, getGroupRowKey, type GroupedEquipment } from '../lib/deviceGrouping';
 import { fetchProjectDevices } from '../lib/fetchProjectDevices';
-import { loadProjectSystemsForProject } from '../lib/projectSystemsDb';
-import { resolveSystemAssignment } from '../lib/documentProjectSystems';
+import { assignDevicesToNamedSystem, fetchProjectSystems, loadProjectSystemsForProject } from '../lib/projectSystemsDb';
 import { getDeviceProductDescription } from '../lib/deviceProductFields';
+import {
+  inferSystemTypeName,
+  shouldAutoAssignSystemType,
+  textsForDeviceSystemInference,
+} from '../lib/inferSystemType';
 import {
   deriveProjectSystems,
   getCategoryStyle,
@@ -36,6 +40,7 @@ const SYSTEM_TYPE_COLORS: Record<string, string> = {
   'ANPR': 'bg-orange-100 text-orange-800 border-orange-300',
   'Perimeter Detection': 'bg-teal-100 text-teal-800 border-teal-300',
   'Networking': 'bg-amber-100 text-amber-800 border-amber-300',
+  'Fire': 'bg-rose-100 text-rose-800 border-rose-300',
 };
 
 function systemBadgeClass(systemName: string | null): string {
@@ -95,14 +100,17 @@ export default function DeviceSchedulePage() {
   const [descDrafts, setDescDrafts] = useState<Record<string, string>>({});
   const [savingRowKey, setSavingRowKey] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const autoAssigningRef = useRef(false);
+  const autoAssignedIdsRef = useRef(new Set<number>());
 
   React.useEffect(() => {
-    fetchDevices();
+    void fetchDevices();
   }, [projectId]);
 
-  const fetchDevices = async () => {
+  const fetchDevices = async (options?: { silent?: boolean }) => {
     if (!projectId) return;
-    setLoading(true);
+    const silent = options?.silent === true;
+    if (!silent) setLoading(true);
     try {
       const projectIdNum = parseInt(projectId, 10);
       const data = await fetchProjectDevices(projectIdNum);
@@ -112,8 +120,13 @@ export default function DeviceSchedulePage() {
     } catch (error) {
       console.error('Failed to fetch devices:', error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
+  };
+
+  const applyDevicePatch = (ids: number[], patch: Partial<Device>) => {
+    const idSet = new Set(ids);
+    setDevices(current => current.map(device => (idSet.has(device.id) ? { ...device, ...patch } : device)));
   };
 
   const projectSystems = useMemo(
@@ -122,7 +135,7 @@ export default function DeviceSchedulePage() {
   );
 
   const systemTypeOptions = useMemo(() => {
-    const names = new Set<string>(LEGACY_SYSTEM_TYPE_NAMES);
+    const names = new Set<string>([...LEGACY_SYSTEM_TYPE_NAMES, 'Fire']);
     for (const system of projectSystems) {
       const name = system.name.trim();
       if (name) names.add(name);
@@ -224,6 +237,57 @@ export default function DeviceSchedulePage() {
   const prefixCounters = useMemo(() => buildPrefixCounters(devices), [devices]);
   const projectIdNum = projectId ? parseInt(projectId, 10) : null;
 
+  const refreshSystemRows = async () => {
+    if (!projectIdNum) return;
+    setSystemRows(await fetchProjectSystems(projectIdNum));
+  };
+
+  React.useEffect(() => {
+    autoAssignedIdsRef.current = new Set();
+  }, [projectIdNum]);
+
+  React.useEffect(() => {
+    if (!projectIdNum || loading || autoAssigningRef.current) return;
+
+    const batches = new Map<string, number[]>();
+    for (const group of groupDevices(devices)) {
+      if (!shouldAutoAssignSystemType(group.system_type)) continue;
+      const inferred = inferSystemTypeName([
+        group.description,
+        group.manufacturer,
+        group.model_number,
+        ...group.devices.flatMap(textsForDeviceSystemInference),
+      ]);
+      if (!inferred || inferred === group.system_type) continue;
+      const ids = group.devices
+        .map(device => device.id)
+        .filter(id => !autoAssignedIdsRef.current.has(id));
+      if (ids.length === 0) continue;
+      const current = batches.get(inferred) ?? [];
+      current.push(...ids);
+      batches.set(inferred, current);
+    }
+    if (batches.size === 0) return;
+
+    autoAssigningRef.current = true;
+    void (async () => {
+      try {
+        for (const [name, ids] of batches) {
+          ids.forEach(id => autoAssignedIdsRef.current.add(id));
+          const { assignment, error } = await assignDevicesToNamedSystem(projectIdNum, ids, name);
+          if (error) {
+            setSaveError(error);
+            continue;
+          }
+          applyDevicePatch(ids, assignment);
+        }
+        await refreshSystemRows();
+      } finally {
+        autoAssigningRef.current = false;
+      }
+    })();
+  }, [projectIdNum, devices, loading]);
+
   const handleApproveDevice = async (deviceId: number) => {
     try {
       const { error } = await supabase
@@ -233,7 +297,7 @@ export default function DeviceSchedulePage() {
 
       if (error) throw error;
       notifyProjectDevicesChanged();
-      await fetchDevices();
+      applyDevicePatch([deviceId], { status: 'active' });
     } catch (error) {
       console.error('Failed to approve device:', error);
     }
@@ -245,7 +309,7 @@ export default function DeviceSchedulePage() {
 
       if (error) throw error;
       notifyProjectDevicesChanged();
-      await fetchDevices();
+      setDevices(current => current.filter(device => device.id !== deviceId));
     } catch (error) {
       console.error('Failed to reject device:', error);
     }
@@ -258,7 +322,7 @@ export default function DeviceSchedulePage() {
 
         if (error) throw error;
         notifyProjectDevicesChanged();
-        await fetchDevices();
+        setDevices(current => current.filter(device => device.id !== deviceId));
       } catch (error) {
         console.error('Failed to delete device:', error);
       }
@@ -274,7 +338,8 @@ export default function DeviceSchedulePage() {
       return;
     }
     notifyProjectDevicesChanged();
-    await fetchDevices();
+    const removed = new Set(group.devices.map(device => device.id));
+    setDevices(current => current.filter(device => !removed.has(device.id)));
   };
 
   const commitGroupQuantity = async (group: GroupedEquipment) => {
@@ -312,7 +377,7 @@ export default function DeviceSchedulePage() {
       delete next[key];
       return next;
     });
-    await fetchDevices();
+    await fetchDevices({ silent: true });
   };
 
   const clearDraft = (setter: React.Dispatch<React.SetStateAction<Record<string, string>>>, key: string) => {
@@ -329,18 +394,18 @@ export default function DeviceSchedulePage() {
     const key = getGroupRowKey(group);
     setSavingRowKey(key);
     setSaveError(null);
-    const error = await updateEquipmentGroup(
+    const { assignment, error } = await assignDevicesToNamedSystem(
       projectIdNum,
-      group,
-      resolveSystemAssignment(projectSystems, nextName),
-      { ...prefixCounters },
+      group.devices.map(device => device.id),
+      nextName,
     );
     setSavingRowKey(null);
     if (error) {
       setSaveError(error);
       return;
     }
-    await fetchDevices();
+    applyDevicePatch(group.devices.map(device => device.id), assignment);
+    await refreshSystemRows();
   };
 
   const commitGroupDescription = async (group: GroupedEquipment) => {
@@ -368,25 +433,44 @@ export default function DeviceSchedulePage() {
       return;
     }
     clearDraft(setDescDrafts, key);
-    await fetchDevices();
+    applyDevicePatch(group.devices.map(device => device.id), { model_name: next || null });
+
+    if (shouldAutoAssignSystemType(group.system_type)) {
+      const inferred = inferSystemTypeName([
+        next,
+        group.manufacturer,
+        group.model_number,
+        ...group.devices.flatMap(textsForDeviceSystemInference),
+      ]);
+      if (inferred) {
+        const { assignment, error: assignError } = await assignDevicesToNamedSystem(
+          projectIdNum,
+          group.devices.map(device => device.id),
+          inferred,
+        );
+        if (assignError) setSaveError(assignError);
+        else {
+          applyDevicePatch(group.devices.map(device => device.id), assignment);
+          await refreshSystemRows();
+        }
+      }
+    }
   };
 
   const commitDeviceSystemType = async (device: Device, nextName: string) => {
+    if (!projectIdNum) return;
     if ((device.system_type ?? '') === nextName) return;
     const key = `device:${device.id}`;
     setSavingRowKey(key);
     setSaveError(null);
-    const { error } = await supabase
-      .from('devices')
-      .update(resolveSystemAssignment(projectSystems, nextName))
-      .eq('id', device.id);
+    const { assignment, error } = await assignDevicesToNamedSystem(projectIdNum, [device.id], nextName);
     setSavingRowKey(null);
     if (error) {
-      setSaveError(error.message);
+      setSaveError(error);
       return;
     }
-    notifyProjectDevicesChanged();
-    await fetchDevices();
+    applyDevicePatch([device.id], assignment);
+    await refreshSystemRows();
   };
 
   const commitDeviceDescription = async (device: Device) => {
@@ -412,7 +496,24 @@ export default function DeviceSchedulePage() {
     }
     clearDraft(setDescDrafts, key);
     notifyProjectDevicesChanged();
-    await fetchDevices();
+    applyDevicePatch([device.id], { model_name: next || null });
+
+    if (projectIdNum && shouldAutoAssignSystemType(device.system_type)) {
+      const inferred = inferSystemTypeName([
+        next,
+        device.manufacturer,
+        device.model_number,
+        ...textsForDeviceSystemInference({ ...device, model_name: next || null }),
+      ]);
+      if (inferred) {
+        const { assignment, error: assignError } = await assignDevicesToNamedSystem(projectIdNum, [device.id], inferred);
+        if (assignError) setSaveError(assignError);
+        else {
+          applyDevicePatch([device.id], assignment);
+          await refreshSystemRows();
+        }
+      }
+    }
   };
 
   const handleBulkApproveAll = async () => {
@@ -426,7 +527,9 @@ export default function DeviceSchedulePage() {
 
         if (error) throw error;
         notifyProjectDevicesChanged();
-        await fetchDevices();
+        setDevices(current => current.map(device => (
+          device.status === 'pending_review' ? { ...device, status: 'active' } : device
+        )));
       } catch (error) {
         console.error('Failed to bulk approve devices:', error);
       }
@@ -670,8 +773,9 @@ export default function DeviceSchedulePage() {
               <tbody>
                 {equipmentGroups.map(row => {
                   const rowKey = getGroupRowKey(row);
+                  const stableKey = row.devices.map(device => device.id).join('-');
                   return (
-                    <tr key={rowKey} className="border-b border-gray-200 hover:bg-gray-50">
+                    <tr key={stableKey} className="border-b border-gray-200 hover:bg-gray-50">
                       <td className="px-4 py-3">
                         <SystemTypeSelect
                           value={row.system_type}
@@ -771,7 +875,7 @@ export default function DeviceSchedulePage() {
           prefixCounters={prefixCounters}
           projectSystems={projectSystems}
           onClose={() => setEditGroup(null)}
-          onSaved={() => { setEditGroup(null); void fetchDevices(); }}
+          onSaved={() => { setEditGroup(null); void fetchDevices({ silent: true }); }}
         />
       )}
       {editDevice && (
@@ -781,7 +885,11 @@ export default function DeviceSchedulePage() {
           projectSystemNames={projectSystems.map(system => system.name)}
           projectSystems={projectSystems}
           onClose={() => setEditDevice(null)}
-          onSave={() => { setEditDevice(null); void fetchDevices(); }}
+          onSave={updated => {
+            setEditDevice(null);
+            if (updated) applyDevicePatch([updated.id], updated);
+            else void fetchDevices({ silent: true });
+          }}
         />
       )}
     </div>

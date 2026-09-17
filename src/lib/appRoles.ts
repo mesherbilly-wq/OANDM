@@ -1,8 +1,8 @@
 export type AppRole = 'admin' | 'staff' | 'end_user';
 
 export const APP_ROLES: { value: AppRole; label: string; description: string }[] = [
-  { value: 'admin', label: 'Admin', description: 'Full access, including Integrations, Handover Config, and users.' },
-  { value: 'staff', label: 'Staff', description: 'Edit projects and documents. Cannot open Integrations or Handover Config.' },
+  { value: 'admin', label: 'Admin', description: 'Full access, including Integrations, Document Management, Handover Config, and users.' },
+  { value: 'staff', label: 'Staff', description: 'Edit projects. Cannot open Integrations, Document Management, Handover Config, or Users.' },
   { value: 'end_user', label: 'End user', description: 'Invited to specific projects. Sees the O&M pack only, read-only, with download of the full pack or selected sections.' },
 ];
 
@@ -19,6 +19,10 @@ export function canAccessIntegrations(role: AppRole): boolean {
 }
 
 export function canAccessHandoverConfig(role: AppRole): boolean {
+  return role === 'admin';
+}
+
+export function canAccessDocumentManagement(role: AppRole): boolean {
   return role === 'admin';
 }
 
@@ -47,6 +51,7 @@ export function canAccessPath(pathname: string, role: AppRole): boolean {
   if (role === 'admin') return true;
 
   if (pathname.startsWith('/integrations') || pathname.startsWith('/users')) return false;
+  if (/^\/projects\/[^/]+\/documents(?:\/|$)/.test(pathname)) return false;
 
   if (role === 'staff') return true;
 

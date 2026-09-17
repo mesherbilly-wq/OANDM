@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { fetchProjectDevices } from '../lib/fetchProjectDevices';
 import { groupDevices, getGroupRowKey, type GroupedEquipment } from '../lib/deviceGrouping';
@@ -116,7 +116,7 @@ export default function ProjectSystemsPage() {
   const [individualSort, setIndividualSort] = useState<{ key: IndividualSortKey; dir: SortDir } | null>(null);
 
   const projectSystems = useMemo(
-    () => deriveProjectSystems(allDevices, systemRows),
+    () => deriveProjectSystems(allDevices, systemRows).filter(system => system.deviceCount > 0),
     [allDevices, systemRows],
   );
   const projectSystemNames = useMemo(() => projectSystems.map(system => system.name), [projectSystems]);
@@ -245,7 +245,6 @@ export default function ProjectSystemsPage() {
 
   const fetchDevices = useCallback(async (): Promise<Device[]> => {
     if (!projectId) return [];
-    setLoading(true);
     try {
       const devices = await fetchProjectDevices(projectId);
       const systems = await loadProjectSystemsForProject(projectId, devices);
@@ -684,7 +683,13 @@ export default function ProjectSystemsPage() {
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="flex overflow-x-auto">
           {projectSystems.length === 0 ? (
-            <div className="px-5 py-3.5 text-sm text-slate-500">No systems yet — import or add devices to create systems.</div>
+            <div className="px-5 py-3.5 text-sm text-slate-500">
+              No systems yet — set system types on{' '}
+              <Link to={`/projects/${id}/schedule`} className="text-cyan-700 font-medium hover:underline">
+                Device Schedule
+              </Link>
+              , then they appear here.
+            </div>
           ) : (
             projectSystems.map(system => {
               const Icon = getCategoryStyle(system.category).icon;

@@ -1,4 +1,5 @@
 import { mapSimproJobFields, formatIncompleteMarker } from '../src/lib/simproJobFields.ts';
+import { inferSystemTypeName, shouldAutoAssignSystemType } from '../src/lib/inferSystemType.ts';
 import { buildSdpAnswers, reconcileSimproRefresh, sdpHasBothSignatures, applySdpKind } from '../src/lib/sdpAnswers.ts';
 import { sdpSigningWording, SDP_PROPOSED_WORDING, SDP_AS_FITTED_WORDING } from '../src/lib/systemDesignProposal.ts';
 
@@ -39,6 +40,10 @@ assert('does not use a project title as the job number hint', mapSimproJobFields
   ID: 8821,
   Name: 'Gatehouse cameras',
 }, { jobNumberHint: 'Gatehouse cameras' }).jobNumber === '8821');
+assert('infers CCTV from camera text', inferSystemTypeName(['Axis P3245-LVE camera']) === 'CCTV');
+assert('infers Access Control from reader text', inferSystemTypeName(['HID Signo reader']) === 'Access Control');
+assert('auto-assigns Simpro materials lines', shouldAutoAssignSystemType('Materials') === true);
+assert('keeps an already chosen CCTV type', shouldAutoAssignSystemType('CCTV') === false);
 assert('maps customer', mapped.customerOrganisation === 'HMP Example');
 assert('maps site address', /1 Site Road/.test(mapped.siteAddress || ''));
 assert('maps engineer', mapped.engineer === 'Pat Engineer');

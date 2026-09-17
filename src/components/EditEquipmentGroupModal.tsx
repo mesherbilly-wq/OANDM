@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { AlertCircle, X } from 'lucide-react';
 import type { GroupedEquipment } from '../lib/deviceGrouping';
 import { MAX_DEVICES_PER_LINE } from '../lib/devicePersistConstants';
-import { resolveSystemAssignment } from '../lib/documentProjectSystems';
+import { assignDevicesToNamedSystem } from '../lib/projectSystemsDb';
 import { updateEquipmentGroup, type EquipmentGroupUpdates } from '../lib/deviceProjectEdits';
 import { LEGACY_SYSTEM_TYPE_NAMES, type ProjectSystem } from '../lib/systems';
 
@@ -39,6 +39,7 @@ export function EditEquipmentGroupModal({
 
   const systemOptions = [...new Set([
     ...LEGACY_SYSTEM_TYPE_NAMES,
+    'Fire',
     ...projectSystems.map(system => system.name.trim()).filter(Boolean),
   ])].sort((a, b) => a.localeCompare(b));
 
@@ -50,8 +51,20 @@ export function EditEquipmentGroupModal({
     setError(null);
 
     const parsedQty = parseInt(quantity, 10);
+    if (systemType.trim()) {
+      const assigned = await assignDevicesToNamedSystem(
+        projectId,
+        group.devices.map(device => device.id),
+        systemType,
+      );
+      if (assigned.error) {
+        setError(assigned.error);
+        setSaving(false);
+        return;
+      }
+    }
+
     const updates: EquipmentGroupUpdates = {
-      ...resolveSystemAssignment(projectSystems, systemType),
       manufacturer: manufacturer.trim() || null,
       model_number: modelNumber.trim() || null,
       model_name: description.trim() || null,

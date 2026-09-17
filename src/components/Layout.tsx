@@ -10,15 +10,15 @@ import { supabase } from '../lib/supabase';
 import { deriveProjectSystems, getCategoryStyle, PROJECT_DEVICES_CHANGED_EVENT, type ProjectSystem } from '../lib/systems';
 import { fetchProjectSystems } from '../lib/projectSystemsDb';
 import type { Device, ProjectSystemRecord } from '../types';
-import { canAccessIntegrations, canEditOperations, canManageUsers, isEndUser, roleLabel } from '../lib/appRoles';
+import { canAccessDocumentManagement, canAccessIntegrations, canEditOperations, canManageUsers, isEndUser, roleLabel } from '../lib/appRoles';
 import { useUserAccess } from '../lib/userAccess';
 
 const PROJECT_MODULES = [
   { name: 'Overview',           slug: 'info',          icon: Info },
   { name: 'Document Mgmt',      slug: 'documents',     icon: FileText },
+  { name: 'Device Schedule',    slug: 'schedule',      icon: ClipboardCheck },
   { name: 'Systems',            slug: 'systems',       icon: Cpu,           hasChildren: true },
   { name: 'As Fitted',          slug: 'as-fitted-scope', icon: ClipboardList },
-  { name: 'Device Schedule',    slug: 'schedule',      icon: ClipboardCheck },
   { name: 'Technical Docs',     slug: 'technical',     icon: Wifi },
   { name: 'Commissioning',      slug: 'commissioning',  icon: ShieldAlert },
   { name: 'Handover',           slug: 'handover',       icon: Award },
@@ -42,9 +42,11 @@ export function Layout({ companyName, userEmail, onSignOut }: {
   const showIntegrations = canAccessIntegrations(role);
   const showUsers = canManageUsers(role);
   const endUser = isEndUser(role);
+  const showDocumentManagement = canAccessDocumentManagement(role);
+  const populatedSystems = projectSystems.filter(system => system.deviceCount > 0);
   const visibleModules = endUser
     ? PROJECT_MODULES.filter(mod => mod.slug === 'om-builder').map(mod => ({ ...mod, name: 'O&M Pack' }))
-    : PROJECT_MODULES;
+    : PROJECT_MODULES.filter(mod => mod.slug !== 'documents' || showDocumentManagement);
 
   const projectMatch = location.pathname.match(/^\/projects\/(\d+)/);
   const currentProjectId = projectMatch?.[1] ?? null;
@@ -139,16 +141,16 @@ export function Layout({ companyName, userEmail, onSignOut }: {
                       </button>
                       {systemsExpanded && (
                         <div className="ml-3 mt-0.5 pl-3 border-l border-slate-800 space-y-0.5">
-                          {projectSystems.length === 0 ? (
+                          {populatedSystems.length === 0 ? (
                             <Link
-                              to={`/projects/${currentProjectId}/systems`}
+                              to={`/projects/${currentProjectId}/schedule`}
                               onClick={() => setSidebarOpen(false)}
                               className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-slate-500 hover:text-slate-300 hover:bg-slate-800/60"
                             >
-                              <span className="font-medium">All systems</span>
+                              <span className="font-medium">Set types on Device Schedule</span>
                             </Link>
                           ) : (
-                            projectSystems.map(system => {
+                            populatedSystems.map(system => {
                               const sHref = `/projects/${currentProjectId}/systems/${system.slug}`;
                               const sActive = location.pathname === sHref || location.pathname.startsWith(`${sHref}/`);
                               const Icon = getCategoryStyle(system.category).icon;

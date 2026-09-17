@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useParams } from 'react-router-dom';
+import { Navigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useProject } from './ProjectLayout';
 import type { Project, ProjectRevision } from '../types';
+import { canAccessDocumentManagement, defaultProjectPath } from '../lib/appRoles';
+import { useUserAccess } from '../lib/userAccess';
 import {
   Building2, FileCheck, User, ClipboardList, RotateCcw,
   Save, Plus, Trash2, Upload, X, CheckCircle, Pencil,
@@ -85,8 +87,8 @@ function Toast({ message, onDone }: { message: string; onDone: () => void }) {
 export default function DocumentManagementPage() {
   const { id } = useParams<{ id: string }>();
   const { project, refreshProject } = useProject();
+  const { role, roleLoading } = useUserAccess();
   const pid = id ? parseInt(id) : null;
-
   const [tab, setTab] = useState<Tab>('authority');
   const [toast, setToast] = useState('');
   const [loading, setLoading] = useState(true);
@@ -114,7 +116,10 @@ export default function DocumentManagementPage() {
   // ── Load ─────────────────────────────────────────────────────────────────────
 
   const load = useCallback(async () => {
-    if (!pid) return;
+    if (!pid || !canAccessDocumentManagement(role)) {
+      setLoading(false);
+      return;
+    }
     const [
       { data: authData },
       { data: contrData },
@@ -128,7 +133,7 @@ export default function DocumentManagementPage() {
     if (contrData) setContractor({ ...BLANK_CONTRACTOR, ...contrData });
     setRevisions(revData ?? []);
     setLoading(false);
-  }, [pid]);
+  }, [pid, role]);
 
   useEffect(() => {
     if (project) setProjectForm(project as any);
@@ -219,12 +224,16 @@ export default function DocumentManagementPage() {
     setRevisions(r => r.filter(x => x.id !== revId));
   };
 
-  if (loading) {
+  if (roleLoading || loading) {
     return (
       <div className="flex items-center justify-center min-h-64">
         <div className="w-8 h-8 border-4 border-cyan-600 border-t-transparent rounded-full animate-spin" />
       </div>
     );
+  }
+
+  if (!canAccessDocumentManagement(role)) {
+    return <Navigate to={id ? defaultProjectPath(id, role) : '/'} replace />;
   }
 
   return (

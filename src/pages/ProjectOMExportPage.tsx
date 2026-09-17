@@ -13,7 +13,7 @@ import { FALLBACK_DOCUMENT_DEFINITIONS, titleForLegacyDocumentId } from '../lib/
 import { matchEquipmentInputToProduct } from '../integrations/core/productMatching';
 import { useProject } from './ProjectLayout';
 import type { Device, CommissioningRecord, HandoverDocument, Datasheet, ProjectSystemRecord } from '../types';
-import { isEndUser } from '../lib/appRoles';
+import { canAccessDocumentManagement, isEndUser } from '../lib/appRoles';
 import { useUserAccess } from '../lib/userAccess';
 import { OmClientInvitePanel } from '../components/OmClientInvitePanel';
 import { MarkdownDocEditor, documentPreviewClassName, renderDocumentHtml, usesSimproLayout } from '../components/MarkdownDocEditor';
@@ -2293,6 +2293,7 @@ function UserManualsSection({ pid, projectManuals, onRefresh, readOnly }: {
 function CoverSection({ project, devices, systemGroups, contractor, authority }: {
   project: any; devices: DeviceWithDatasheet[]; systemGroups: any[]; contractor: any; authority: any;
 }) {
+  const { role } = useUserAccess();
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
       <div className="flex items-center gap-2">
@@ -2369,7 +2370,11 @@ function CoverSection({ project, devices, systemGroups, contractor, authority }:
         )}
       </div>
 
-      <p className="text-xs text-slate-400">Cover page pulls from Document Management — fill in <strong>Contractor Information</strong>, <strong>Document Authority</strong> and <strong>Project Information</strong> to complete it.</p>
+      <p className="text-xs text-slate-400">
+        {canAccessDocumentManagement(role)
+          ? <>Cover page pulls from Document Management — fill in <strong>Contractor Information</strong>, <strong>Document Authority</strong> and <strong>Project Information</strong> to complete it.</>
+          : <>Cover page pulls from Document Management. Ask an admin to fill Contractor Information, Document Authority and Project Information.</>}
+      </p>
     </div>
   );
 }
