@@ -29,6 +29,7 @@ import PublicHandoverFormPage from './pages/PublicHandoverFormPage';
 import SafetyCulturePage from './pages/SafetyCulturePage';
 import { UsersPage } from './pages/UsersPage';
 import { ProjectInvitePage } from './pages/ProjectInvitePage';
+import { UserInvitePage } from './pages/UserInvitePage';
 import SdpPage from './pages/SdpPage';
 import DocumentReturnPage from './pages/DocumentReturnPage';
 import { UserAccessProvider, useUserAccess } from './lib/userAccess';
@@ -66,7 +67,7 @@ function App() {
   };
 
   const isPublicFormPath = typeof window !== 'undefined' && window.location.pathname.startsWith('/f/');
-  const isInvitePath = typeof window !== 'undefined' && window.location.pathname.startsWith('/i/');
+  const isInvitePath = typeof window !== 'undefined' && (window.location.pathname.startsWith('/i/') || window.location.pathname.startsWith('/u/'));
   const isReturnPath = typeof window !== 'undefined' && window.location.pathname.startsWith('/r/');
 
   if (isPublicFormPath) {
@@ -105,6 +106,7 @@ function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/i/:token" element={<ProjectInvitePage />} />
+            <Route path="/u/:token" element={<UserInvitePage />} />
             <Route path="*" element={<AuthPage />} />
           </Routes>
         </BrowserRouter>
@@ -154,6 +156,7 @@ function AuthedApp({
         <Route path="/f/:token" element={<PublicHandoverFormPage />} />
         <Route path="/r/:token" element={<DocumentReturnPage />} />
         <Route path="/i/:token" element={<ProjectInvitePage />} />
+        <Route path="/u/:token" element={<UserInvitePage />} />
         <Route path="/" element={<Layout companyName={companyName} userEmail={userEmail} onSignOut={onSignOut} />}>
           <Route index element={<Navigate to={defaultHomePath(role)} replace />} />
           <Route path="dashboard" element={<RequireAccess><DashboardPage /></RequireAccess>} />
