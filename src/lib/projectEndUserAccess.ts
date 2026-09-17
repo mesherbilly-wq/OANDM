@@ -127,6 +127,86 @@ export async function revokeProjectEndUserInvite(id: number): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
+export async function listAllProjectEndUserAccess(): Promise<{
+  rows: ProjectEndUserInvite[];
+  error: string | null;
+  needsMigration: boolean;
+}> {
+  const { data, error } = await supabase
+    .from('project_end_user_access')
+    .select('id, project_id, email, user_id, token, invited_at, accepted_at')
+    .order('invited_at', { ascending: false });
+
+  if (error) {
+    return { rows: [], error: error.message, needsMigration: isMissingEndUserInviteTable(error.message) };
+  }
+  return { rows: (data ?? []) as ProjectEndUserInvite[], error: null, needsMigration: false };
+}
+
+export async function grantUserProjectAccess(projectId: number, email: string, userId: string): Promise<void> {
+  const normalised = normalizeEmail(email);
+  if (!normalised) throw new Error('This user has no email address to grant access with.');
+
+  const { data: { user } } = await supabase.auth.getUser();
+  const now = new Date().toISOString();
+
+  const { data: byUser, error: byUserError } = await supabase
+    .from('project_end_user_access')
+    .select('id, accepted_at')
+    .eq('project_id', projectId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (byUserError && isMissingEndUserInviteTable(byUserError.message)) {
+    throw new Error('Run 029 in the Supabase SQL Editor to enable project access.');
+  }
+  if (byUserError) throw new Error(byUserError.message);
+  if (byUser) {
+    if (byUser.accepted_at) return;
+    const { error } = await supabase
+      .from('project_end_user_access')
+      .update({ accepted_at: now, email: normalised })
+      .eq('id', byUser.id);
+    if (error) throw new Error(error.message);
+    return;
+  }
+
+  const { data: byEmail, error: byEmailError } = await supabase
+    .from('project_end_user_access')
+    .select('id, accepted_at')
+    .eq('project_id', projectId)
+    .eq('email', normalised)
+    .maybeSingle();
+  if (byEmailError) throw new Error(byEmailError.message);
+  if (byEmail) {
+    const { error } = await supabase
+      .from('project_end_user_access')
+      .update({
+        user_id: userId,
+        accepted_at: byEmail.accepted_at ?? now,
+      })
+      .eq('id', byEmail.id);
+    if (error) throw new Error(error.message);
+    return;
+  }
+
+  const { error } = await supabase
+    .from('project_end_user_access')
+    .insert({
+      project_id: projectId,
+      email: normalised,
+      user_id: userId,
+      token: randomToken(),
+      invited_by: user?.id ?? null,
+      accepted_at: now,
+    });
+  if (error) {
+    if (isMissingEndUserInviteTable(error.message)) {
+      throw new Error('Run 029 in the Supabase SQL Editor to enable project access.');
+    }
+    throw new Error(error.message);
+  }
+}
+
 export async function previewEndUserInvite(token: string): Promise<EndUserInvitePreview> {
   const { data, error } = await supabase.rpc('get_end_user_invite', { invite_token: token });
   if (error) {

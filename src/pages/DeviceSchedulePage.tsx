@@ -2,11 +2,15 @@ import React, { useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useProject } from './ProjectLayout';
 import { supabase } from '../lib/supabase';
-import { groupDevices } from '../lib/deviceGrouping';
+import { groupDevices, getGroupRowKey, type GroupedEquipment } from '../lib/deviceGrouping';
 import { fetchProjectDevices } from '../lib/fetchProjectDevices';
 import { loadProjectSystemsForProject } from '../lib/projectSystemsDb';
-import { deriveProjectSystems, getCategoryStyle } from '../lib/systems';
+import { deriveProjectSystems, getCategoryStyle, notifyProjectDevicesChanged } from '../lib/systems';
+import { buildPrefixCounters, updateEquipmentGroup } from '../lib/deviceProjectEdits';
+import { MAX_DEVICES_PER_LINE } from '../lib/devicePersistConstants';
 import { Device, ProjectSystemRecord } from '../types';
+import { EditEquipmentGroupModal } from '../components/EditEquipmentGroupModal';
+import { EditDeviceModal } from '../components/EditDeviceModal';
 import {
   ChevronDown,
   ChevronRight,
@@ -40,7 +44,7 @@ interface DeviceRow {
 
 export default function DeviceSchedulePage() {
   const { id: projectId } = useParams<{ id: string }>();
-  const { project } = useProject();
+  const { productModels } = useProject();
   const [devices, setDevices] = useState<Device[]>([]);
   const [systemRows, setSystemRows] = useState<ProjectSystemRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,6 +55,11 @@ export default function DeviceSchedulePage() {
   const [showComponents, setShowComponents] = useState(true);
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
   const [expandedDevices, setExpandedDevices] = useState<Set<string>>(new Set());
+  const [editGroup, setEditGroup] = useState<GroupedEquipment | null>(null);
+  const [editDevice, setEditDevice] = useState<Device | null>(null);
+  const [qtyDrafts, setQtyDrafts] = useState<Record<string, string>>({});
+  const [savingQtyKey, setSavingQtyKey] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   React.useEffect(() => {
     fetchDevices();
@@ -144,7 +153,7 @@ export default function DeviceSchedulePage() {
 
   const filteredDevices = useMemo(() => {
     return devices.filter((device) => {
-      if (searchTerm && !device.device_name.toLowerCase().includes(searchTerm.toLowerCase())) {
+      if (searchTerm && !(device.device_name ?? '').toLowerCase().includes(searchTerm.toLowerCase())) {
         return false;
       }
       if (selectedSystemType !== 'All' && device.system_type !== selectedSystemType) {
@@ -168,8 +177,10 @@ export default function DeviceSchedulePage() {
   }, [filteredDevices]);
 
   const equipmentGroups = useMemo(() => groupDevices(filteredDevices), [filteredDevices]);
+  const prefixCounters = useMemo(() => buildPrefixCounters(devices), [devices]);
+  const projectIdNum = projectId ? parseInt(projectId, 10) : null;
 
-  const handleApproveDevice = async (deviceId: string) => {
+  const handleApproveDevice = async (deviceId: number) => {
     try {
       const { error } = await supabase
         .from('devices')
@@ -177,34 +188,87 @@ export default function DeviceSchedulePage() {
         .eq('id', deviceId);
 
       if (error) throw error;
+      notifyProjectDevicesChanged();
       await fetchDevices();
     } catch (error) {
       console.error('Failed to approve device:', error);
     }
   };
 
-  const handleRejectDevice = async (deviceId: string) => {
+  const handleRejectDevice = async (deviceId: number) => {
     try {
       const { error } = await supabase.from('devices').delete().eq('id', deviceId);
 
       if (error) throw error;
+      notifyProjectDevicesChanged();
       await fetchDevices();
     } catch (error) {
       console.error('Failed to reject device:', error);
     }
   };
 
-  const handleDeleteDevice = async (deviceId: string) => {
+  const handleDeleteDevice = async (deviceId: number) => {
     if (confirm('Are you sure you want to delete this device?')) {
       try {
         const { error } = await supabase.from('devices').delete().eq('id', deviceId);
 
         if (error) throw error;
+        notifyProjectDevicesChanged();
         await fetchDevices();
       } catch (error) {
         console.error('Failed to delete device:', error);
       }
     }
+  };
+
+  const handleDeleteGroup = async (group: GroupedEquipment) => {
+    const label = group.description || group.model_number || 'this line';
+    if (!confirm(`Delete ${group.quantity} unit${group.quantity === 1 ? '' : 's'} of ${label}?`)) return;
+    const { error } = await supabase.from('devices').delete().in('id', group.devices.map(device => device.id));
+    if (error) {
+      setSaveError(error.message);
+      return;
+    }
+    notifyProjectDevicesChanged();
+    await fetchDevices();
+  };
+
+  const commitGroupQuantity = async (group: GroupedEquipment) => {
+    if (!projectIdNum) return;
+    const key = getGroupRowKey(group);
+    const raw = qtyDrafts[key];
+    if (raw === undefined) return;
+    const parsed = parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed < 1) {
+      setQtyDrafts(current => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      return;
+    }
+    if (parsed === group.quantity) {
+      setQtyDrafts(current => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      return;
+    }
+    setSavingQtyKey(key);
+    setSaveError(null);
+    const error = await updateEquipmentGroup(projectIdNum, group, { quantity: parsed }, { ...prefixCounters });
+    setSavingQtyKey(null);
+    if (error) {
+      setSaveError(error);
+      return;
+    }
+    setQtyDrafts(current => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    await fetchDevices();
   };
 
   const handleBulkApproveAll = async () => {
@@ -217,6 +281,7 @@ export default function DeviceSchedulePage() {
           .eq('status', 'pending_review');
 
         if (error) throw error;
+        notifyProjectDevicesChanged();
         await fetchDevices();
       } catch (error) {
         console.error('Failed to bulk approve devices:', error);
@@ -305,6 +370,13 @@ export default function DeviceSchedulePage() {
                   </button>
                 </>
               )}
+              <button
+                onClick={() => setEditDevice(device)}
+                className="p-1 hover:bg-cyan-100 rounded text-cyan-600"
+                title="Rename / edit"
+              >
+                <Pencil size={16} />
+              </button>
               <button
                 onClick={() => handleDeleteDevice(device.id)}
                 className="p-1 hover:bg-red-100 rounded text-red-600"
@@ -420,30 +492,74 @@ export default function DeviceSchedulePage() {
           </div>
         ) : (
           <div className="overflow-x-auto bg-white rounded-lg border border-gray-200">
+            {saveError && (
+              <div className="mx-4 mt-4 px-4 py-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg">
+                {saveError}
+              </div>
+            )}
             <table className="w-full">
               <thead>
                 <tr className="bg-gray-100 border-b border-gray-200">
-                  {['System Type', 'Description', 'Manufacturer', 'Model', 'Quantity'].map(h => (
-                    <th key={h} className="px-4 py-3 text-left font-semibold text-gray-900">{h}</th>
+                  {['System Type', 'Description', 'Manufacturer', 'Model', 'Quantity', ''].map(h => (
+                    <th key={h || 'actions'} className="px-4 py-3 text-left font-semibold text-gray-900">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {equipmentGroups.map(row => (
-                  <tr key={`${row.system_type}|${row.manufacturer}|${row.model_number}|${row.description}`} className="border-b border-gray-200 hover:bg-gray-50">
-                    <td className="px-4 py-3">
-                      {row.system_type ? (
-                        <span className={`text-xs px-2 py-1 rounded border ${SYSTEM_TYPE_COLORS[row.system_type]}`}>
-                          {row.system_type}
-                        </span>
-                      ) : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-gray-700">{row.description || '—'}</td>
-                    <td className="px-4 py-3 text-gray-700">{row.manufacturer || '—'}</td>
-                    <td className="px-4 py-3 text-gray-700">{row.model_number || '—'}</td>
-                    <td className="px-4 py-3 font-semibold text-gray-900">{row.quantity}</td>
-                  </tr>
-                ))}
+                {equipmentGroups.map(row => {
+                  const rowKey = getGroupRowKey(row);
+                  return (
+                    <tr key={rowKey} className="border-b border-gray-200 hover:bg-gray-50">
+                      <td className="px-4 py-3">
+                        {row.system_type ? (
+                          <span className={`text-xs px-2 py-1 rounded border ${systemBadgeClass(row.system_type)}`}>
+                            {row.system_type}
+                          </span>
+                        ) : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-gray-700">{row.description || '—'}</td>
+                      <td className="px-4 py-3 text-gray-700">{row.manufacturer || '—'}</td>
+                      <td className="px-4 py-3 text-gray-700">{row.model_number || '—'}</td>
+                      <td className="px-4 py-3">
+                        <input
+                          type="number"
+                          min={1}
+                          max={MAX_DEVICES_PER_LINE}
+                          className="w-20 border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-semibold text-gray-900"
+                          value={qtyDrafts[rowKey] ?? String(row.quantity)}
+                          disabled={savingQtyKey === rowKey}
+                          onChange={event => setQtyDrafts(current => ({ ...current, [rowKey]: event.target.value }))}
+                          onBlur={() => void commitGroupQuantity(row)}
+                          onKeyDown={event => {
+                            if (event.key === 'Enter') {
+                              event.currentTarget.blur();
+                            }
+                          }}
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setEditGroup(row)}
+                            className="p-1.5 text-slate-400 hover:text-cyan-600 hover:bg-cyan-50 rounded-lg"
+                            title="Rename / edit line"
+                          >
+                            <Pencil size={16} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteGroup(row)}
+                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
+                            title="Delete line"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -470,6 +586,24 @@ export default function DeviceSchedulePage() {
             </tbody>
           </table>
         </div>
+      )}
+      {projectIdNum && editGroup && (
+        <EditEquipmentGroupModal
+          projectId={projectIdNum}
+          group={editGroup}
+          prefixCounters={prefixCounters}
+          onClose={() => setEditGroup(null)}
+          onSaved={() => { setEditGroup(null); void fetchDevices(); }}
+        />
+      )}
+      {editDevice && (
+        <EditDeviceModal
+          device={editDevice}
+          productModels={productModels}
+          projectSystemNames={projectSystems.map(system => system.name)}
+          onClose={() => setEditDevice(null)}
+          onSave={() => { setEditDevice(null); void fetchDevices(); }}
+        />
       )}
     </div>
   );

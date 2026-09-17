@@ -43,6 +43,7 @@ export function EditEquipmentGroupModal({
     const updates: EquipmentGroupUpdates = {
       manufacturer: manufacturer.trim() || null,
       model_number: modelNumber.trim() || null,
+      model_name: description.trim() || null,
       device_type: description.trim() || null,
       location: location.trim() || null,
       notes: notes.trim() || null,
