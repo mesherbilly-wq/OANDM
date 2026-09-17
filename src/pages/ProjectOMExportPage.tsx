@@ -234,6 +234,8 @@ type TechDocBundle = {
 };
 
 const TECH_DOC_PRINT_ROWS = 18;
+const TECH_DOC_PRINT_ROWS_LANDSCAPE = 12;
+const PRINT_LANDSCAPE_COL_THRESHOLD = 6;
 
 function sameSystemName(a: string | null | undefined, b: string | null | undefined): boolean {
   return (a ?? '').trim().toLowerCase() === (b ?? '').trim().toLowerCase();
@@ -312,6 +314,10 @@ function resolveTechDocColumns(colConfig: TechDocColumn[] | undefined, rows: Tec
   return configured;
 }
 
+function printTableNeedsLandscape(columnCount: number): boolean {
+  return columnCount > PRINT_LANDSCAPE_COL_THRESHOLD;
+}
+
 function chunkTechDocRows<T>(rows: T[], size: number): T[][] {
   if (rows.length === 0) return [[]];
   const chunks: T[][] = [];
@@ -319,7 +325,6 @@ function chunkTechDocRows<T>(rows: T[], size: number): T[][] {
   return chunks;
 }
 
-const TECH_DOC_PRINT_COLS = 9;
 const HTML2CANVAS_MAX_H = 1400;
 
 function canvasIsMostlyBlank(canvas: HTMLCanvasElement): boolean {
@@ -335,11 +340,11 @@ function canvasIsMostlyBlank(canvas: HTMLCanvasElement): boolean {
   return ink < 12;
 }
 
-function preparePrintClone(clonedDoc: Document, sourceEl: HTMLElement, clonedEl?: HTMLElement) {
+function preparePrintClone(clonedDoc: Document, sourceEl: HTMLElement, clonedEl?: HTMLElement, renderW?: number) {
   const root = clonedDoc.getElementById('om-print-root');
   if (root) {
     root.classList.remove('hidden');
-    root.style.cssText = 'display:block!important;position:static;left:0;top:0;width:auto;height:auto;overflow:visible;background:white;visibility:visible;opacity:1;';
+    root.style.cssText = `display:block!important;position:static;left:0;top:0;width:${renderW ? `${renderW}px` : 'auto'};height:auto;overflow:visible;background:white;visibility:visible;opacity:1;`;
   }
   const node = clonedEl instanceof HTMLElement
     ? clonedEl
@@ -352,6 +357,7 @@ function preparePrintClone(clonedDoc: Document, sourceEl: HTMLElement, clonedEl?
     node.style.position = 'relative';
     node.style.left = '0';
     node.style.top = '0';
+    if (renderW) node.style.width = `${renderW}px`;
   }
 }
 
@@ -373,7 +379,7 @@ async function capturePrintElement(
     imageTimeout: 15000,
     ...opts,
     onclone: (clonedDoc: Document, clonedEl?: HTMLElement) => {
-      preparePrintClone(clonedDoc, el, clonedEl);
+      preparePrintClone(clonedDoc, el, clonedEl, width);
     },
   });
 
@@ -906,32 +912,47 @@ export function ProjectOMExportPage() {
       if (!printRoot) return;
 
       // ── PDF page constants (mm) ───────────────────────────────────────────
-      const PAGE_W = 210;
-      const PAGE_H = 297;
-      const M_TOP = 20;
-      const M_BOTTOM = 20;
-      const M_LEFT = 15;
-      const M_RIGHT = 15;
-      const CONTENT_W = PAGE_W - M_LEFT - M_RIGHT;  // 180mm
-      const CONTENT_H = PAGE_H - M_TOP - M_BOTTOM;  // 257mm
-      const FOOTER_Y = PAGE_H - 10; // 10mm from bottom edge
-
-      // Rendering: content area width in px for html2canvas
-      const RENDER_W_PX = Math.round(CONTENT_W * 4.5); // ~810px
+      const pageMetrics = (landscape: boolean) => {
+        const pageW = landscape ? 297 : 210;
+        const pageH = landscape ? 210 : 297;
+        const mTop = landscape ? 15 : 20;
+        const mBottom = landscape ? 15 : 20;
+        const mLeft = landscape ? 12 : 15;
+        const mRight = landscape ? 12 : 15;
+        return {
+          pageW,
+          pageH,
+          mTop,
+          mBottom,
+          mLeft,
+          mRight,
+          contentW: pageW - mLeft - mRight,
+          contentH: pageH - mTop - mBottom,
+          footerY: pageH - 10,
+        };
+      };
+      const PORTRAIT = pageMetrics(false);
+      const RENDER_W_PX = Math.round(PORTRAIT.contentW * 4.5);
+      const LANDSCAPE_RENDER_W_PX = Math.round(pageMetrics(true).contentW * 4.5);
+      const sectionIsLandscape = (el: HTMLElement) =>
+        el.classList.contains('om-print-landscape') || el.getAttribute('data-print-orientation') === 'landscape';
 
       // ── Setup off-screen render ───────────────────────────────────────────
       const savedStyles = printRoot.style.cssText;
-      printRoot.style.cssText = `
-        display: block !important;
-        position: absolute;
-        top: 0; left: -10000px;
-        width: ${RENDER_W_PX}px;
-        height: auto;
-        overflow: visible;
-        z-index: -9999;
-        background: white;
-        visibility: visible;
-      `;
+      const applyPrintRootWidth = (widthPx: number) => {
+        printRoot.style.cssText = `
+          display: block !important;
+          position: absolute;
+          top: 0; left: -10000px;
+          width: ${widthPx}px;
+          height: auto;
+          overflow: visible;
+          z-index: -9999;
+          background: white;
+          visibility: visible;
+        `;
+      };
+      applyPrintRootWidth(RENDER_W_PX);
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
       // ── Collect sections (skip page-break divs) ───────────────────────────
@@ -957,17 +978,23 @@ export function ProjectOMExportPage() {
         canvas: HTMLCanvasElement;
         anchorId: string | null;
         isCover: boolean;
+        landscape: boolean;
       };
 
       const renderedSections: RenderedSection[] = [];
       for (let i = 0; i < pageEls.length; i++) {
         const el = pageEls[i];
+        const landscape = i !== 0 && sectionIsLandscape(el);
+        const renderW = landscape ? LANDSCAPE_RENDER_W_PX : RENDER_W_PX;
+        applyPrintRootWidth(renderW);
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
         const anchorId = el.id || el.querySelector('[id]')?.id || null;
-        const canvas = await capturePrintElement(el, html2canvas as (element: HTMLElement, options?: Record<string, unknown>) => Promise<HTMLCanvasElement>, RENDER_W_PX);
+        const canvas = await capturePrintElement(el, html2canvas as (element: HTMLElement, options?: Record<string, unknown>) => Promise<HTMLCanvasElement>, renderW);
         renderedSections.push({
           canvas,
           anchorId: anchorId?.startsWith('print-section-') ? anchorId : null,
           isCover: i === 0,
+          landscape,
         });
       }
 
@@ -979,11 +1006,11 @@ export function ProjectOMExportPage() {
           sectionPageMap[section.anchorId] = dryPage;
         }
         if (section.isCover) {
-          // Cover always takes exactly 1 page
           dryPage++;
         } else {
-          const contentH_mm = (section.canvas.height / section.canvas.width) * CONTENT_W;
-          const pagesNeeded = Math.ceil(contentH_mm / CONTENT_H);
+          const metrics = pageMetrics(section.landscape);
+          const contentH_mm = (section.canvas.height / section.canvas.width) * metrics.contentW;
+          const pagesNeeded = Math.max(1, Math.ceil(contentH_mm / metrics.contentH));
           dryPage += pagesNeeded;
         }
       }
@@ -993,18 +1020,17 @@ export function ProjectOMExportPage() {
       if (tocEl) {
         const tocPageLinks = tocEl.querySelectorAll('.toc-page-link');
         tocPageLinks.forEach(link => {
-          const href = link.getAttribute('href');
-          if (href) {
-            const targetId = href.replace('#', '');
-            const pageNum = sectionPageMap[targetId];
-            if (pageNum) {
-              (link as HTMLElement).textContent = String(pageNum);
-            }
-          }
+          const targetId = (link as HTMLElement).dataset.tocAnchor
+            || (link.closest('[data-toc-anchor]') as HTMLElement | null)?.dataset.tocAnchor
+            || (link.getAttribute('href') ?? '').replace('#', '');
+          const pageNum = targetId ? sectionPageMap[targetId] : undefined;
+          if (pageNum) (link as HTMLElement).textContent = String(pageNum);
         });
         // Re-render the ToC section canvas
         const tocSectionIdx = renderedSections.findIndex(s => s.anchorId === 'print-section-toc');
         if (tocSectionIdx >= 0) {
+          applyPrintRootWidth(RENDER_W_PX);
+          await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
           const tocCanvas = await html2canvas(tocEl as HTMLElement, {
             scale: 2,
             useCORS: true,
@@ -1023,59 +1049,54 @@ export function ProjectOMExportPage() {
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
       let currentPage = 0;
 
-      const newPage = () => {
-        if (currentPage > 0) pdf.addPage();
+      const newPage = (landscape: boolean) => {
+        if (currentPage > 0) pdf.addPage('a4', landscape ? 'landscape' : 'portrait');
         currentPage++;
       };
 
-      const drawFooter = (pageNum: number) => {
+      const drawFooter = (pageNum: number, metrics: ReturnType<typeof pageMetrics>) => {
         pdf.setFontSize(7.5);
         pdf.setTextColor(148, 163, 184);
-        pdf.text(`Page ${pageNum}`, PAGE_W / 2, FOOTER_Y, { align: 'center' });
+        pdf.text(`Page ${pageNum}`, metrics.pageW / 2, metrics.footerY, { align: 'center' });
         pdf.setFontSize(6.5);
         pdf.text(
           project?.project_name || 'O&M Pack',
-          PAGE_W - M_RIGHT, FOOTER_Y,
+          metrics.pageW - metrics.mRight, metrics.footerY,
           { align: 'right' }
         );
       };
 
-      const drawHeaderLine = () => {
+      const drawHeaderLine = (metrics: ReturnType<typeof pageMetrics>) => {
         pdf.setDrawColor(226, 232, 240);
         pdf.setLineWidth(0.3);
-        pdf.line(M_LEFT, M_TOP - 3, PAGE_W - M_RIGHT, M_TOP - 3);
+        pdf.line(metrics.mLeft, metrics.mTop - 3, metrics.pageW - metrics.mRight, metrics.mTop - 3);
       };
 
       for (const section of renderedSections) {
-        const { canvas, isCover } = section;
-        const contentH_mm = (canvas.height / canvas.width) * CONTENT_W;
-        const pxPerMm = canvas.width / CONTENT_W;
+        const { canvas, isCover, landscape } = section;
+        const metrics = pageMetrics(landscape);
+        const contentH_mm = (canvas.height / canvas.width) * metrics.contentW;
+        const pxPerMm = canvas.width / metrics.contentW;
 
         if (isCover) {
-          // Cover page: full-bleed, no margins, no footer
-          newPage();
-          const coverH = (canvas.height / canvas.width) * PAGE_W;
+          newPage(false);
+          const coverH = (canvas.height / canvas.width) * PORTRAIT.pageW;
           const imgData = canvas.toDataURL('image/jpeg', 0.94);
-          pdf.addImage(imgData, 'JPEG', 0, 0, PAGE_W, Math.min(coverH, PAGE_H));
+          pdf.addImage(imgData, 'JPEG', 0, 0, PORTRAIT.pageW, Math.min(coverH, PORTRAIT.pageH));
           continue;
         }
 
-        // Content sections: respect margins, slice across pages
         let srcY_px = 0;
         let remainingH_mm = contentH_mm;
         let isFirstSlice = true;
 
         while (remainingH_mm > 0.5) {
-          newPage();
+          newPage(landscape);
+          if (!isFirstSlice) drawHeaderLine(metrics);
 
-          // Draw subtle header line (not on first page of a section to avoid clutter)
-          if (!isFirstSlice) drawHeaderLine();
-
-          const availH_mm = CONTENT_H;
-          const sliceH_mm = Math.min(remainingH_mm, availH_mm);
+          const sliceH_mm = Math.min(remainingH_mm, metrics.contentH);
           const sliceH_px = Math.round(sliceH_mm * pxPerMm);
 
-          // Extract slice from canvas
           const sliceCanvas = document.createElement('canvas');
           sliceCanvas.width = canvas.width;
           sliceCanvas.height = Math.min(sliceH_px, canvas.height - srcY_px);
@@ -1090,12 +1111,10 @@ export function ProjectOMExportPage() {
             canvas.width, sliceCanvas.height
           );
 
-          const actualSliceH_mm = (sliceCanvas.height / sliceCanvas.width) * CONTENT_W;
+          const actualSliceH_mm = (sliceCanvas.height / sliceCanvas.width) * metrics.contentW;
           const imgData = sliceCanvas.toDataURL('image/jpeg', 0.94);
-          pdf.addImage(imgData, 'JPEG', M_LEFT, M_TOP, CONTENT_W, actualSliceH_mm);
-
-          // Footer on every non-cover page
-          drawFooter(currentPage);
+          pdf.addImage(imgData, 'JPEG', metrics.mLeft, metrics.mTop, metrics.contentW, actualSliceH_mm);
+          drawFooter(currentPage, metrics);
 
           srcY_px += sliceH_px;
           remainingH_mm -= sliceH_mm;
@@ -1126,13 +1145,22 @@ export function ProjectOMExportPage() {
 
       // ── Add clickable internal links on ToC page ──────────────────────────
       const tocPageNum = sectionPageMap['print-section-toc'];
-      if (tocPageNum) {
+      const tocNode = tocEl as HTMLElement | null;
+      if (tocPageNum && tocNode && tocNode.offsetWidth > 0) {
         pdf.setPage(tocPageNum);
-        // Add link annotations for each ToC entry pointing to the target page
-        for (const [anchorId, targetPage] of Object.entries(sectionPageMap)) {
-          if (anchorId === 'print-section-toc' || anchorId === 'print-section-cover') continue;
-          pdf.link(M_LEFT, 0, CONTENT_W, PAGE_H, { pageNumber: targetPage });
-        }
+        const cssToMm = PORTRAIT.contentW / tocNode.offsetWidth;
+        const tocBox = tocNode.getBoundingClientRect();
+        tocNode.querySelectorAll<HTMLElement>('.toc-entry-row').forEach(row => {
+          const targetId = row.dataset.tocAnchor || (row.getAttribute('href') ?? '').replace('#', '');
+          const targetPage = targetId ? sectionPageMap[targetId] : undefined;
+          if (!targetPage) return;
+          const box = row.getBoundingClientRect();
+          const x = PORTRAIT.mLeft + (box.left - tocBox.left) * cssToMm;
+          const y = PORTRAIT.mTop + (box.top - tocBox.top) * cssToMm;
+          const w = Math.max(box.width * cssToMm, 20);
+          const h = Math.max(box.height * cssToMm, 8);
+          pdf.link(x, y, w, h, { pageNumber: targetPage });
+        });
       }
 
       // ── Restore DOM ───────────────────────────────────────────────────────
@@ -1488,6 +1516,10 @@ export function ProjectOMExportPage() {
         {(() => {
           const hasTechImport = namedTechBundles.length > 0 || importedTechSystems.length > 0;
           const techDevices = devices.filter(d => d.ip_address || d.mac_address || d.firmware_version || d.username_hint || d.password_hint || d.controller_address || d.vlan || d.network_zone);
+          const legacyTechCols = 1 + ([
+            'ip_address', 'mac_address', 'firmware_version', 'username_hint',
+            'password_hint', 'controller_address', 'vlan', 'network_zone',
+          ] as const).filter(key => techDevices.some(device => device[key])).length;
           if (!hasTechImport && techDevices.length === 0) return null;
           if (namedTechBundles.length > 0) {
             let firstSection = true;
@@ -1495,27 +1527,25 @@ export function ProjectOMExportPage() {
               <>
                 {namedTechBundles.flatMap(bundle => {
                   const columns = resolveTechDocColumns(bundle.colConfig, bundle.rows);
-                  const rowChunks = chunkTechDocRows(bundle.rows, TECH_DOC_PRINT_ROWS);
-                  const colChunks = chunkTechDocRows(columns, TECH_DOC_PRINT_COLS);
-                  return rowChunks.flatMap((rows, rowIdx) =>
-                    colChunks.map((cols, colIdx) => {
-                      const isFirst = firstSection;
-                      firstSection = false;
-                      const continued = rowIdx > 0 || colIdx > 0;
-                      const title = continued ? `${bundle.title} (continued)` : bundle.title;
-                      return (
-                        <PrintSection
-                          key={`${bundle.key}-${rowIdx}-${colIdx}`}
-                          title={title}
-                          subtitle={bundle.system || undefined}
-                          anchorId={isFirst ? 'print-section-technical_docs' : undefined}
-                          forcePageBreak={!isFirst}
-                        >
-                          <PrintTechnicalDocsTable columns={cols} rows={rows} />
-                        </PrintSection>
-                      );
-                    }),
-                  );
+                  const landscape = printTableNeedsLandscape(columns.length);
+                  const rowChunks = chunkTechDocRows(bundle.rows, landscape ? TECH_DOC_PRINT_ROWS_LANDSCAPE : TECH_DOC_PRINT_ROWS);
+                  return rowChunks.map((rows, rowIdx) => {
+                    const isFirst = firstSection;
+                    firstSection = false;
+                    const title = rowIdx > 0 ? `${bundle.title} (continued)` : bundle.title;
+                    return (
+                      <PrintSection
+                        key={`${bundle.key}-${rowIdx}`}
+                        title={title}
+                        subtitle={bundle.system || undefined}
+                        anchorId={isFirst ? 'print-section-technical_docs' : undefined}
+                        forcePageBreak={!isFirst}
+                        landscape={landscape}
+                      >
+                        <PrintTechnicalDocsTable columns={columns} rows={rows} compact={landscape} />
+                      </PrintSection>
+                    );
+                  });
                 })}
                 <div className="page-break" />
               </>
@@ -1529,29 +1559,27 @@ export function ProjectOMExportPage() {
                 {systemsWithData.flatMap(sys => {
                   const state = techDocState[sys]!;
                   const columns = resolveTechDocColumns(state.colConfig, state.rows);
-                  const rowChunks = chunkTechDocRows(state.rows, TECH_DOC_PRINT_ROWS);
-                  const colChunks = chunkTechDocRows(columns, TECH_DOC_PRINT_COLS);
-                  return rowChunks.flatMap((rows, rowIdx) =>
-                    colChunks.map((cols, colIdx) => {
-                      const isFirst = firstSection;
-                      firstSection = false;
-                      const slug = sys.toLowerCase().replace(/\s+/g, '_');
-                      const continued = rowIdx > 0 || colIdx > 0;
-                      const title = continued
-                        ? `${sys} — Technical Documentation (continued)`
-                        : `${sys} — Technical Documentation`;
-                      return (
-                        <PrintSection
-                          key={`${sys}-${rowIdx}-${colIdx}`}
-                          title={title}
-                          anchorId={isFirst ? 'print-section-technical_docs' : rowIdx === 0 && colIdx === 0 ? `print-section-technical_docs_${slug}` : undefined}
-                          forcePageBreak={!isFirst}
-                        >
-                          <PrintTechnicalDocsTable columns={cols} rows={rows} />
-                        </PrintSection>
-                      );
-                    }),
-                  );
+                  const landscape = printTableNeedsLandscape(columns.length);
+                  const rowChunks = chunkTechDocRows(state.rows, landscape ? TECH_DOC_PRINT_ROWS_LANDSCAPE : TECH_DOC_PRINT_ROWS);
+                  return rowChunks.map((rows, rowIdx) => {
+                    const isFirst = firstSection;
+                    firstSection = false;
+                    const slug = sys.toLowerCase().replace(/\s+/g, '_');
+                    const title = rowIdx > 0
+                      ? `${sys} — Technical Documentation (continued)`
+                      : `${sys} — Technical Documentation`;
+                    return (
+                      <PrintSection
+                        key={`${sys}-${rowIdx}`}
+                        title={title}
+                        anchorId={isFirst ? 'print-section-technical_docs' : rowIdx === 0 ? `print-section-technical_docs_${slug}` : undefined}
+                        forcePageBreak={!isFirst}
+                        landscape={landscape}
+                      >
+                        <PrintTechnicalDocsTable columns={columns} rows={rows} compact={landscape} />
+                      </PrintSection>
+                    );
+                  });
                 })}
                 <div className="page-break" />
               </>
@@ -1559,7 +1587,11 @@ export function ProjectOMExportPage() {
           }
           return (
             <>
-              <PrintSection title="Technical Documentation" anchorId="print-section-technical_docs">
+              <PrintSection
+                title="Technical Documentation"
+                anchorId="print-section-technical_docs"
+                landscape={printTableNeedsLandscape(legacyTechCols)}
+              >
                 <PrintTechnicalDocsLegacy devices={techDevices} />
               </PrintSection>
               <div className="page-break" />
@@ -1697,8 +1729,25 @@ export function ProjectOMExportPage() {
 
           /* Default page — A4 with 20mm header/footer reserved */
           @page {
-            size: A4;
+            size: A4 portrait;
             margin: 20mm 15mm 20mm 15mm;
+            @bottom-center {
+              content: "Page " counter(page) " of " counter(pages);
+              font-family: system-ui, -apple-system, sans-serif;
+              font-size: 8pt;
+              color: #94a3b8;
+            }
+            @bottom-right {
+              content: string(section-title);
+              font-family: system-ui, -apple-system, sans-serif;
+              font-size: 7pt;
+              color: #cbd5e1;
+            }
+          }
+
+          @page om-landscape {
+            size: A4 landscape;
+            margin: 15mm 12mm 15mm 12mm;
             @bottom-center {
               content: "Page " counter(page) " of " counter(pages);
               font-family: system-ui, -apple-system, sans-serif;
@@ -1720,6 +1769,10 @@ export function ProjectOMExportPage() {
             @bottom-right { content: none; }
           }
 
+          .om-print-landscape {
+            page: om-landscape;
+          }
+
           /* ToC page number links via CSS target-counter (Chromium print engine) */
           .toc-page-link::after {
             content: target-counter(attr(href url), page);
@@ -1736,10 +1789,16 @@ export function ProjectOMExportPage() {
           /* Prevent orphaned headings */
           h2, h3 { page-break-after: avoid; break-after: avoid; }
 
-          /* Tables: allow page breaks between rows but repeat headers */
-          table { border-collapse: collapse; }
+          /* Tables keep every column on the same page; rows may continue */
+          table {
+            border-collapse: collapse;
+            width: 100% !important;
+            max-width: 100% !important;
+            table-layout: fixed;
+          }
           thead { display: table-header-group; }
           tbody tr { page-break-inside: avoid; break-inside: avoid; }
+          th, td { word-break: break-word; overflow-wrap: anywhere; }
 
           img { page-break-inside: avoid; break-inside: avoid; }
         }
@@ -3391,6 +3450,8 @@ function PrintTableOfContents({
         {entries.map((entry, i) => (
           <div
             key={entry.anchorId}
+            className="toc-entry-row"
+            data-toc-anchor={entry.anchorId}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -3406,19 +3467,17 @@ function PrintTableOfContents({
             }}>
               {entry.number}
             </span>
-            {/* Label — clickable in PDF */}
             <a
               href={`#${entry.anchorId}`}
               style={{ fontSize: '0.95rem', fontWeight: 600, color: '#1e293b', textDecoration: 'none', flex: '0 0 auto' }}
             >
               {entry.label}
             </a>
-            {/* Dotted leader */}
             <span style={{ flex: 1, borderBottom: '1.5px dotted #cbd5e1', margin: '0 0.75rem 0.2rem' }} />
-            {/* Page number — populated by PDF generator pass 2, or CSS target-counter for print */}
             <a
               href={`#${entry.anchorId}`}
               className="toc-page-link"
+              data-toc-anchor={entry.anchorId}
               style={{ fontSize: '0.9rem', fontWeight: 800, color: '#0f172a', textDecoration: 'none', minWidth: '2rem', textAlign: 'right', flexShrink: 0 }}
             >
             </a>
@@ -3545,9 +3604,10 @@ function PrintCoverPage({ project, devices, systemGroups, contractor, authority 
   );
 }
 
-function PrintTechnicalDocsTable({ columns, rows }: {
+function PrintTechnicalDocsTable({ columns, rows, compact }: {
   columns: TechDocColumn[];
   rows: TechDocPrintRow[];
+  compact?: boolean;
 }) {
   if (columns.length === 0) {
     return <p style={{ color: '#94a3b8', fontSize: '0.85rem', fontStyle: 'italic' }}>No columns configured.</p>;
@@ -3555,12 +3615,15 @@ function PrintTechnicalDocsTable({ columns, rows }: {
   if (rows.length === 0) {
     return <p style={{ color: '#94a3b8', fontSize: '0.85rem', fontStyle: 'italic' }}>No technical documentation rows for this system.</p>;
   }
+  const fontSize = compact ? '0.52rem' : '0.58rem';
+  const headSize = compact ? '0.46rem' : '0.52rem';
+  const pad = compact ? '0.28rem 0.32rem' : '0.32rem 0.4rem';
   return (
-    <table style={{ width: '100%', tableLayout: 'fixed', fontSize: '0.58rem', borderCollapse: 'collapse', border: '1px solid #e2e8f0' }}>
+    <table style={{ width: '100%', tableLayout: 'fixed', fontSize, borderCollapse: 'collapse', border: '1px solid #e2e8f0' }}>
       <thead>
         <tr style={{ background: '#f8fafc' }}>
           {columns.map(col => (
-            <th key={col.key} style={{ textAlign: 'left', padding: '0.35rem 0.4rem', fontSize: '0.52rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' as const, letterSpacing: '0.04em', borderBottom: '2px solid #e2e8f0', borderRight: '1px solid #f1f5f9', wordBreak: 'break-word' }}>
+            <th key={col.key} style={{ textAlign: 'left', padding: pad, fontSize: headSize, fontWeight: 700, color: '#64748b', textTransform: 'uppercase' as const, letterSpacing: '0.04em', borderBottom: '2px solid #e2e8f0', borderRight: '1px solid #f1f5f9', wordBreak: 'break-word' }}>
               {col.display_name}
             </th>
           ))}
@@ -3570,7 +3633,7 @@ function PrintTechnicalDocsTable({ columns, rows }: {
         {rows.map((row, i) => (
           <tr key={row.id} style={{ background: i % 2 === 0 ? 'white' : '#f8fafc' }}>
             {columns.map(col => (
-              <td key={col.key} style={{ padding: '0.32rem 0.4rem', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: '#334155', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9', wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'normal' }}>
+              <td key={col.key} style={{ padding: pad, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: '#334155', borderBottom: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9', wordBreak: 'break-word', overflowWrap: 'anywhere', whiteSpace: 'normal' }}>
                 {techDocCell(row.data, col) || '—'}
               </td>
             ))}
@@ -3665,13 +3728,30 @@ function PrintTechnicalDocsLegacy({ devices }: { devices: DeviceWithDatasheet[] 
   );
 }
 
-function PrintSection({ title, subtitle, anchorId, forcePageBreak, children }: { title: string; subtitle?: string; anchorId?: string; forcePageBreak?: boolean; children: React.ReactNode }) {
+function PrintSection({ title, subtitle, anchorId, forcePageBreak, landscape, children }: {
+  title: string;
+  subtitle?: string;
+  anchorId?: string;
+  forcePageBreak?: boolean;
+  landscape?: boolean;
+  children: React.ReactNode;
+}) {
   const breakBefore = (anchorId || forcePageBreak) ? 'always' : 'auto';
   return (
-    <div className="om-section" id={anchorId} style={{ padding: '2.5rem 3rem 2rem', fontFamily: 'system-ui, -apple-system, sans-serif', pageBreakBefore: breakBefore, breakBefore }}>
+    <div
+      className={`om-section${landscape ? ' om-print-landscape' : ''}`}
+      id={anchorId}
+      data-print-orientation={landscape ? 'landscape' : 'portrait'}
+      style={{
+        padding: landscape ? '1.75rem 1.5rem 1.25rem' : '2.5rem 3rem 2rem',
+        fontFamily: 'system-ui, -apple-system, sans-serif',
+        pageBreakBefore: breakBefore,
+        breakBefore,
+      }}
+    >
       {/* Section header bar */}
-      <div style={{ borderBottom: '3px solid #0f172a', marginBottom: '1.75rem', paddingBottom: '0.75rem' }}>
-        <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: '#0f172a', margin: 0, letterSpacing: '-0.01em' }}>{title}</h2>
+      <div style={{ borderBottom: '3px solid #0f172a', marginBottom: landscape ? '1.1rem' : '1.75rem', paddingBottom: '0.75rem' }}>
+        <h2 style={{ fontSize: landscape ? '1.2rem' : '1.5rem', fontWeight: 800, color: '#0f172a', margin: 0, letterSpacing: '-0.01em' }}>{title}</h2>
         {subtitle && <p style={{ fontSize: '0.8rem', color: '#64748b', margin: '0.35rem 0 0' }}>{subtitle}</p>}
       </div>
       {children}

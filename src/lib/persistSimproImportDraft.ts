@@ -271,7 +271,7 @@ export async function persistSimproImportReviewDraft(
         quoted_description: item.modelName || item.deviceType,
         quoted_quantity: item.quantity,
         installed_description: item.modelName || item.deviceType,
-        actual_installed_quantity: null,
+        actual_installed_quantity: item.quantity,
         reconciliation_status: 'awaiting_verification',
       });
     }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { humanizeOption } from '../lib/schemaForm';
@@ -12,6 +12,8 @@ const STATUSES = [
   'existing_retained',
 ] as const;
 
+const MIXED_STATUS = '__mixed__';
+
 interface AsFittedItem {
   id: string;
   quoted_description: string | null;
@@ -22,10 +24,17 @@ interface AsFittedItem {
   change_reason: string | null;
 }
 
+function seededQuantity(item: Pick<AsFittedItem, 'actual_installed_quantity' | 'quoted_quantity'>): number | null {
+  if (item.actual_installed_quantity != null) return Number(item.actual_installed_quantity);
+  if (item.quoted_quantity != null) return Number(item.quoted_quantity);
+  return null;
+}
+
 export function AsFittedItemsPanel({ projectId }: { projectId: number | null }) {
   const [items, setItems] = useState<AsFittedItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [missingTable, setMissingTable] = useState(false);
+  const [applyingAll, setApplyingAll] = useState(false);
 
   const load = useCallback(async () => {
     if (!projectId) return;
@@ -38,18 +47,42 @@ export function AsFittedItemsPanel({ projectId }: { projectId: number | null }) 
     if (error && /does not exist|schema cache/i.test(error.message)) {
       setMissingTable(true);
       setItems([]);
-    } else {
-      setMissingTable(false);
-      setItems((data ?? []) as AsFittedItem[]);
+      setLoading(false);
+      return;
+    }
+    setMissingTable(false);
+    const rows = ((data ?? []) as AsFittedItem[]).map(item => ({
+      ...item,
+      actual_installed_quantity: seededQuantity(item),
+    }));
+    setItems(rows);
+    const toSeed = rows.filter((item, index) => item.actual_installed_quantity != null && (data ?? [])[index]?.actual_installed_quantity == null);
+    if (toSeed.length > 0) {
+      await Promise.all(toSeed.map(item =>
+        supabase.from('as_fitted_items').update({ actual_installed_quantity: item.actual_installed_quantity }).eq('id', item.id),
+      ));
     }
     setLoading(false);
   }, [projectId]);
 
   useEffect(() => { void load(); }, [load]);
 
+  const sharedStatus = useMemo(() => {
+    const statuses = [...new Set(items.map(item => item.reconciliation_status))];
+    return statuses.length === 1 ? statuses[0] : MIXED_STATUS;
+  }, [items]);
+
   const updateItem = async (id: string, patch: Partial<AsFittedItem>) => {
     await supabase.from('as_fitted_items').update(patch).eq('id', id);
     setItems(current => current.map(item => item.id === id ? { ...item, ...patch } : item));
+  };
+
+  const applyStatusToAll = async (status: string) => {
+    if (!projectId || !status || status === MIXED_STATUS || applyingAll) return;
+    setApplyingAll(true);
+    await supabase.from('as_fitted_items').update({ reconciliation_status: status }).eq('project_id', projectId);
+    setItems(current => current.map(item => ({ ...item, reconciliation_status: status })));
+    setApplyingAll(false);
   };
 
   if (loading) {
@@ -66,11 +99,27 @@ export function AsFittedItemsPanel({ projectId }: { projectId: number | null }) 
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm mb-6 overflow-hidden">
-      <div className="px-5 py-4 border-b border-slate-100">
-        <h3 className="text-sm font-semibold text-slate-900">Quoted vs as-fitted equipment</h3>
-        <p className="text-xs text-slate-500 mt-1">
-          Quote quantities are proposed only. Actual installed quantity starts blank until verified. This is not proof of installation or test.
-        </p>
+      <div className="px-5 py-4 border-b border-slate-100 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-900">Quoted vs as-fitted equipment</h3>
+          <p className="text-xs text-slate-500 mt-1">
+            Installed quantity starts as the quoted quantity. Set one status for every line, then change any that differ.
+          </p>
+        </div>
+        <label className="text-xs text-slate-500 min-w-[12rem]">
+          Status for all lines
+          <select
+            className="mt-1 w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm bg-white"
+            value={sharedStatus}
+            disabled={applyingAll}
+            onChange={event => void applyStatusToAll(event.target.value)}
+          >
+            {sharedStatus === MIXED_STATUS && <option value={MIXED_STATUS} disabled>Multiple statuses</option>}
+            {STATUSES.map(status => (
+              <option key={status} value={status}>{humanizeOption(status)}</option>
+            ))}
+          </select>
+        </label>
       </div>
       <div className="divide-y divide-slate-100">
         {items.map(item => (
@@ -86,7 +135,9 @@ export function AsFittedItemsPanel({ projectId }: { projectId: number | null }) 
                 className="mt-1 w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm"
                 value={item.actual_installed_quantity ?? ''}
                 onChange={event => void updateItem(item.id, {
-                  actual_installed_quantity: event.target.value === '' ? null : Number(event.target.value),
+                  actual_installed_quantity: event.target.value === ''
+                    ? (item.quoted_quantity != null ? Number(item.quoted_quantity) : null)
+                    : Number(event.target.value),
                 })}
               />
             </label>
@@ -95,6 +146,7 @@ export function AsFittedItemsPanel({ projectId }: { projectId: number | null }) 
               <select
                 className="mt-1 w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm bg-white"
                 value={item.reconciliation_status}
+                disabled={applyingAll}
                 onChange={event => void updateItem(item.id, { reconciliation_status: event.target.value })}
               >
                 {STATUSES.map(status => (

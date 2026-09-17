@@ -12,9 +12,13 @@ import {
   GripVertical, CheckCircle, AlertCircle, Table2, FileText,
   Plus, Pencil, ExternalLink, ClipboardCopy,
 } from 'lucide-react';
-import * as XLSX from 'xlsx';
-import Papa from 'papaparse';
 import migration039Sql from '../../supabase/migrations/20260917120000_039_tech_doc_documents.sql?raw';
+import {
+  extractTableFromGrid,
+  parseSpreadsheetFile,
+} from '../lib/techDocSpreadsheet';
+
+const attemptedRefills = new Set<number>();
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -93,107 +97,9 @@ interface TextItem {
   width: number;
 }
 
-function filledCount(row: string[]): number {
-  return row.filter(cell => cell.trim()).length;
-}
-
-function looksLikeDataValue(text: string): boolean {
-  const value = text.trim();
-  if (!value) return false;
-  if (/^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?$/.test(value)) return true;
-  if (/^([0-9a-f]{2}[:\-]){5}[0-9a-f]{2}$/i.test(value)) return true;
-  if (/^https?:\/\//i.test(value)) return true;
-  if (/^[\w.+-]+@[\w.-]+\.[a-z]{2,}$/i.test(value)) return true;
-  if (/^\d+([.,]\d+)?$/.test(value)) return true;
-  return false;
-}
-
-function looksLikeHeaderRow(row: string[]): boolean {
-  const filled = row.map(cell => cell.trim()).filter(Boolean);
-  if (filled.length < 2) return false;
-  const dataLike = filled.filter(looksLikeDataValue).length;
-  if (dataLike >= Math.ceil(filled.length / 2)) return false;
-  const long = filled.filter(cell => cell.length > 60).length;
-  return long < filled.length / 2;
-}
-
-function uniquifyHeaders(headers: string[]): string[] {
-  const seen = new Map<string, number>();
-  return headers.map((header, index) => {
-    const base = header.trim() || `Column ${index + 1}`;
-    const count = seen.get(base) ?? 0;
-    seen.set(base, count + 1);
-    return count === 0 ? base : `${base} ${count + 1}`;
-  });
-}
-
-const HEADER_HINTS = /name|model|serial|mac|ip|camera|firmware|location|device|channel|status|manufacturer|part|host|address|description|type|\bid\b|qty|quantity/i;
-
-function headerHintCount(row: string[]): number {
-  return row.filter(cell => HEADER_HINTS.test(cell)).length;
-}
-
-function usedWidth(row: string[]): number {
-  let width = row.length;
-  while (width > 0 && !String(row[width - 1] ?? '').trim()) width--;
-  return width;
-}
-
 function sameDocId(a: unknown, b: unknown): boolean {
   if (a == null || b == null || a === '') return false;
   return String(a) === String(b);
-}
-
-function tableScore(table: { headers: string[]; rows: Record<string, string>[] }, headerLike: boolean, hint: number): number {
-  if (table.headers.length < 2 || table.rows.length === 0) return -1;
-  return table.rows.length * table.headers.length + hint * 50 + (headerLike ? 20 : 0);
-}
-
-function gridFromUnknown(raw: unknown[][]): string[][] {
-  return raw.map(row => (Array.isArray(row) ? row : [row]).map(cell => String(cell ?? '').trim()));
-}
-
-function tableFromHeader(grid: string[][], headerIdx: number): { headers: string[]; rows: Record<string, string>[] } {
-  let width = 0;
-  for (let i = headerIdx; i < grid.length; i++) width = Math.max(width, usedWidth(grid[i]));
-  if (width < 2) return { headers: [], rows: [] };
-
-  const headers = uniquifyHeaders(Array.from({ length: width }, (_, col) => grid[headerIdx][col] ?? ''));
-  const rows: Record<string, string>[] = [];
-  for (let i = headerIdx + 1; i < grid.length; i++) {
-    const cells = headers.map((_, col) => grid[i][col] ?? '');
-    if (cells.every(cell => !cell.trim())) continue;
-    const filled = cells.filter(cell => cell.trim());
-    if (filled.length === 1 && filled[0].length > 80) continue;
-    if (looksLikeHeaderRow(cells) && headerHintCount(cells) >= 2) continue;
-    const row: Record<string, string> = {};
-    for (let col = 0; col < headers.length; col++) row[headers[col]] = cells[col];
-    rows.push(row);
-  }
-  return { headers, rows };
-}
-
-/** Skip title/date rows and pick the table with the most real columns and rows. */
-function extractTableFromGrid(raw: unknown[][]): { headers: string[]; rows: Record<string, string>[] } {
-  const grid = gridFromUnknown(raw);
-  let best: { headers: string[]; rows: Record<string, string>[] } = { headers: [], rows: [] };
-  let bestScore = -1;
-  const searchLimit = Math.min(grid.length - 1, 80);
-  for (let i = 0; i <= searchLimit; i++) {
-    if (filledCount(grid[i]) < 2) continue;
-    const headerLike = looksLikeHeaderRow(grid[i]);
-    const hint = headerHintCount(grid[i]);
-    if (!headerLike && hint === 0) continue;
-    const table = tableFromHeader(grid, i);
-    const score = tableScore(table, headerLike, hint);
-    if (score > bestScore) {
-      bestScore = score;
-      best = table;
-    }
-  }
-  if (best.rows.length > 0) return best;
-  const fallbackIdx = grid.findIndex(row => filledCount(row) >= 2);
-  return fallbackIdx >= 0 ? tableFromHeader(grid, fallbackIdx) : { headers: [], rows: [] };
 }
 
 function columnsFromRows(rows: TechDocRow[], configured: ColConfig[]): ColConfig[] {
@@ -342,79 +248,76 @@ async function extractTablesFromPDF(file: File): Promise<ExtractedTable[]> {
   return tables;
 }
 
-// ── File parsing ──────────────────────────────────────────────────────────────
-
-function parseCsvText(text: string, delimiter?: string): unknown[][] {
-  const result = Papa.parse<unknown[]>(text, {
-    header: false,
-    skipEmptyLines: false,
-    delimiter: delimiter || undefined,
-  });
-  return (result.data ?? []).map(row => (Array.isArray(row) ? row : [row]).map(cell => String(cell ?? '')));
+function omUploadsPath(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const match = url.match(/\/object\/(?:public|sign)\/om-uploads\/(.+?)(?:\?|$)/);
+  return match ? decodeURIComponent(match[1]) : null;
 }
 
-function decodeSpreadsheetText(buf: ArrayBuffer): string {
-  const bytes = new Uint8Array(buf);
-  const utf16le = bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE;
-  const utf16be = bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF;
-  const looksUtf16 = bytes.length > 4 && bytes[1] === 0 && bytes[3] === 0;
-  const text = new TextDecoder(utf16le || looksUtf16 ? 'utf-16le' : utf16be ? 'utf-16be' : 'utf-8').decode(buf);
-  return text.replace(/^\uFEFF/, '');
+async function downloadTechDocFile(doc: TechDocDocument): Promise<Blob | null> {
+  const path = omUploadsPath(doc.file_url);
+  if (path) {
+    const { data, error } = await supabase.storage.from('om-uploads').download(path);
+    if (!error && data) return data;
+  }
+  if (!doc.file_url) return null;
+  try {
+    const res = await fetch(doc.file_url);
+    if (!res.ok) return null;
+    return res.blob();
+  } catch {
+    return null;
+  }
 }
 
-function bestTable(tables: { headers: string[]; rows: Record<string, string>[] }[]): { headers: string[]; rows: Record<string, string>[] } {
-  let best = tables[0] ?? { headers: [], rows: [] };
-  let bestScore = tableScore(best, true, headerHintCount(best.headers));
-  for (const table of tables.slice(1)) {
-    const score = tableScore(table, true, headerHintCount(table.headers));
-    if (score > bestScore) {
-      best = table;
-      bestScore = score;
+async function refillDocumentFromFile(pid: number, doc: TechDocDocument): Promise<TechDocDocument> {
+  if (doc.id <= 0 || !doc.file_url) return doc;
+  try {
+    const blob = await downloadTechDocFile(doc);
+    if (!blob) return doc;
+    const parsed = await parseSpreadsheetFile(new File([blob], doc.file_name || 'inventory.xlsx'));
+    if (parsed.rows.length === 0) return doc;
+    await supabase.from('tech_doc_rows').delete().eq('document_id', doc.id);
+    const inserts = parsed.rows.map((data, i) => ({
+      project_id: pid,
+      system_type: doc.system_type,
+      row_index: i,
+      data,
+      document_id: doc.id,
+    }));
+    const saved: Array<{ id: number; row_index: number; data: unknown }> = [];
+    for (let i = 0; i < inserts.length; i += 100) {
+      const chunk = inserts.slice(i, i + 100);
+      const { data: inserted, error } = await supabase.from('tech_doc_rows').insert(chunk).select('id, row_index, data');
+      if (error || !inserted) return doc;
+      saved.push(...inserted);
     }
+    const colConfig = parsed.headers.map((h, i) => ({ key: h, display_name: h, visible: true, order: i }));
+    if (doc.configId) {
+      await supabase.from('tech_doc_column_configs').update({ columns: colConfig, updated_at: new Date().toISOString() }).eq('id', doc.configId);
+    } else {
+      const { data: cfg } = await supabase.from('tech_doc_column_configs').insert({
+        project_id: pid,
+        system_type: doc.system_type,
+        columns: colConfig,
+        document_id: doc.id,
+        updated_at: new Date().toISOString(),
+      }).select('id').single();
+      doc.configId = cfg?.id ?? null;
+    }
+    return {
+      ...doc,
+      rows: saved.map(row => ({
+        id: row.id,
+        row_index: row.row_index,
+        data: (row.data ?? {}) as Record<string, string>,
+        document_id: doc.id,
+      })),
+      colConfig,
+    };
+  } catch {
+    return doc;
   }
-  return best;
-}
-
-async function parseNonPdfFile(file: File): Promise<{ headers: string[]; rows: Record<string, string>[] }> {
-  const name = file.name.toLowerCase();
-
-  if (name.endsWith('.csv') || name.endsWith('.txt')) {
-    const text = decodeSpreadsheetText(await file.arrayBuffer());
-    return bestTable([
-      extractTableFromGrid(parseCsvText(text)),
-      extractTableFromGrid(parseCsvText(text, ',')),
-      extractTableFromGrid(parseCsvText(text, ';')),
-      extractTableFromGrid(parseCsvText(text, '\t')),
-      extractTableFromGrid(parseCsvText(text, '|')),
-    ]);
-  }
-
-  if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
-    const buf = await file.arrayBuffer();
-    try {
-      const wb = XLSX.read(buf, { type: 'array', cellDates: true });
-      const tables = wb.SheetNames.map(sheetName => {
-        const data = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sheetName], {
-          header: 1,
-          raw: false,
-          defval: '',
-          blankrows: true,
-        }) as unknown[][];
-        return extractTableFromGrid(data);
-      });
-      const fromSheets = bestTable(tables);
-      if (fromSheets.rows.length > 0) return fromSheets;
-    } catch { /* fall through to text parse */ }
-    const text = decodeSpreadsheetText(buf);
-    return bestTable([
-      extractTableFromGrid(parseCsvText(text)),
-      extractTableFromGrid(parseCsvText(text, ',')),
-      extractTableFromGrid(parseCsvText(text, ';')),
-      extractTableFromGrid(parseCsvText(text, '\t')),
-    ]);
-  }
-
-  throw new Error('Unsupported file type. Please use CSV, TXT, Excel, or PDF files.');
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -532,7 +435,7 @@ export default function TechnicalDocsPage() {
     }
     for (const [system, sysRows] of orphansBySystem) {
       const emptyNamed = emptyNamedBySystem.get(system);
-      if (emptyNamed?.length === 1) {
+      if (emptyNamed && emptyNamed.length > 0) {
         emptyNamed[0].rows = sysRows;
         continue;
       }
@@ -564,7 +467,16 @@ export default function TechnicalDocsPage() {
       }
     }
 
-    setDocuments(built);
+    const filled: TechDocDocument[] = [];
+    for (const doc of built) {
+      if (doc.rows.length === 0 && doc.file_url && doc.id > 0 && !attemptedRefills.has(doc.id)) {
+        attemptedRefills.add(doc.id);
+        filled.push(await refillDocumentFromFile(pid, doc));
+      } else {
+        filled.push(doc);
+      }
+    }
+    setDocuments(filled);
     setLoading(false);
     void rowErr;
   }, [pid]);
@@ -620,9 +532,9 @@ export default function TechnicalDocsPage() {
       }
     } else {
       try {
-        const { headers, rows } = await parseNonPdfFile(file);
+        const { headers, rows } = await parseSpreadsheetFile(file);
         if (headers.length === 0 || rows.length === 0) {
-          alert('Could not find a table of rows in that file. Axis hardware inventory exports often put the camera list on a later sheet — try Excel/CSV and import again.');
+          alert('Could not find a table of rows in that file. Genetec hardware inventory exports should include Unit, Unit type, Manufacturer and IP address columns.');
           return;
         }
         setImportColCfg(headers.map((h, i) => ({ key: h, display_name: h, visible: true, order: i })));
@@ -1009,6 +921,20 @@ export default function TechnicalDocsPage() {
                       <a href={doc.file_url} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-100 inline-flex items-center gap-1">
                         <ExternalLink className="w-3 h-3" />File
                       </a>
+                    )}
+                    {doc.rows.length === 0 && doc.file_url && pid && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const updated = await refillDocumentFromFile(pid, doc);
+                          setDocuments(prev => prev.map(d => d.id === doc.id ? updated : d));
+                          if (updated.rows.length > 0) setExpandedDocId(updated.id);
+                          else alert('Still could not find a table in that spreadsheet.');
+                        }}
+                        className="text-xs px-2 py-1 border border-cyan-200 text-cyan-700 rounded-lg hover:bg-cyan-50"
+                      >
+                        Reload table
+                      </button>
                     )}
                     <button type="button" onClick={() => setExpandedDocId(expanded ? null : doc.id)} className={`text-xs px-2 py-1 border rounded-lg ${expanded ? 'bg-cyan-50 border-cyan-300 text-cyan-700' : 'border-slate-200 text-slate-500 hover:bg-slate-100'}`}>
                       {expanded ? 'Hide table' : 'View table'}
