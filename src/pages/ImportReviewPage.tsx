@@ -233,8 +233,6 @@ function ProductDatabaseMatchPicker({
   );
 }
 
-}
-
 export function ImportReviewPage() {
   const navigate = useNavigate();
   const initialSession = useMemo(() => getSimproImportSession(), []);
@@ -935,8 +933,6 @@ export function ImportReviewPage() {
             })
           )}
         </div>
-      )}
-
       )}
 
       {tab === 'debug' && (
