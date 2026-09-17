@@ -1,4 +1,4 @@
-import { cleanTextField, pickNestedName, pickString } from '../integrations/connectors/simpro/simproImportHelpers';
+import { cleanTextField, looksLikeHtml, pickNestedName, pickRichTextField, pickString } from '../integrations/connectors/simpro/simproImportHelpers';
 
 export interface SimproFieldSource {
   path: string;
@@ -99,17 +99,33 @@ export function pickSimproScopeOfWorks(job: Record<string, unknown>): {
   sources: SimproFieldSource[];
 } {
   const sources: SimproFieldSource[] = [];
-  const description = cleanTextField(job.Description);
+  const description = pickRichTextField(job.Description);
   appendSource(sources, description ? { path: 'Description', label: 'Job Description', value: description } : null);
 
-  const customFields = listSimproCustomFields(job);
-  const infoFields = customFields.filter(field => INFO_NAME.test(field.label));
-  sources.push(...infoFields);
+  for (const item of normalizeArray(job.CustomFields ?? job.customFields)) {
+    const record = asRecord(item);
+    if (!record) continue;
+    const definition = asRecord(record.CustomField ?? record.customField) ?? record;
+    const name = pickString(definition.Name ?? definition.name) ?? 'Custom field';
+    if (!INFO_NAME.test(name)) continue;
+    const id = pickString(definition.ID ?? definition.Id ?? definition.id);
+    const value = pickRichTextField(record.Value ?? record.value);
+    appendSource(sources, value ? {
+      path: id ? `CustomFields[ID=${id}].Value` : `CustomFields["${name}"].Value`,
+      label: name,
+      value,
+    } : null);
+  }
 
-  const notes = cleanTextField(job.Notes);
+  const notes = pickRichTextField(job.Notes);
   appendSource(sources, notes ? { path: 'Notes', label: 'Job Notes', value: notes } : null);
 
-  const text = sources.map(source => `【${source.label} · ${source.path}】\n${source.value}`).join('\n\n').trim();
+  const htmlSource = sources.find(source => looksLikeHtml(source.value));
+  if (htmlSource) {
+    return { text: htmlSource.value, sources };
+  }
+
+  const text = sources.map(source => source.value).join('\n\n').trim();
   return { text: text || null, sources };
 }
 

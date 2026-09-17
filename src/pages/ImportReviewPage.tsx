@@ -12,7 +12,7 @@ import {
   resolvedCategory,
   type ImportReviewDraft,
 } from '../integrations';
-import { pickRawDescriptionHtml } from '../integrations/connectors/simpro/simproImportHelpers';
+import { pickRawDescriptionHtml, looksLikeHtml, sanitizeSimproHtml } from '../integrations/connectors/simpro/simproImportHelpers';
 import {
   clearSimproImportSession,
   getSimproImportSession,
@@ -101,12 +101,20 @@ function ReadOnlyMultilineField({ label, value }: {
   label: string;
   value: string | null | undefined;
 }) {
+  const html = Boolean(value && looksLikeHtml(value));
   return (
     <div>
       <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">{label}</p>
-      <div className="border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-800 bg-slate-50 whitespace-pre-wrap min-h-[5rem]">
-        {displayValue(value)}
-      </div>
+      {html ? (
+        <div
+          className="border border-slate-200 rounded-xl px-4 py-3 bg-white min-h-[5rem] simpro-html"
+          dangerouslySetInnerHTML={{ __html: sanitizeSimproHtml(value ?? '') }}
+        />
+      ) : (
+        <div className="border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-800 bg-slate-50 whitespace-pre-wrap min-h-[5rem]">
+          {displayValue(value)}
+        </div>
+      )}
     </div>
   );
 }

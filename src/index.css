@@ -98,6 +98,53 @@
   animation: pulse-slow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
+/* Simpro Description HTML — match their editor spacing and type size */
+.simpro-html {
+  font-family: Calibri, 'Segoe UI', Arial, sans-serif;
+  font-size: 11pt;
+  line-height: 1.35;
+  color: #111827;
+}
+.simpro-html p {
+  margin: 0 0 8pt;
+}
+.simpro-html p:last-child {
+  margin-bottom: 0;
+}
+.simpro-html div {
+  margin: 0;
+}
+.simpro-html ul,
+.simpro-html ol {
+  margin: 4pt 0 8pt 22pt;
+  padding: 0;
+  list-style-position: outside;
+}
+.simpro-html ul { list-style-type: disc; }
+.simpro-html ol { list-style-type: decimal; }
+.simpro-html li {
+  margin: 0 0 2pt;
+}
+.simpro-html h1 { font-size: 16pt; font-weight: 700; margin: 0 0 8pt; }
+.simpro-html h2 { font-size: 14pt; font-weight: 700; margin: 10pt 0 6pt; }
+.simpro-html h3 { font-size: 12pt; font-weight: 700; margin: 8pt 0 4pt; }
+.simpro-html table {
+  border-collapse: collapse;
+  width: auto;
+  margin: 6pt 0 10pt;
+  table-layout: auto;
+}
+.simpro-html th,
+.simpro-html td {
+  border: 1px solid #cbd5e1;
+  padding: 3pt 6pt;
+  vertical-align: top;
+}
+.simpro-html a {
+  color: #0369a1;
+  text-decoration: underline;
+}
+
 /* Smooth transitions for theme changes */
 * {
   transition-property: background-color, border-color;

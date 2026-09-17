@@ -26,9 +26,129 @@ export function looksLikeHtml(value: string): boolean {
   return /<[a-z][\s\S]*>/i.test(value);
 }
 
+const RICH_TEXT_TAGS = new Set([
+  'P', 'BR', 'DIV', 'SPAN', 'STRONG', 'B', 'EM', 'I', 'U', 'S', 'STRIKE',
+  'UL', 'OL', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+  'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TD', 'TH', 'COLGROUP', 'COL',
+  'BLOCKQUOTE', 'HR', 'FONT', 'SUB', 'SUP', 'A', 'PRE',
+]);
+
+const FONT_SIZE_PT: Record<string, string> = {
+  '1': '8pt',
+  '2': '10pt',
+  '3': '12pt',
+  '4': '14pt',
+  '5': '18pt',
+  '6': '24pt',
+  '7': '36pt',
+};
+
+function isAllowedStyleProperty(name: string): boolean {
+  return /^(font|font-size|font-weight|font-style|font-family|font-variant|text-align|text-decoration|text-indent|text-transform|line-height|letter-spacing|white-space|vertical-align|color|background-color|margin|margin-top|margin-bottom|margin-left|margin-right|padding|padding-top|padding-bottom|padding-left|padding-right|border|border-collapse|border-color|border-width|border-style|width|height|display)$/i.test(name);
+}
+
+function sanitizeStyleValue(style: string): string {
+  return style
+    .split(';')
+    .map(part => part.trim())
+    .filter(Boolean)
+    .filter(decl => {
+      const name = decl.split(':')[0]?.trim() ?? '';
+      return isAllowedStyleProperty(name);
+    })
+    .join('; ');
+}
+
+function copySafeAttributes(source: Element, target: Element): void {
+  const style = source.getAttribute('style');
+  if (style) {
+    const next = sanitizeStyleValue(style);
+    if (next) target.setAttribute('style', next);
+  }
+
+  const align = source.getAttribute('align');
+  if (align && /^(left|right|center|justify)$/i.test(align)) {
+    target.setAttribute('align', align.toLowerCase());
+  }
+
+  for (const name of ['colspan', 'rowspan', 'width', 'height', 'valign']) {
+    const value = source.getAttribute(name);
+    if (value) target.setAttribute(name, value);
+  }
+
+  if (source.tagName === 'A') {
+    const href = source.getAttribute('href')?.trim() ?? '';
+    if (/^(https?:|mailto:)/i.test(href)) target.setAttribute('href', href);
+  }
+
+  if (source.tagName === 'FONT') {
+    const face = source.getAttribute('face');
+    const size = source.getAttribute('size');
+    const color = source.getAttribute('color');
+    const bits: string[] = [];
+    if (face) bits.push(`font-family: ${face}`);
+    if (size && FONT_SIZE_PT[size]) bits.push(`font-size: ${FONT_SIZE_PT[size]}`);
+    if (color) bits.push(`color: ${color}`);
+    if (bits.length) {
+      const existing = target.getAttribute('style');
+      target.setAttribute('style', existing ? `${existing}; ${bits.join('; ')}` : bits.join('; '));
+    }
+  }
+}
+
+function sanitizeNode(doc: Document, node: Node): Node | null {
+  if (node.nodeType === Node.TEXT_NODE) return doc.createTextNode(node.textContent ?? '');
+  if (node.nodeType !== Node.ELEMENT_NODE) return null;
+
+  const el = node as Element;
+  const tag = el.tagName;
+  if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'IFRAME' || tag === 'OBJECT' || tag === 'EMBED') {
+    return null;
+  }
+
+  if (!RICH_TEXT_TAGS.has(tag)) {
+    const frag = doc.createDocumentFragment();
+    for (const child of Array.from(el.childNodes)) {
+      const kept = sanitizeNode(doc, child);
+      if (kept) frag.appendChild(kept);
+    }
+    return frag;
+  }
+
+  const clone = doc.createElement(tag.toLowerCase());
+  copySafeAttributes(el, clone);
+  for (const child of Array.from(el.childNodes)) {
+    const kept = sanitizeNode(doc, child);
+    if (kept) clone.appendChild(kept);
+  }
+  return clone;
+}
+
+/** Keep Simpro/Word layout (paragraphs, lists, font size) and drop scripts. */
+export function sanitizeSimproHtml(html: string): string {
+  if (typeof DOMParser === 'undefined') {
+    return html.replace(/<script[\s\S]*?<\/script>/gi, '').trim();
+  }
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const wrap = doc.createElement('div');
+    for (const child of Array.from(doc.body.childNodes)) {
+      const kept = sanitizeNode(doc, child);
+      if (kept) wrap.appendChild(kept);
+    }
+    return wrap.innerHTML.trim();
+  } catch {
+    return html.replace(/<script[\s\S]*?<\/script>/gi, '').trim();
+  }
+}
+
 export function htmlToPlainText(html: string): string {
   try {
     const doc = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll('br').forEach(el => el.replaceWith('\n'));
+    doc.querySelectorAll('p, div, li, h1, h2, h3, h4, h5, h6, tr, blockquote').forEach(el => {
+      el.append('\n');
+    });
     const text = doc.body.textContent ?? '';
     return text
       .replace(/\u00a0/g, ' ')
@@ -37,7 +157,14 @@ export function htmlToPlainText(html: string): string {
       .replace(/[ \t]{2,}/g, ' ')
       .trim();
   } catch {
-    return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    return html
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|div|li|h[1-6]|tr)>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/[ \t]{2,}/g, ' ')
+      .trim();
   }
 }
 
@@ -45,6 +172,17 @@ export function cleanTextField(value: unknown): string | null {
   if (value == null) return null;
   const raw = String(value);
   return looksLikeHtml(raw) ? htmlToPlainText(raw) : raw.trim();
+}
+
+/** Preserve Simpro Description HTML when present; otherwise return plain text. */
+export function pickRichTextField(value: unknown): string | null {
+  if (value == null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  if (looksLikeHtml(raw)) {
+    return sanitizeSimproHtml(raw) || htmlToPlainText(raw);
+  }
+  return raw;
 }
 
 /** User-facing job number — not the internal Simpro ID and not the job title. */
@@ -81,9 +219,9 @@ export function pickProjectName(record: Record<string, unknown>): string | null 
   return firstLine.length > 160 ? `${firstLine.slice(0, 157)}…` : firstLine;
 }
 
-/** Scope of Works defaults to cleaned Simpro Description only. */
+/** Scope of Works defaults to Simpro Description HTML when present. */
 export function pickScopeOfWorks(record: Record<string, unknown>): string | null {
-  return cleanTextField(record.Description);
+  return pickRichTextField(record.Description);
 }
 
 export function pickRawDescriptionHtml(record: Record<string, unknown>): string | null {

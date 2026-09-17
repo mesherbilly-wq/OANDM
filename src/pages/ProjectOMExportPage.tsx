@@ -16,7 +16,8 @@ import type { Device, CommissioningRecord, HandoverDocument, Datasheet, ProjectS
 import { isEndUser } from '../lib/appRoles';
 import { useUserAccess } from '../lib/userAccess';
 import { OmClientInvitePanel } from '../components/OmClientInvitePanel';
-import { MarkdownDocEditor } from '../components/MarkdownDocEditor';
+import { MarkdownDocEditor, documentPreviewClassName, renderDocumentHtml } from '../components/MarkdownDocEditor';
+import { looksLikeHtml } from '../integrations/connectors/simpro/simproImportHelpers';
 import {
   Printer, BookOpen, FileText, ClipboardCheck, Award, Wrench,
   Upload, X, CheckCircle, AlertCircle, ExternalLink, ChevronRight,
@@ -1498,7 +1499,7 @@ export function ProjectOMExportPage() {
         {scopeContent && (
           <>
             <PrintSection title="Scope of Works" anchorId="print-section-scope">
-              <div dangerouslySetInnerHTML={{ __html: renderMarkdown(scopeContent) }} />
+              <div className={looksLikeHtml(scopeContent) ? 'simpro-html' : undefined} dangerouslySetInnerHTML={{ __html: renderDocumentHtml(scopeContent) }} />
             </PrintSection>
             <div className="page-break" />
           </>
@@ -1666,7 +1667,7 @@ export function ProjectOMExportPage() {
           <>
             {asFittedScope.trim() && (
               <PrintSection title="As Fitted" anchorId="print-section-as_fitted">
-                <div dangerouslySetInnerHTML={{ __html: renderMarkdown(asFittedScope) }} />
+                <div className={looksLikeHtml(asFittedScope) ? 'simpro-html' : undefined} dangerouslySetInnerHTML={{ __html: renderDocumentHtml(asFittedScope) }} />
               </PrintSection>
             )}
             {asFittedDrawings.length > 0 && (
@@ -1801,6 +1802,17 @@ export function ProjectOMExportPage() {
           th, td { word-break: break-word; overflow-wrap: anywhere; }
 
           img { page-break-inside: avoid; break-inside: avoid; }
+
+          .simpro-html {
+            font-family: Calibri, 'Segoe UI', Arial, sans-serif !important;
+            font-size: 11pt;
+            line-height: 1.35;
+            color: #111827;
+          }
+          .simpro-html p { margin: 0 0 8pt; }
+          .simpro-html ul, .simpro-html ol { margin: 4pt 0 8pt 22pt; padding: 0; }
+          .simpro-html ul { list-style-type: disc; }
+          .simpro-html ol { list-style-type: decimal; }
         }
       `}</style>
     </div>
@@ -3124,8 +3136,8 @@ function AsFittedDrawingsSection({ drawings, pageImages, documentSystems, scopeC
             <h3 className="font-semibold text-slate-800">As Fitted</h3>
           </div>
           <div
-            className="min-h-24 p-4 border border-slate-200 rounded-lg bg-slate-50 prose prose-sm max-w-none"
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(scopeContent) }}
+            className={documentPreviewClassName(scopeContent, 'min-h-24')}
+            dangerouslySetInnerHTML={{ __html: renderDocumentHtml(scopeContent) }}
           />
         </div>
       )}

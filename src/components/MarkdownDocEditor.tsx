@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AlertCircle, FileText, Loader2 } from 'lucide-react';
+import { looksLikeHtml, sanitizeSimproHtml } from '../integrations/connectors/simpro/simproImportHelpers';
 
 export function renderMarkdown(md: string): string {
   const lines = md.split('\n');
@@ -41,6 +42,18 @@ function inline(t: string): string {
     .replace(/`(.+?)`/g, '<code class="font-mono text-xs bg-slate-100 px-1 rounded">$1</code>');
 }
 
+export function renderDocumentHtml(content: string): string {
+  if (looksLikeHtml(content)) return sanitizeSimproHtml(content);
+  return renderMarkdown(content);
+}
+
+export function documentPreviewClassName(content: string, extra = 'min-h-64'): string {
+  const base = `p-4 border border-slate-200 rounded-lg max-w-none ${extra}`.trim();
+  return looksLikeHtml(content)
+    ? `${base} bg-white simpro-html`
+    : `${base} bg-slate-50 prose prose-sm`;
+}
+
 export function MarkdownDocEditor({
   title,
   content,
@@ -70,8 +83,13 @@ export function MarkdownDocEditor({
   missingSystems?: string[];
   extraAction?: { label: string; onClick: () => void; disabled?: boolean };
 }) {
-  const [preview, setPreview] = useState(!!readOnly);
+  const htmlDoc = looksLikeHtml(content);
+  const [preview, setPreview] = useState(!!readOnly || htmlDoc);
   const missing = (missingSystems ?? []).filter(sys => !content.includes(sys));
+
+  useEffect(() => {
+    if (htmlDoc) setPreview(true);
+  }, [htmlDoc]);
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
@@ -97,7 +115,7 @@ export function MarkdownDocEditor({
               disabled={regenerating}
               className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 rounded-lg border border-slate-200 hover:border-slate-300 transition-colors disabled:opacity-40"
             >
-              {preview ? 'Edit' : 'Preview'}
+              {preview ? 'Edit' : (htmlDoc ? 'View layout' : 'Preview')}
             </button>
             <button
               type="button"
@@ -151,8 +169,8 @@ export function MarkdownDocEditor({
 
       {preview || readOnly ? (
         <div
-          className="min-h-64 p-4 border border-slate-200 rounded-lg bg-slate-50 prose prose-sm max-w-none"
-          dangerouslySetInnerHTML={{ __html: content ? renderMarkdown(content) : '<p class="text-slate-400 text-sm">Nothing to preview.</p>' }}
+          className={documentPreviewClassName(content)}
+          dangerouslySetInnerHTML={{ __html: content ? renderDocumentHtml(content) : '<p class="text-slate-400 text-sm">Nothing to preview.</p>' }}
         />
       ) : (
         <textarea
@@ -161,7 +179,7 @@ export function MarkdownDocEditor({
           disabled={regenerating}
           rows={20}
           placeholder={placeholder}
-          className="w-full border border-slate-300 rounded-lg px-4 py-3 text-sm text-slate-800 font-mono focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-none disabled:opacity-50 disabled:bg-slate-50"
+          className={`w-full border border-slate-300 rounded-lg px-4 py-3 text-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-none disabled:opacity-50 disabled:bg-slate-50 ${htmlDoc ? 'text-[11pt] leading-snug font-sans' : 'text-sm font-mono'}`}
         />
       )}
       {saving && (
