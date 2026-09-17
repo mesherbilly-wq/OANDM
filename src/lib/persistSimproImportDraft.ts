@@ -12,6 +12,7 @@ import { displayProjectJobNumber } from './projectJobNumber';
 import { appendProductFieldNotes } from './deviceProductFields';
 import { buildPrefixCounters } from './deviceProjectEdits';
 import { equipmentHasDatasheet } from './datasheetMatching';
+import { getDevicePrefix } from './deviceLabel';
 import { categoryForSystemName } from './inferSystemType';
 import {
   buildPersistSystemNameMap,
