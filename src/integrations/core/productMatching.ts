@@ -14,7 +14,7 @@ import {
 
 export type ProductModelLike = Pick<
   ProductModel,
-  'id' | 'manufacturer' | 'model_number' | 'model_name' | 'device_type' | 'part_number'
+  'id' | 'manufacturer' | 'model_number' | 'model_name' | 'device_type' | 'part_number' | 'warranty_years'
 >;
 
 export type ProductMatchMethod =

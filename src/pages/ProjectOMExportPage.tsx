@@ -11,7 +11,10 @@ import { fetchProjectSystems } from '../lib/projectSystemsDb';
 import { findDatasheetForDeviceFields } from '../lib/datasheetMatching';
 import { FALLBACK_DOCUMENT_DEFINITIONS, titleForLegacyDocumentId } from '../lib/handoverDocumentConfig';
 import { matchEquipmentInputToProduct } from '../integrations/core/productMatching';
-import { extractWarrantyYearsFromNotes } from '../lib/deviceProductFields';
+import {
+  DEFAULT_PRODUCT_WARRANTY_YEARS,
+  resolveWarrantyYearsForDevice,
+} from '../lib/productWarranty';
 import { useProject } from './ProjectLayout';
 import type { Device, CommissioningRecord, HandoverDocument, Datasheet, ProjectSystemRecord } from '../types';
 import { canAccessDocumentManagement, isEndUser } from '../lib/appRoles';
@@ -669,7 +672,7 @@ export function ProjectOMExportPage() {
       return {
         ...d,
         datasheet: ds ?? null,
-        warrantyYears: extractWarrantyYearsFromNotes(d.notes) ?? pm?.warranty_years ?? null,
+        warrantyYears: resolveWarrantyYearsForDevice(d, productModels),
         maintenanceNotes: pm?.maintenance_notes ?? null,
       };
     });
@@ -2961,7 +2964,7 @@ function groupedScheduleLocation(devices: DeviceWithDatasheet[]): string {
 }
 
 function groupedScheduleWarranty(devices: DeviceWithDatasheet[]): string {
-  const years = devices.find(d => d.warrantyYears != null)?.warrantyYears ?? 1;
+  const years = devices.find(d => d.warrantyYears != null)?.warrantyYears ?? DEFAULT_PRODUCT_WARRANTY_YEARS;
   return `${years}yr`;
 }
 

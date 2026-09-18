@@ -27,7 +27,12 @@ import { ManufacturerSuggestHelper } from '../components/ManufacturerSuggestHelp
 import { useProject } from './ProjectLayout';
 import type { ManufacturerSuggestion } from '../lib/manufacturerSuggestion';
 import { saveProductModelPairIfNew } from '../lib/productModelPairing';
-import { formatWarrantyYears, getDeviceProductDescription, extractProductCategoryFromNotes, extractWarrantyYearsFromNotes, appendProductFieldNotes, parseWarrantyYearsInput } from '../lib/deviceProductFields';
+import { formatWarrantyYears, getDeviceProductDescription, extractProductCategoryFromNotes, parseWarrantyYearsInput } from '../lib/deviceProductFields';
+import {
+  DEFAULT_PRODUCT_WARRANTY_YEARS,
+  resolveWarrantyYearsForDevice,
+  saveWarrantyYearsForPartNumber,
+} from '../lib/productWarranty';
 import {
   enrichDeviceWithAutoManufacturer,
   extractPendingManufacturerSuggestion,
@@ -171,8 +176,8 @@ export default function ProjectSystemsPage() {
           right = (b.product_category ?? '').toLowerCase();
           break;
         case 'warranty':
-          left = a.warranty_years ?? -1;
-          right = b.warranty_years ?? -1;
+          left = resolveWarrantyYearsForDevice(a.devices[0], productModels);
+          right = resolveWarrantyYearsForDevice(b.devices[0], productModels);
           break;
         case 'quantity':
           left = a.quantity;
@@ -191,7 +196,7 @@ export default function ProjectSystemsPage() {
       }
       return String(left).localeCompare(String(right)) * factor;
     });
-  }, [equipmentGroups, groupedSort]);
+  }, [equipmentGroups, groupedSort, productModels]);
 
   const sortedSystemDevices = useMemo(() => {
     if (!individualSort) return systemDevices;
@@ -221,8 +226,8 @@ export default function ProjectSystemsPage() {
           right = (extractProductCategoryFromNotes(b.notes) ?? '').toLowerCase();
           break;
         case 'warranty':
-          left = extractWarrantyYearsFromNotes(a.notes) ?? -1;
-          right = extractWarrantyYearsFromNotes(b.notes) ?? -1;
+          left = resolveWarrantyYearsForDevice(a, productModels);
+          right = resolveWarrantyYearsForDevice(b, productModels);
           break;
         case 'location':
           left = (a.location ?? '').toLowerCase();
@@ -241,7 +246,7 @@ export default function ProjectSystemsPage() {
       }
       return String(left).localeCompare(String(right)) * factor;
     });
-  }, [systemDevices, individualSort]);
+  }, [systemDevices, individualSort, productModels]);
 
   const fetchDevices = useCallback(async (): Promise<Device[]> => {
     if (!projectId) return [];
@@ -498,7 +503,20 @@ export default function ProjectSystemsPage() {
           break;
         case 'warranty': {
           const { parsed, valid } = parseWarrantyYearsInput(editingCell.draft);
-          if (valid) updates.warranty_years = parsed;
+          if (valid) {
+            const years = parsed ?? DEFAULT_PRODUCT_WARRANTY_YEARS;
+            if (years !== resolveWarrantyYearsForDevice(group.devices[0], productModels)) {
+              error = await saveWarrantyYearsForPartNumber({
+                partNumber: group.part_number ?? group.model_number,
+                warrantyYears: years,
+                manufacturer: group.manufacturer,
+                modelName: group.description,
+                deviceType: group.description,
+                existingProducts: productModels,
+              });
+              if (!error) await refreshProductModels();
+            }
+          }
           break;
         }
       }
@@ -554,11 +572,18 @@ export default function ProjectSystemsPage() {
         case 'warranty': {
           const { parsed, valid } = parseWarrantyYearsInput(editingCell.draft);
           if (valid) {
-            updates.notes = appendProductFieldNotes(
-              device.notes,
-              extractProductCategoryFromNotes(device.notes),
-              parsed,
-            );
+            const years = parsed ?? DEFAULT_PRODUCT_WARRANTY_YEARS;
+            if (years !== resolveWarrantyYearsForDevice(device, productModels)) {
+              error = await saveWarrantyYearsForPartNumber({
+                partNumber: device.model_number,
+                warrantyYears: years,
+                manufacturer: device.manufacturer,
+                modelName: getDeviceProductDescription(device),
+                deviceType: device.device_type,
+                existingProducts: productModels,
+              });
+              if (!error) await refreshProductModels();
+            }
           }
           break;
         }
@@ -938,7 +963,7 @@ export default function ProjectSystemsPage() {
                       {row.product_category || '—'}
                     </td>
                     <td className="px-4 py-3 text-slate-600">
-                      {renderGroupedCell(row, 'warranty', formatWarrantyYears(row.warranty_years))}
+                      {renderGroupedCell(row, 'warranty', formatWarrantyYears(resolveWarrantyYearsForDevice(row.devices[0], productModels)))}
                     </td>
                     <td className="px-4 py-3 font-semibold text-slate-900">
                       {renderGroupedCell(row, 'quantity', String(row.quantity))}
@@ -1029,7 +1054,7 @@ export default function ProjectSystemsPage() {
                       {extractProductCategoryFromNotes(d.notes) || '—'}
                     </td>
                     <td className="px-4 py-3 text-slate-600">
-                      {renderIndividualCell(d, 'warranty', formatWarrantyYears(extractWarrantyYearsFromNotes(d.notes)))}
+                      {renderIndividualCell(d, 'warranty', formatWarrantyYears(resolveWarrantyYearsForDevice(d, productModels)))}
                     </td>
                     <td className="px-4 py-3 text-slate-500 max-w-[180px]">
                       {renderIndividualCell(d, 'location', d.location ?? '')}

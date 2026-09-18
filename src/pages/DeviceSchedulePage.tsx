@@ -5,13 +5,12 @@ import { supabase } from '../lib/supabase';
 import { groupDevices, getGroupRowKey, type GroupedEquipment } from '../lib/deviceGrouping';
 import { fetchProjectDevices } from '../lib/fetchProjectDevices';
 import { assignDevicesToNamedSystem, fetchProjectSystems, loadProjectSystemsForProject } from '../lib/projectSystemsDb';
+import { getDeviceProductDescription, parseWarrantyYearsInput } from '../lib/deviceProductFields';
 import {
-  appendProductFieldNotes,
-  extractProductCategoryFromNotes,
-  extractWarrantyYearsFromNotes,
-  getDeviceProductDescription,
-  parseWarrantyYearsInput,
-} from '../lib/deviceProductFields';
+  DEFAULT_PRODUCT_WARRANTY_YEARS,
+  resolveWarrantyYearsForDevice,
+  saveWarrantyYearsForPartNumber,
+} from '../lib/productWarranty';
 import {
   inferSystemTypeName,
   shouldAutoAssignSystemType,
@@ -89,7 +88,7 @@ interface DeviceRow {
 
 export default function DeviceSchedulePage() {
   const { id: projectId } = useParams<{ id: string }>();
-  const { productModels } = useProject();
+  const { productModels, refreshProductModels } = useProject();
   const [devices, setDevices] = useState<Device[]>([]);
   const [systemRows, setSystemRows] = useState<ProjectSystemRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -397,20 +396,29 @@ export default function DeviceSchedulePage() {
       clearDraft(setWarrantyDrafts, key);
       return;
     }
-    if (parsed === (group.warranty_years ?? null)) {
+    const years = parsed ?? DEFAULT_PRODUCT_WARRANTY_YEARS;
+    const current = resolveWarrantyYearsForDevice(group.devices[0], productModels);
+    if (years === current) {
       clearDraft(setWarrantyDrafts, key);
       return;
     }
     setSavingRowKey(key);
     setSaveError(null);
-    const error = await updateEquipmentGroup(projectIdNum, group, { warranty_years: parsed }, { ...prefixCounters });
+    const error = await saveWarrantyYearsForPartNumber({
+      partNumber: group.part_number ?? group.model_number,
+      warrantyYears: years,
+      manufacturer: group.manufacturer,
+      modelName: group.description,
+      deviceType: group.description,
+      existingProducts: productModels,
+    });
     setSavingRowKey(null);
     if (error) {
       setSaveError(error);
       return;
     }
     clearDraft(setWarrantyDrafts, key);
-    await fetchDevices({ silent: true });
+    await refreshProductModels();
   };
 
   const commitDeviceWarranty = async (device: Device) => {
@@ -422,27 +430,29 @@ export default function DeviceSchedulePage() {
       clearDraft(setWarrantyDrafts, key);
       return;
     }
-    const current = extractWarrantyYearsFromNotes(device.notes);
-    if (parsed === current) {
+    const years = parsed ?? DEFAULT_PRODUCT_WARRANTY_YEARS;
+    const current = resolveWarrantyYearsForDevice(device, productModels);
+    if (years === current) {
       clearDraft(setWarrantyDrafts, key);
       return;
     }
-    const notes = appendProductFieldNotes(
-      device.notes,
-      extractProductCategoryFromNotes(device.notes),
-      parsed,
-    );
     setSavingRowKey(key);
     setSaveError(null);
-    const { error } = await supabase.from('devices').update({ notes }).eq('id', device.id);
+    const error = await saveWarrantyYearsForPartNumber({
+      partNumber: device.model_number,
+      warrantyYears: years,
+      manufacturer: device.manufacturer,
+      modelName: getDeviceProductDescription(device),
+      deviceType: device.device_type,
+      existingProducts: productModels,
+    });
     setSavingRowKey(null);
     if (error) {
-      setSaveError(error.message);
+      setSaveError(error);
       return;
     }
     clearDraft(setWarrantyDrafts, key);
-    notifyProjectDevicesChanged();
-    applyDevicePatch([device.id], { notes });
+    await refreshProductModels();
   };
 
   const clearDraft = (setter: React.Dispatch<React.SetStateAction<Record<string, string>>>, key: string) => {
@@ -678,7 +688,7 @@ export default function DeviceSchedulePage() {
               min={0}
               className="w-20 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-900"
               placeholder="Years"
-              value={warrantyDrafts[`device:${device.id}`] ?? (extractWarrantyYearsFromNotes(device.notes) != null ? String(extractWarrantyYearsFromNotes(device.notes)) : '')}
+              value={warrantyDrafts[`device:${device.id}`] ?? String(resolveWarrantyYearsForDevice(device, productModels))}
               disabled={savingRowKey === `device:${device.id}`}
               onChange={event => setWarrantyDrafts(current => ({ ...current, [`device:${device.id}`]: event.target.value }))}
               onBlur={() => void commitDeviceWarranty(device)}
@@ -903,7 +913,7 @@ export default function DeviceSchedulePage() {
                           min={0}
                           className="w-20 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-900"
                           placeholder="Years"
-                          value={warrantyDrafts[rowKey] ?? (row.warranty_years != null ? String(row.warranty_years) : '')}
+                          value={warrantyDrafts[rowKey] ?? String(resolveWarrantyYearsForDevice(row.devices[0], productModels))}
                           disabled={savingRowKey === rowKey}
                           onChange={event => setWarrantyDrafts(current => ({ ...current, [rowKey]: event.target.value }))}
                           onBlur={() => void commitGroupWarranty(row)}
