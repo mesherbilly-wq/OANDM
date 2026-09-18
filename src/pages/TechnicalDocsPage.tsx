@@ -13,16 +13,22 @@ import {
 } from 'lucide-react';
 import migration039Sql from '../../supabase/migrations/20260917120000_039_tech_doc_documents.sql?raw';
 import migration041Sql from '../../supabase/migrations/20260918120000_041_tech_doc_protected.sql?raw';
+import migration042Sql from '../../supabase/migrations/20260918130000_042_tech_doc_file_password.sql?raw';
 import {
   extractTableFromGrid,
   parseSpreadsheetFile,
 } from '../lib/techDocSpreadsheet';
 import {
+  clearTechDocFilePassword,
+  generateFilePassword,
   missingProtectedColumns,
   movePublicTechDocToPrivate,
   omUploadsPath,
   openProtectedTechDoc,
   removeProtectedTechDoc,
+  setTechDocFilePassword,
+  TECH_DOC_DOCUMENT_SELECT,
+  TECH_DOC_DOCUMENT_SELECT_BASE,
   TECH_DOCS_PRIVATE_BUCKET,
   uploadProtectedTechDoc,
 } from '../lib/techDocProtected';
@@ -58,6 +64,7 @@ interface TechDocDocument {
   visible_in_portal: boolean;
   include_in_om: boolean;
   storage_path: string | null;
+  has_file_password: boolean;
   rows: TechDocRow[];
   colConfig: ColConfig[];
   configId: number | null;
@@ -72,6 +79,7 @@ interface PendingDescribe {
   is_protected: boolean;
   visible_in_portal: boolean;
   include_in_om: boolean;
+  file_password: string;
 }
 
 const TECH_DOC_TYPES = [
@@ -90,6 +98,81 @@ const ic = 'w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:
 
 function missingTable(error: { message?: string } | null | undefined): boolean {
   return /does not exist|schema cache|document_id/i.test(error?.message ?? '');
+}
+
+function FilePasswordField({
+  value,
+  onChange,
+  show,
+  onToggleShow,
+  existing,
+  onClear,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  show: boolean;
+  onToggleShow: () => void;
+  existing?: boolean;
+  onClear?: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copyValue = async () => {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      alert('Clipboard is blocked. Copy the password from the box.');
+    }
+  };
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-3 space-y-2">
+      <p className="text-sm font-semibold text-slate-800">File password</p>
+      <p className="text-xs text-slate-500">
+        {existing
+          ? 'A password is already set. Enter a new one to replace it, or generate a new password. The current password cannot be shown again.'
+          : 'Set a password or generate one. Minimum 6 characters. Copy it now — it cannot be shown again after you leave this screen.'}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <input
+          type={show ? 'text' : 'password'}
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          className={`${ic} flex-1 min-w-[12rem]`}
+          placeholder={existing ? 'New password' : 'Password'}
+          autoComplete="new-password"
+        />
+        <button type="button" onClick={onToggleShow} className="p-2 border border-slate-200 rounded-lg text-slate-500 hover:bg-white" title={show ? 'Hide password' : 'Show password'}>
+          {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            onChange(generateFilePassword());
+            if (!show) onToggleShow();
+          }}
+          className="text-xs font-medium px-3 py-2 rounded-lg border border-slate-200 text-slate-700 hover:bg-white"
+        >
+          Generate
+        </button>
+        <button
+          type="button"
+          onClick={() => void copyValue()}
+          disabled={!value}
+          className="inline-flex items-center gap-1 text-xs font-medium px-3 py-2 rounded-lg border border-slate-200 text-slate-700 hover:bg-white disabled:opacity-40"
+        >
+          {copied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      {onClear && existing && (
+        <button type="button" onClick={onClear} className="text-xs font-medium text-red-600 hover:text-red-700">
+          Remove password
+        </button>
+      )}
+    </div>
+  );
 }
 
 interface ExtractedTable {
@@ -343,8 +426,15 @@ export default function TechnicalDocsPage() {
   const [loading, setLoading] = useState(true);
   const [needsMigration, setNeedsMigration] = useState(false);
   const [needsProtectedMigration, setNeedsProtectedMigration] = useState(false);
+  const [needsPasswordMigration, setNeedsPasswordMigration] = useState(false);
   const [migrationCopied, setMigrationCopied] = useState(false);
   const [protectedCopied, setProtectedCopied] = useState(false);
+  const [passwordCopied, setPasswordCopied] = useState(false);
+  const [passwordMigrationCopied, setPasswordMigrationCopied] = useState(false);
+  const [revealedPassword, setRevealedPassword] = useState<{ title: string; password: string } | null>(null);
+  const [editPassword, setEditPassword] = useState('');
+  const [showPendingPassword, setShowPendingPassword] = useState(false);
+  const [showEditPassword, setShowEditPassword] = useState(false);
   const [modal, setModal] = useState<ModalState>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [pdfParsing, setPdfParsing] = useState(false);
@@ -387,34 +477,50 @@ export default function TechnicalDocsPage() {
   const load = useCallback(async () => {
     if (!pid) return;
     setLoading(true);
-    const [{ data: rowData, error: rowErr }, { data: cfgData }, { data: devData }, docsRes] = await Promise.all([
+    const [{ data: rowData, error: rowErr }, { data: cfgData }, { data: devData }, docsFirst] = await Promise.all([
       supabase.from('tech_doc_rows').select('*').eq('project_id', pid).order('system_type').order('row_index'),
       supabase.from('tech_doc_column_configs').select('*').eq('project_id', pid),
       supabase.from('devices').select('id, project_id, system_type, system_category, project_system_id').eq('project_id', pid),
-      supabase.from('tech_doc_documents').select('*').eq('project_id', pid).order('created_at', { ascending: false }),
+      supabase.from('tech_doc_documents').select(TECH_DOC_DOCUMENT_SELECT).eq('project_id', pid).order('created_at', { ascending: false }),
     ]);
+    let docsData: any[] | null = docsFirst.data;
+    let docsError = docsFirst.error;
+    if (docsError && /has_file_password/i.test(docsError.message ?? '')) {
+      setNeedsPasswordMigration(true);
+      const fallback = await supabase.from('tech_doc_documents').select(TECH_DOC_DOCUMENT_SELECT_BASE).eq('project_id', pid).order('created_at', { ascending: false });
+      docsData = fallback.data;
+      docsError = fallback.error;
+    }
 
     const devices = devData ?? [];
     const systems = await loadDocumentProjectSystems(pid, devices);
     setProjectSystems(systems);
 
-    if (docsRes.error && missingTable(docsRes.error)) {
+    if (docsError && missingTable(docsError)) {
       setNeedsMigration(true);
     } else {
       setNeedsMigration(false);
     }
-    if (docsRes.error && missingProtectedColumns(docsRes.error)) {
-      setNeedsProtectedMigration(true);
-    } else if (docsRes.data && docsRes.data.length > 0 && !('is_protected' in docsRes.data[0])) {
-      setNeedsProtectedMigration(true);
+    const firstDoc = docsData?.[0];
+    if (docsError && missingProtectedColumns(docsError)) {
+      const msg = docsError.message ?? '';
+      setNeedsProtectedMigration(/is_protected|visible_in_portal|include_in_om|storage_path|storage_bucket|tech-docs-private/i.test(msg) || !/has_file_password|set_tech_doc_file_password/i.test(msg));
+      setNeedsPasswordMigration(/has_file_password|file_password_hash|set_tech_doc_file_password|unlock_tech_doc_file/i.test(msg));
+    } else if (firstDoc) {
+      setNeedsProtectedMigration(!('is_protected' in firstDoc));
+      setNeedsPasswordMigration(('is_protected' in firstDoc) && !('has_file_password' in firstDoc));
     } else {
-      const probe = await supabase.from('tech_doc_documents').select('is_protected').eq('project_id', pid).limit(1);
-      setNeedsProtectedMigration(!!probe.error && missingProtectedColumns(probe.error));
+      const [protectedProbe, passwordProbe] = await Promise.all([
+        supabase.from('tech_doc_documents').select('is_protected').eq('project_id', pid).limit(1),
+        supabase.from('tech_doc_documents').select('has_file_password').eq('project_id', pid).limit(1),
+      ]);
+      setNeedsProtectedMigration(!!protectedProbe.error && missingProtectedColumns(protectedProbe.error));
+      setNeedsPasswordMigration(!!passwordProbe.error && missingProtectedColumns(passwordProbe.error));
     }
 
     const rows = (rowData ?? []) as Array<TechDocRow & { system_type: string; document_id?: number | null }>;
     const cfgs = cfgData ?? [];
-    const rawDocs = docsRes.data ?? [];
+    const rawDocs = docsData ?? [];
 
     const built: TechDocDocument[] = rawDocs.map((doc: any) => {
       const docRows = rows.filter(row => sameDocId(row.document_id, doc.id));
@@ -433,6 +539,7 @@ export default function TechnicalDocsPage() {
         visible_in_portal: doc.visible_in_portal !== false,
         include_in_om: doc.include_in_om !== false,
         storage_path: doc.storage_path ?? null,
+        has_file_password: !!doc.has_file_password,
         rows: docRows,
         colConfig: (cfg?.columns as ColConfig[]) ?? [],
         configId: cfg?.id ?? null,
@@ -487,6 +594,7 @@ export default function TechnicalDocsPage() {
           visible_in_portal: true,
           include_in_om: true,
           storage_path: null,
+          has_file_password: false,
           rows: sysRows,
           colConfig: (cfg?.columns as ColConfig[]) ?? [],
           configId: cfg?.id ?? null,
@@ -531,6 +639,7 @@ export default function TechnicalDocsPage() {
       is_protected: false,
       visible_in_portal: true,
       include_in_om: true,
+      file_password: '',
     }));
     setPdfError(null);
     setPendingQueue(queued);
@@ -641,8 +750,17 @@ export default function TechnicalDocsPage() {
       }
       const documentId = Number(inserted?.id);
       if (!documentId) throw new Error('Document was created without an id.');
+      const password = pending.file_password.trim() || generateFilePassword();
+      if (password.length < 6) throw new Error('Password must be at least 6 characters');
+      try {
+        await setTechDocFilePassword(documentId, password);
+      } catch (err: any) {
+        if (missingProtectedColumns(err)) setNeedsPasswordMigration(true);
+        throw new Error('Paste 042 SQL in Supabase, then set the document password.');
+      }
       await load();
       setExpandedDocId(documentId);
+      setRevealedPassword({ title: pending.title || pending.file.name, password });
       advanceQueue();
     } catch (err: any) {
       alert('Upload failed: ' + err.message);
@@ -831,8 +949,48 @@ export default function TechnicalDocsPage() {
     if (fields.system_type) {
       await supabase.from('tech_doc_rows').update({ system_type: fields.system_type }).eq('document_id', editingDoc.id);
     }
+    if (editingDoc.is_protected) {
+      const nextPassword = editPassword.trim() || (!editingDoc.has_file_password ? generateFilePassword() : '');
+      if (nextPassword && nextPassword.length < 6) {
+        alert('Password must be at least 6 characters');
+        return;
+      }
+      if (nextPassword) {
+        try {
+          await setTechDocFilePassword(editingDoc.id, nextPassword);
+          setRevealedPassword({ title: editingDoc.title, password: nextPassword });
+        } catch (err: any) {
+          if (missingProtectedColumns(err)) setNeedsPasswordMigration(true);
+          alert('Password save failed: ' + (err.message ?? err));
+          return;
+        }
+      }
+    } else if (editingDoc.has_file_password) {
+      try {
+        await clearTechDocFilePassword(editingDoc.id);
+      } catch (err: any) {
+        if (missingProtectedColumns(err)) setNeedsPasswordMigration(true);
+        alert('Could not remove password: ' + (err.message ?? err));
+        return;
+      }
+    }
     setEditingDoc(null);
+    setEditPassword('');
+    setShowEditPassword(false);
     await load();
+  };
+
+  const clearEditingFilePassword = async () => {
+    if (!editingDoc) return;
+    if (!confirm('Remove the file password? Portal users will still need project access to download.')) return;
+    try {
+      await clearTechDocFilePassword(editingDoc.id);
+      setEditingDoc({ ...editingDoc, has_file_password: false });
+      setEditPassword('');
+    } catch (err: any) {
+      if (missingProtectedColumns(err)) setNeedsPasswordMigration(true);
+      alert('Could not remove password: ' + (err.message ?? err));
+    }
   };
 
   const replaceDocumentFile = async (file: File) => {
@@ -938,6 +1096,27 @@ export default function TechnicalDocsPage() {
     }
   };
 
+  const copyPasswordMigration = async () => {
+    try {
+      await navigator.clipboard.writeText(migration042Sql);
+      setPasswordMigrationCopied(true);
+      window.setTimeout(() => setPasswordMigrationCopied(false), 2500);
+    } catch {
+      alert('Clipboard is blocked. Copy supabase/migrations/20260918130000_042_tech_doc_file_password.sql manually.');
+    }
+  };
+
+  const copyRevealedPassword = async () => {
+    if (!revealedPassword) return;
+    try {
+      await navigator.clipboard.writeText(revealedPassword.password);
+      setPasswordCopied(true);
+      window.setTimeout(() => setPasswordCopied(false), 2500);
+    } catch {
+      alert('Clipboard is blocked. Copy the password from the box.');
+    }
+  };
+
   // ── Render ────────────────────────────────────────────────────────────────────
 
   if (loading) {
@@ -992,6 +1171,16 @@ export default function TechnicalDocsPage() {
           <button type="button" onClick={() => void copyProtectedMigration()} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-cyan-600 text-white hover:bg-cyan-700">
             {protectedCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
             {protectedCopied ? 'Copied 041 — paste in Supabase' : 'Copy 041 SQL'}
+          </button>
+        </div>
+      )}
+
+      {needsPasswordMigration && (
+        <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 space-y-2">
+          <p className="font-semibold">Paste 042 in Supabase to set and generate passwords for protected files.</p>
+          <button type="button" onClick={() => void copyPasswordMigration()} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-cyan-600 text-white hover:bg-cyan-700">
+            {passwordMigrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
+            {passwordMigrationCopied ? 'Copied 042 — paste in Supabase' : 'Copy 042 SQL'}
           </button>
         </div>
       )}
@@ -1072,6 +1261,7 @@ export default function TechnicalDocsPage() {
                     <p className="text-sm font-semibold text-slate-800 truncate">{doc.title}</p>
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-0.5 text-xs text-slate-500">
                       {doc.is_protected && <span className="bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-semibold">Protected</span>}
+                      {doc.has_file_password && <span className="bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-semibold">Password set</span>}
                       {doc.is_protected && <span>Client Portal Access</span>}
                       {!doc.include_in_om && <span className="bg-slate-100 px-1.5 py-0.5 rounded">Hidden from O&amp;M</span>}
                       {!doc.visible_in_portal && <span className="bg-slate-100 px-1.5 py-0.5 rounded">Hidden from portal</span>}
@@ -1119,7 +1309,19 @@ export default function TechnicalDocsPage() {
                     )}
                     {!doc.is_protected && <button type="button" onClick={() => openColConfig(doc)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><Settings2 className="w-3.5 h-3.5" /></button>}
                     {!doc.is_protected && <button type="button" onClick={() => exportCSV(doc)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><Download className="w-3.5 h-3.5" /></button>}
-                    {doc.id > 0 && <button type="button" onClick={() => setEditingDoc(doc)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><Pencil className="w-3.5 h-3.5" /></button>}
+                    {doc.id > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingDoc(doc);
+                          setEditPassword('');
+                          setShowEditPassword(false);
+                        }}
+                        className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     <button type="button" onClick={() => void deleteDocument(doc)} className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg"><Trash2 className="w-3.5 h-3.5" /></button>
                   </div>
                 </div>
@@ -1212,7 +1414,16 @@ export default function TechnicalDocsPage() {
                   type="checkbox"
                   className="mt-0.5 rounded border-slate-300"
                   checked={currentPending.is_protected}
-                  onChange={e => updateCurrentPending({ is_protected: e.target.checked })}
+                  onChange={e => {
+                    const checked = e.target.checked;
+                    updateCurrentPending({
+                      is_protected: checked,
+                      file_password: checked
+                        ? (currentPending.file_password || generateFilePassword())
+                        : '',
+                    });
+                    if (checked) setShowPendingPassword(true);
+                  }}
                 />
                 <span>
                   <span className="block text-sm font-semibold text-slate-800">Password Protected / Sensitive Document</span>
@@ -1220,7 +1431,13 @@ export default function TechnicalDocsPage() {
                 </span>
               </label>
               {currentPending.is_protected && (
-                <div className="space-y-2 pl-1">
+                <div className="space-y-3 pl-1">
+                  <FilePasswordField
+                    value={currentPending.file_password}
+                    onChange={password => updateCurrentPending({ file_password: password })}
+                    show={showPendingPassword}
+                    onToggleShow={() => setShowPendingPassword(v => !v)}
+                  />
                   <label className="flex items-center gap-2 text-sm text-slate-700">
                     <input type="checkbox" className="rounded border-slate-300" checked={currentPending.include_in_om} onChange={e => updateCurrentPending({ include_in_om: e.target.checked })} />
                     Reference this document in the O&amp;M
@@ -1260,13 +1477,30 @@ export default function TechnicalDocsPage() {
                 type="checkbox"
                 className="mt-0.5 rounded border-slate-300"
                 checked={editingDoc.is_protected}
-                onChange={e => setEditingDoc({ ...editingDoc, is_protected: e.target.checked })}
+                onChange={e => {
+                  const checked = e.target.checked;
+                  setEditingDoc({ ...editingDoc, is_protected: checked });
+                  if (checked && !editingDoc.has_file_password && !editPassword) {
+                    setEditPassword(generateFilePassword());
+                    setShowEditPassword(true);
+                  }
+                }}
               />
               <span>
                 <span className="block text-sm font-semibold text-slate-800">Password Protected / Sensitive Document</span>
                 <span className="block text-xs text-slate-500 mt-0.5">The original file is kept for authorised Client Portal users and is not embedded in the O&amp;M.</span>
               </span>
             </label>
+            {editingDoc.is_protected && (
+              <FilePasswordField
+                value={editPassword}
+                onChange={setEditPassword}
+                show={showEditPassword}
+                onToggleShow={() => setShowEditPassword(v => !v)}
+                existing={editingDoc.has_file_password}
+                onClear={() => void clearEditingFilePassword()}
+              />
+            )}
             <label className="flex items-center gap-2 text-sm text-slate-700">
               <input type="checkbox" className="rounded border-slate-300" checked={editingDoc.include_in_om} onChange={e => setEditingDoc({ ...editingDoc, include_in_om: e.target.checked })} />
               Reference this document in the O&amp;M
@@ -1292,7 +1526,16 @@ export default function TechnicalDocsPage() {
               {editingDoc.file_name && <p className="text-xs text-slate-400 mt-1.5">{editingDoc.file_name}</p>}
             </div>
             <div className="flex justify-end gap-2">
-              <button onClick={() => setEditingDoc(null)} className="px-3 py-1.5 text-sm text-slate-600 border border-slate-300 rounded-lg">Cancel</button>
+              <button
+                onClick={() => {
+                  setEditingDoc(null);
+                  setEditPassword('');
+                  setShowEditPassword(false);
+                }}
+                className="px-3 py-1.5 text-sm text-slate-600 border border-slate-300 rounded-lg"
+              >
+                Cancel
+              </button>
               <button onClick={() => void saveDocumentMeta()} className="px-3 py-1.5 text-sm bg-cyan-600 text-white rounded-lg">Save</button>
             </div>
           </div>
@@ -1519,6 +1762,38 @@ export default function TechnicalDocsPage() {
               >
                 {savingCols ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Check className="w-4 h-4" />}
                 Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {revealedPassword && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
+            <h2 className="text-lg font-semibold text-slate-900">Copy this password now</h2>
+            <p className="text-sm text-slate-600">
+              Password for <span className="font-semibold">{revealedPassword.title}</span>. It cannot be shown again after you close this dialog.
+            </p>
+            <input readOnly value={revealedPassword.password} className={`${ic} font-mono`} />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => void copyRevealedPassword()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm border border-slate-300 rounded-lg text-slate-700"
+              >
+                {passwordCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
+                {passwordCopied ? 'Copied' : 'Copy'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRevealedPassword(null);
+                  setPasswordCopied(false);
+                }}
+                className="px-3 py-1.5 text-sm bg-cyan-600 text-white rounded-lg"
+              >
+                Done
               </button>
             </div>
           </div>

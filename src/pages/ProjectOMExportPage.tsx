@@ -36,7 +36,7 @@ import {
   ClipboardList, Lock,
 } from 'lucide-react';
 import { humanizeOption } from '../lib/schemaForm';
-import { openProtectedTechDoc, PROTECTED_DOC_NOTICE } from '../lib/techDocProtected';
+import { openProtectedTechDoc, PROTECTED_DOC_NOTICE, TECH_DOC_DOCUMENT_SELECT, TECH_DOC_DOCUMENT_SELECT_BASE } from '../lib/techDocProtected';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -321,6 +321,7 @@ type TechDocBundle = {
   isProtected?: boolean;
   includeInOm?: boolean;
   visibleInPortal?: boolean;
+  hasFilePassword?: boolean;
 };
 
 const PACIFIC_RED_RGB: [number, number, number] = [192, 0, 0];
@@ -636,9 +637,14 @@ export function ProjectOMExportPage() {
       supabase.from('tech_doc_rows').select('*').eq('project_id', pid).order('system_type').order('row_index'),
       supabase.from('tech_doc_column_configs').select('*').eq('project_id', pid),
       fetchProjectSystems(pid).catch(() => [] as ProjectSystemRecord[]),
-      supabase.from('tech_doc_documents').select('*').eq('project_id', pid).order('created_at', { ascending: true }),
+      supabase.from('tech_doc_documents').select(TECH_DOC_DOCUMENT_SELECT).eq('project_id', pid).order('created_at', { ascending: true }),
       supabase.from('as_fitted_items').select('id,quoted_description,quoted_quantity,installed_description,actual_installed_quantity,reconciliation_status,change_reason').eq('project_id', pid).order('created_at'),
     ]);
+
+    let namedTechDocsRes = techDocDocsRes;
+    if (namedTechDocsRes.error && /has_file_password/i.test(namedTechDocsRes.error.message ?? '')) {
+      namedTechDocsRes = await supabase.from('tech_doc_documents').select(TECH_DOC_DOCUMENT_SELECT_BASE).eq('project_id', pid).order('created_at', { ascending: true });
+    }
 
     const enriched: DeviceWithDatasheet[] = (devData ?? []).map(d => {
       const productMatch = matchEquipmentInputToProduct(
@@ -677,7 +683,7 @@ export function ProjectOMExportPage() {
     // Build techDocState per project system / cost centre
     const baseSystems = populatedProjectSystems(deriveProjectSystems(enriched, systemData ?? []));
     const documentSystems = baseSystems;
-    const namedDocs = techDocDocsRes.data ?? [];
+    const namedDocs = namedTechDocsRes.data ?? [];
     const protectedDocIds = new Set(
       namedDocs.filter((doc: { is_protected?: boolean; id: number }) => doc.is_protected).map((doc: { id: number }) => doc.id),
     );
@@ -714,6 +720,7 @@ export function ProjectOMExportPage() {
           isProtected: !!doc.is_protected,
           includeInOm: doc.include_in_om !== false,
           visibleInPortal: doc.visible_in_portal !== false,
+          hasFilePassword: !!doc.has_file_password,
         });
       }
       const orphanRows = mappedRows.filter(r => !r.document_id || !namedDocs.some((d: { id: number }) => d.id === r.document_id));
@@ -1833,7 +1840,7 @@ export function ProjectOMExportPage() {
                         anchorId={isFirst ? 'print-section-technical_docs' : undefined}
                         forcePageBreak={!isFirst}
                       >
-                        <PrintProtectedTechDocNotice title={bundle.title} />
+                        <PrintProtectedTechDocNotice title={bundle.title} hasFilePassword={bundle.hasFilePassword} />
                       </PrintSection>
                     )];
                   }
@@ -2144,9 +2151,42 @@ function TechnicalDocsSection({ devices, techDocState, techDocBundles, documentS
   documentSystems: ProjectSystem[];
   packReadOnly?: boolean;
 }) {
+  const [passwordPrompt, setPasswordPrompt] = useState<{ id: number; title: string; password: string; error: string | null; busy: boolean } | null>(null);
   const named = (techDocBundles ?? []).filter(bundle => bundle.isProtected || bundle.rows.length > 0);
+
+  const downloadProtected = async (bundle: TechDocBundle, typed?: string) => {
+    if (!bundle.id) return;
+    if (packReadOnly && bundle.hasFilePassword && typed == null) {
+      setPasswordPrompt({ id: bundle.id, title: bundle.title, password: '', error: null, busy: false });
+      return;
+    }
+    try {
+      if (passwordPrompt) setPasswordPrompt({ ...passwordPrompt, busy: true, error: null });
+      await openProtectedTechDoc({
+        id: bundle.id,
+        requireUnlock: !!(packReadOnly && bundle.hasFilePassword),
+        password: typed ?? null,
+      });
+      setPasswordPrompt(null);
+    } catch (err: any) {
+      const message = err?.message ?? 'Could not download';
+      if (packReadOnly && bundle.hasFilePassword) {
+        setPasswordPrompt({
+          id: bundle.id,
+          title: bundle.title,
+          password: typed ?? '',
+          error: message,
+          busy: false,
+        });
+      } else {
+        alert(message);
+      }
+    }
+  };
+
   if (named.length > 0) {
     return (
+      <>
       <div className="space-y-6">
         {named.map(bundle => {
           if (bundle.isProtected) {
@@ -2156,13 +2196,15 @@ function TechnicalDocsSection({ devices, techDocState, techDocBundles, documentS
                   <Lock className="w-4 h-4 text-amber-700" />
                   <div className="min-w-0 flex-1">
                     <h3 className="font-semibold text-slate-800 truncate">{bundle.title}</h3>
-                    <p className="text-xs text-amber-800 font-semibold mt-0.5">Protected Document · Client Portal Access</p>
+                    <p className="text-xs text-amber-800 font-semibold mt-0.5">
+                      {bundle.hasFilePassword ? 'Protected Document · Password required' : 'Protected Document · Client Portal Access'}
+                    </p>
                   </div>
                   {bundle.system && <span className="text-xs text-slate-500">{bundle.system}</span>}
                   {bundle.id && (!packReadOnly || bundle.visibleInPortal !== false) && (
                     <button
                       type="button"
-                      onClick={() => void openProtectedTechDoc({ id: bundle.id! })}
+                      onClick={() => void downloadProtected(bundle)}
                       className="text-xs px-2 py-1 border border-slate-200 text-slate-600 rounded-lg hover:bg-white"
                     >
                       Download
@@ -2171,7 +2213,11 @@ function TechnicalDocsSection({ devices, techDocState, techDocBundles, documentS
                 </div>
                 <div className="px-6 py-5">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">Password Protected</p>
-                  <p className="text-sm text-slate-600 leading-relaxed">{PROTECTED_DOC_NOTICE}</p>
+                  <p className="text-sm text-slate-600 leading-relaxed">
+                    {bundle.hasFilePassword
+                      ? 'This document is password-protected. Download it from the Client Portal using the password issued by Pacific. Please contact Pacific if you are unable to access the document.'
+                      : PROTECTED_DOC_NOTICE}
+                  </p>
                   {bundle.includeInOm === false && !packReadOnly && (
                     <p className="text-xs text-slate-400 mt-3">This document is hidden from the generated O&amp;M pack.</p>
                   )}
@@ -2216,6 +2262,49 @@ function TechnicalDocsSection({ devices, techDocState, techDocBundles, documentS
           );
         })}
       </div>
+        {passwordPrompt && (
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
+              <h2 className="text-lg font-semibold text-slate-900">Enter document password</h2>
+              <p className="text-sm text-slate-600">{passwordPrompt.title}</p>
+              <input
+                type="password"
+                value={passwordPrompt.password}
+                onChange={e => setPasswordPrompt({ ...passwordPrompt, password: e.target.value, error: null })}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                autoComplete="current-password"
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && passwordPrompt.password.trim()) {
+                    const bundle = named.find(item => item.id === passwordPrompt.id);
+                    if (bundle) void downloadProtected(bundle, passwordPrompt.password);
+                  }
+                }}
+              />
+              {passwordPrompt.error && <p className="text-sm text-red-600">{passwordPrompt.error}</p>}
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPasswordPrompt(null)}
+                  className="px-3 py-1.5 text-sm text-slate-600 border border-slate-300 rounded-lg"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={passwordPrompt.busy || !passwordPrompt.password.trim()}
+                  onClick={() => {
+                    const bundle = named.find(item => item.id === passwordPrompt.id);
+                    if (bundle) void downloadProtected(bundle, passwordPrompt.password);
+                  }}
+                  className="px-3 py-1.5 text-sm bg-cyan-600 text-white rounded-lg disabled:opacity-40"
+                >
+                  {passwordPrompt.busy ? 'Checking…' : 'Download'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </>
     );
   }
 
@@ -3920,7 +4009,7 @@ function PrintTechnicalDocsLegacy({ devices }: { devices: DeviceWithDatasheet[] 
   );
 }
 
-function PrintProtectedTechDocNotice({ title }: { title: string }) {
+function PrintProtectedTechDocNotice({ title, hasFilePassword }: { title: string; hasFilePassword?: boolean }) {
   return (
     <div style={{ border: `1px solid ${PACIFIC_LABEL_GREY}`, borderRadius: '0.5rem', padding: '1.1rem 1.2rem' }}>
       <p style={{ fontSize: '1rem', fontWeight: 700, color: PACIFIC_INK, margin: '0 0 0.35rem' }}>{title}</p>
@@ -3928,7 +4017,9 @@ function PrintProtectedTechDocNotice({ title }: { title: string }) {
         Password Protected
       </p>
       <p style={{ fontSize: '0.9rem', color: '#58595B', lineHeight: 1.55, margin: 0 }}>
-        {PROTECTED_DOC_NOTICE}
+        {hasFilePassword
+          ? 'This document is password-protected. Download it from the Client Portal using the password issued by Pacific. Please contact Pacific if you are unable to access the document.'
+          : PROTECTED_DOC_NOTICE}
       </p>
     </div>
   );

@@ -2,11 +2,46 @@ import { supabase } from './supabase';
 
 export const TECH_DOCS_PRIVATE_BUCKET = 'tech-docs-private';
 
+export const TECH_DOC_DOCUMENT_SELECT_BASE =
+  'id, project_id, title, document_type, notes, system_type, project_system_id, file_name, file_url, file_size, created_at, is_protected, visible_in_portal, include_in_om, storage_bucket, storage_path';
+
+export const TECH_DOC_DOCUMENT_SELECT = `${TECH_DOC_DOCUMENT_SELECT_BASE}, has_file_password`;
+
 export const PROTECTED_DOC_NOTICE =
   'This document contains protected information and is available securely via your Client Portal. Please contact Pacific if you are unable to access the document.';
 
 export function missingProtectedColumns(error?: { message?: string } | null): boolean {
-  return /is_protected|visible_in_portal|include_in_om|storage_path|storage_bucket|tech-docs-private/i.test(error?.message ?? '');
+  return /is_protected|visible_in_portal|include_in_om|storage_path|storage_bucket|tech-docs-private|has_file_password|file_password_hash|set_tech_doc_file_password|unlock_tech_doc_file/i.test(error?.message ?? '');
+}
+
+const PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+
+export function generateFilePassword(length = 12): string {
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, byte => PASSWORD_ALPHABET[byte % PASSWORD_ALPHABET.length]).join('');
+}
+
+export async function setTechDocFilePassword(docId: number, password: string): Promise<void> {
+  const { error } = await supabase.rpc('set_tech_doc_file_password', {
+    doc_id: docId,
+    new_password: password,
+  });
+  if (error) throw error;
+}
+
+export async function clearTechDocFilePassword(docId: number): Promise<void> {
+  const { error } = await supabase.rpc('clear_tech_doc_file_password', { doc_id: docId });
+  if (error) throw error;
+}
+
+export async function unlockTechDocFile(docId: number, password: string): Promise<boolean> {
+  const { data, error } = await supabase.rpc('unlock_tech_doc_file', {
+    doc_id: docId,
+    typed_password: password,
+  });
+  if (error) throw error;
+  return data === true;
 }
 
 export function omUploadsPath(url: string | null | undefined): string | null {
@@ -56,18 +91,27 @@ export async function openProtectedTechDoc(opts: {
   id: number;
   storagePath?: string | null;
   fileName?: string | null;
+  password?: string | null;
+  requireUnlock?: boolean;
 }): Promise<string | null> {
   let path = opts.storagePath ?? null;
   let fileName = opts.fileName ?? null;
   if (!path) {
     const { data, error } = await supabase
       .from('tech_doc_documents')
-      .select('storage_path, file_name')
+      .select('storage_path, file_name, has_file_password')
       .eq('id', opts.id)
       .maybeSingle();
     if (error || !data?.storage_path) return null;
     path = data.storage_path;
     fileName = fileName || data.file_name;
+    if (opts.requireUnlock && data.has_file_password && opts.password == null) {
+      throw new Error('Document password required');
+    }
+  }
+  if (opts.requireUnlock || opts.password != null) {
+    const unlocked = await unlockTechDocFile(opts.id, opts.password ?? '');
+    if (!unlocked) throw new Error('Incorrect document password');
   }
   const url = await signedTechDocUrl(path, fileName);
   if (!url) return null;
