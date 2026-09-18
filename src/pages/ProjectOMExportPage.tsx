@@ -33,7 +33,10 @@ import {
   Camera, Lock, ShieldAlert, PhoneCall, ScanLine, Radar, Network,
   Building2, Calendar, User, Tag, CalendarCheck, Loader2, Layers,
   ListOrdered, Wifi, BookMarked, Plus, Search, Trash2, Download,
+  ClipboardList, Lock,
 } from 'lucide-react';
+import { humanizeOption } from '../lib/schemaForm';
+import { openProtectedTechDoc, PROTECTED_DOC_NOTICE } from '../lib/techDocProtected';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -66,6 +69,24 @@ interface AsBuiltDrawing {
   file_url: string;
 }
 
+interface AsFittedItemRow {
+  id: string;
+  quoted_description: string | null;
+  quoted_quantity: number | null;
+  installed_description: string | null;
+  actual_installed_quantity: number | null;
+  reconciliation_status: string;
+  change_reason: string | null;
+}
+
+type TocHotspot = {
+  xMm: number;
+  yMm: number;
+  wMm: number;
+  hMm: number;
+  destPage: number;
+};
+
 // ─── PDF page renderer ────────────────────────────────────────────────────────
 // Renders all pages of a PDF URL into base64 image data URLs using pdfjs-dist.
 // Returns an array of data URL strings (one per page), or null on error.
@@ -86,6 +107,90 @@ async function pdfPageCount(bytes: Uint8Array): Promise<number> {
   const { PDFDocument } = await import('pdf-lib');
   const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
   return doc.getPageCount();
+}
+
+async function mergeNativePdfPages(
+  jsPdfBytes: ArrayBuffer | null,
+  nativeInserts: { index: number; bytes: Uint8Array }[],
+) {
+  const { PDFDocument } = await import('pdf-lib');
+  const out = jsPdfBytes
+    ? await PDFDocument.load(jsPdfBytes)
+    : await PDFDocument.create();
+  let offset = 0;
+  for (const insert of nativeInserts) {
+    const src = await PDFDocument.load(insert.bytes, { ignoreEncryption: true });
+    const copied = await out.copyPages(src, src.getPageIndices());
+    let at = Math.min(insert.index + offset, out.getPageCount());
+    for (const page of copied) {
+      out.insertPage(at, page);
+      at += 1;
+    }
+    offset += copied.length;
+  }
+  return out;
+}
+
+async function addOmPdfNavigation(
+  doc: Awaited<ReturnType<typeof mergeNativePdfPages>>,
+  sectionPageMap: Record<string, number>,
+  anchorLabels: Record<string, string>,
+  tocPageNum: number | undefined,
+  hotspots: TocHotspot[],
+) {
+  const { PDFName, PDFHexString } = await import('pdf-lib');
+  const pages = doc.getPages();
+  const context = doc.context;
+
+  const outlineItems = Object.entries(sectionPageMap)
+    .map(([anchorId, pageNum]) => ({
+      title: anchorLabels[anchorId] ?? anchorId.replace(/^print-section-/, '').replace(/_/g, ' '),
+      pageIndex: pageNum - 1,
+    }))
+    .filter(item => item.pageIndex >= 0 && item.pageIndex < pages.length);
+
+  if (outlineItems.length > 0) {
+    const outlinesRef = context.nextRef();
+    const itemRefs = outlineItems.map(() => context.nextRef());
+    outlineItems.forEach((item, i) => {
+      context.assign(itemRefs[i], context.obj({
+        Title: PDFHexString.fromText(item.title),
+        Parent: outlinesRef,
+        Dest: [pages[item.pageIndex].ref, PDFName.of('Fit')],
+        ...(i > 0 ? { Prev: itemRefs[i - 1] } : {}),
+        ...(i < outlineItems.length - 1 ? { Next: itemRefs[i + 1] } : {}),
+      }));
+    });
+    context.assign(outlinesRef, context.obj({
+      Type: PDFName.of('Outlines'),
+      First: itemRefs[0],
+      Last: itemRefs[itemRefs.length - 1],
+      Count: outlineItems.length,
+    }));
+    doc.catalog.set(PDFName.of('Outlines'), outlinesRef);
+  }
+
+  if (!tocPageNum || hotspots.length === 0) return;
+  const tocPage = pages[tocPageNum - 1];
+  if (!tocPage) return;
+  const { height } = tocPage.getSize();
+  const mmToPt = 72 / 25.4;
+  for (const spot of hotspots) {
+    const dest = pages[spot.destPage - 1];
+    if (!dest) continue;
+    const x = spot.xMm * mmToPt;
+    const w = spot.wMm * mmToPt;
+    const h = spot.hMm * mmToPt;
+    const y = height - (spot.yMm + spot.hMm) * mmToPt;
+    const annot = context.obj({
+      Type: PDFName.of('Annot'),
+      Subtype: PDFName.of('Link'),
+      Rect: [x, y, x + w, y + h],
+      Border: [0, 0, 0],
+      Dest: [dest.ref, PDFName.of('Fit')],
+    });
+    tocPage.node.addAnnot(context.register(annot));
+  }
 }
 
 async function renderPdfToImages(url: string): Promise<string[] | null> {
@@ -146,32 +251,34 @@ interface DeviceWithDatasheet extends Device {
   maintenanceNotes: string | null;
 }
 
-type Section = 'index' | 'cover' | 'scope' | 'schedule' | 'technical_docs' | 'maintenance_plan' | 'commissioning' | 'handover' | 'as_fitted' | 'datasheets' | 'user_manuals';
+type Section = 'index' | 'cover' | 'scope' | 'as_fitted' | 'schedule' | 'technical_docs' | 'maintenance_plan' | 'commissioning' | 'handover' | 'as_fitted_drawings' | 'datasheets' | 'user_manuals';
 
 const SECTIONS: { id: Section; label: string; icon: React.ElementType }[] = [
-  { id: 'index',            label: 'Table of Contents',   icon: ListOrdered },
-  { id: 'cover',            label: 'Cover Page',          icon: BookOpen },
-  { id: 'scope',            label: 'Scope of Works',      icon: FileText },
-  { id: 'schedule',         label: 'Device Schedule',     icon: ClipboardCheck },
-  { id: 'technical_docs',   label: 'Technical Docs',      icon: Wifi },
-  { id: 'maintenance_plan', label: 'Maintenance Plan',    icon: CalendarCheck },
-  { id: 'commissioning',    label: 'Commissioning Pack',  icon: CheckCircle },
-  { id: 'handover',         label: 'Handover Certificate', icon: Award },
-  { id: 'as_fitted',        label: 'As Fitted Drawings',  icon: Layers },
-  { id: 'datasheets',       label: 'Datasheet Index',     icon: ExternalLink },
-  { id: 'user_manuals',     label: 'User Manuals',        icon: BookMarked },
+  { id: 'index',              label: 'Table of Contents',    icon: ListOrdered },
+  { id: 'cover',              label: 'Cover Page',           icon: BookOpen },
+  { id: 'scope',              label: 'Scope of Works',       icon: FileText },
+  { id: 'as_fitted',          label: 'As Fitted',            icon: ClipboardList },
+  { id: 'schedule',           label: 'Device Schedule',      icon: ClipboardCheck },
+  { id: 'technical_docs',     label: 'Technical Docs',       icon: Wifi },
+  { id: 'maintenance_plan',   label: 'Maintenance Plan',     icon: CalendarCheck },
+  { id: 'commissioning',      label: 'Commissioning Pack',   icon: CheckCircle },
+  { id: 'handover',           label: 'Handover Certificate', icon: Award },
+  { id: 'as_fitted_drawings', label: 'As Fitted Drawings',   icon: Layers },
+  { id: 'datasheets',         label: 'Datasheet Index',      icon: ExternalLink },
+  { id: 'user_manuals',       label: 'User Manuals',         icon: BookMarked },
 ];
 
 const PRINT_SECTION_ANCHOR: Record<Section, string> = {
   index: 'print-section-toc',
   cover: 'print-section-cover',
   scope: 'print-section-scope',
+  as_fitted: 'print-section-as_fitted',
   schedule: 'print-section-schedule',
   technical_docs: 'print-section-technical_docs',
   maintenance_plan: 'print-section-maintenance_plan',
   commissioning: 'print-section-commissioning',
   handover: 'print-section-handover',
-  as_fitted: 'print-section-as_fitted',
+  as_fitted_drawings: 'print-section-as_fitted_drawings',
   datasheets: 'print-section-datasheets',
   user_manuals: 'print-section-user_manuals',
 };
@@ -206,10 +313,14 @@ type TechDocColumn = { key: string; display_name: string; visible: boolean; orde
 type TechDocPrintRow = { id: number; row_index: number; data: Record<string, string> };
 type TechDocBundle = {
   key: string;
+  id?: number;
   title: string;
   system: string;
   rows: TechDocPrintRow[];
   colConfig: TechDocColumn[];
+  isProtected?: boolean;
+  includeInOm?: boolean;
+  visibleInPortal?: boolean;
 };
 
 const PACIFIC_RED_RGB: [number, number, number] = [192, 0, 0];
@@ -454,6 +565,9 @@ export function ProjectOMExportPage() {
   const [handoverDocs, setHandoverDocs] = useState<HandoverDocument[]>([]);
   const [omUploads, setOmUploads] = useState<OmUpload[]>([]);
   const [asFittedDrawings, setAsFittedDrawings] = useState<AsBuiltDrawing[]>([]);
+  const [asFittedItems, setAsFittedItems] = useState<AsFittedItemRow[]>([]);
+  const [asFittedContent, setAsFittedContent] = useState('');
+  const [asFittedSaving, setAsFittedSaving] = useState(false);
   const [scHandoverDocs, setScHandoverDocs] = useState<{ id?: number; document_type: string; title: string; status: string; file_url: string | null; file_name: string | null; sc_inspection_id: string | null; sc_result: string | null; system_type?: string | null; project_system_id?: number | null }[]>([]);
   const [otherHandoverDocs, setOtherHandoverDocs] = useState<OtherHandoverDoc[]>([]);
   const [projectManuals, setProjectManuals] = useState<{ id: number; manual_id: number; manual: { title: string; description: string | null; manufacturer: string | null; model_number: string | null; file_name: string; file_url: string } }[]>([]);
@@ -506,6 +620,7 @@ export function ProjectOMExportPage() {
       { data: techCfgData },
       { data: systemData },
       techDocDocsRes,
+      asFittedItemsRes,
     ] = await Promise.all([
       supabase.from('devices').select('*').eq('project_id', pid).neq('status', 'pending_review').order('system_type').order('device_name'),
       supabase.from('project_documents').select('*').eq('project_id', pid),
@@ -522,6 +637,7 @@ export function ProjectOMExportPage() {
       supabase.from('tech_doc_column_configs').select('*').eq('project_id', pid),
       fetchProjectSystems(pid).catch(() => [] as ProjectSystemRecord[]),
       supabase.from('tech_doc_documents').select('*').eq('project_id', pid).order('created_at', { ascending: true }),
+      supabase.from('as_fitted_items').select('id,quoted_description,quoted_quantity,installed_description,actual_installed_quantity,reconciliation_status,change_reason').eq('project_id', pid).order('created_at'),
     ]);
 
     const enriched: DeviceWithDatasheet[] = (devData ?? []).map(d => {
@@ -551,6 +667,7 @@ export function ProjectOMExportPage() {
     setHandoverDocs(handData ?? []);
     setOmUploads(uplData ?? []);
     setAsFittedDrawings(afdData ?? []);
+    setAsFittedItems((asFittedItemsRes.error ? [] : asFittedItemsRes.data ?? []) as AsFittedItemRow[]);
     setScHandoverDocs(scHandData ?? []);
     setOtherHandoverDocs((otherHandData ?? []) as OtherHandoverDoc[]);
     setProjectManuals((manualData ?? []) as any);
@@ -560,6 +677,10 @@ export function ProjectOMExportPage() {
     // Build techDocState per project system / cost centre
     const baseSystems = populatedProjectSystems(deriveProjectSystems(enriched, systemData ?? []));
     const documentSystems = baseSystems;
+    const namedDocs = techDocDocsRes.data ?? [];
+    const protectedDocIds = new Set(
+      namedDocs.filter((doc: { is_protected?: boolean; id: number }) => doc.is_protected).map((doc: { id: number }) => doc.id),
+    );
     const tdState: typeof techDocState = {};
     const mappedRows = (techRowData ?? []).map((r: { id: number; row_index: number; data: unknown; system_type: string; document_id?: number | null }) => ({
       id: r.id,
@@ -570,14 +691,13 @@ export function ProjectOMExportPage() {
     }));
     for (const system of documentSystems) {
       const rows = mappedRows
-        .filter(r => sameSystemName(r.system_type, system.name))
+        .filter(r => sameSystemName(r.system_type, system.name) && (r.document_id == null || !protectedDocIds.has(r.document_id)))
         .sort((a, b) => a.row_index - b.row_index);
       const cfg = (techCfgData ?? []).find((c: { system_type: string }) => sameSystemName(c.system_type, system.name));
       tdState[system.name] = { rows, colConfig: (cfg?.columns ?? []) };
     }
     setTechDocState(tdState);
 
-    const namedDocs = techDocDocsRes.data ?? [];
     const bundles: TechDocBundle[] = [];
     if (namedDocs.length > 0) {
       for (const doc of namedDocs) {
@@ -586,10 +706,14 @@ export function ProjectOMExportPage() {
           ?? (techCfgData ?? []).find((c: { system_type: string; document_id?: number | null }) => !c.document_id && sameSystemName(c.system_type, doc.system_type));
         bundles.push({
           key: `doc-${doc.id}`,
+          id: Number(doc.id),
           title: doc.title || doc.file_name || `${doc.system_type || 'Technical'} table`,
           system: doc.system_type || '',
-          rows,
+          rows: doc.is_protected ? [] : rows,
           colConfig: (cfg?.columns ?? []) as TechDocColumn[],
+          isProtected: !!doc.is_protected,
+          includeInOm: doc.include_in_om !== false,
+          visibleInPortal: doc.visible_in_portal !== false,
         });
       }
       const orphanRows = mappedRows.filter(r => !r.document_id || !namedDocs.some((d: { id: number }) => d.id === r.document_id));
@@ -734,6 +858,7 @@ export function ProjectOMExportPage() {
     } else {
       setScopeContent(existingScope?.content ?? '');
     }
+    setAsFittedContent((docData ?? []).find(d => d.document_type === 'as_fitted_scope')?.content ?? '');
 
     setLoading(false);
   }, [pid, productModels, datasheets, project, packReadOnly]);
@@ -775,7 +900,17 @@ export function ProjectOMExportPage() {
   const includedSystemNames = new Set(projectSystems.map(system => system.name));
   const importedTechSystems = systemsWithTechImport(documentSystems, techDocState);
   const namedTechBundles = techDocBundles.filter(bundle =>
-    bundle.rows.length > 0 && (!bundle.system || includedSystemNames.has(bundle.system)),
+    bundle.includeInOm !== false
+    && (!bundle.system || includedSystemNames.has(bundle.system))
+    && (bundle.isProtected || bundle.rows.length > 0),
+  );
+  const builderTechBundles = techDocBundles.filter(bundle =>
+    (!bundle.system || includedSystemNames.has(bundle.system))
+    && (
+      packReadOnly
+        ? bundle.visibleInPortal !== false && (bundle.isProtected || bundle.rows.length > 0)
+        : bundle.isProtected || bundle.rows.length > 0
+    ),
   );
 
   const includedHandoverUploads = omUploads.filter(upload =>
@@ -815,7 +950,8 @@ export function ProjectOMExportPage() {
       const otherReady = includedOtherHandoverDocs.some(doc => doc.file_url);
       return includedHandoverUploads.length > 0 || scReady || otherReady ? 'complete' : handoverDocs.length > 0 || includedScHandoverDocs.length > 0 ? 'partial' : 'empty';
     }
-    if (s === 'as_fitted') return includedAsFittedDrawings.length > 0 ? 'complete' : 'empty';
+    if (s === 'as_fitted') return asFittedContent.trim() || asFittedItems.length > 0 ? 'complete' : 'empty';
+    if (s === 'as_fitted_drawings') return includedAsFittedDrawings.length > 0 ? 'complete' : 'empty';
     if (s === 'datasheets') return devices.some(d => d.datasheet) ? 'complete' : 'empty';
     if (s === 'user_manuals') return projectManuals.length > 0 ? 'complete' : 'empty';
     return 'empty';
@@ -833,6 +969,19 @@ export function ProjectOMExportPage() {
       await supabase.from('project_documents').insert({ project_id: pid, document_type: 'scope_of_works', title: 'Scope of Works', content: scopeContent, status: 'final', generated_by: 'manual' });
     }
     setScopeSaving(false);
+    load();
+  };
+
+  const handleSaveAsFitted = async () => {
+    if (!pid) return;
+    setAsFittedSaving(true);
+    const existing = projectDocs.find(d => d.document_type === 'as_fitted_scope');
+    if (existing) {
+      await supabase.from('project_documents').update({ content: asFittedContent, status: 'final' }).eq('id', existing.id);
+    } else {
+      await supabase.from('project_documents').insert({ project_id: pid, document_type: 'as_fitted_scope', title: 'As Fitted', content: asFittedContent, status: 'final', generated_by: 'manual' });
+    }
+    setAsFittedSaving(false);
     load();
   };
 
@@ -1140,6 +1289,7 @@ export function ProjectOMExportPage() {
         'print-section-commissioning':    'Commissioning Pack',
         'print-section-handover':         'Handover Documents',
         'print-section-as_fitted':        'As Fitted',
+        'print-section-as_fitted_drawings': 'As Fitted Drawings',
         'print-section-datasheets':       'Datasheets',
         'print-section-user_manuals':     'User Manuals',
       };
@@ -1251,21 +1401,10 @@ export function ProjectOMExportPage() {
         }
       }
 
-      // ── Add PDF bookmarks ─────────────────────────────────────────────────
-      if (nativeInserts.length === 0) {
-        for (const [anchorId, pageNum] of Object.entries(sectionPageMap)) {
-          const label = ANCHOR_LABELS[anchorId] ?? anchorId.replace('print-section-', '');
-          if ((pdf as any).outline) {
-            (pdf as any).outline.add(null, label, { pageNumber: pageNum });
-          }
-        }
-      }
-
-      // ── Add clickable internal links on ToC page ──────────────────────────
       const tocPageNum = sectionPageMap['print-section-toc'];
       const tocNode = tocEl as HTMLElement | null;
-      if (nativeInserts.length === 0 && tocPageNum && tocNode && tocNode.offsetWidth > 0) {
-        pdf.setPage(tocPageNum);
+      const tocHotspots: TocHotspot[] = [];
+      if (tocNode && tocNode.offsetWidth > 0) {
         const cssToMm = PORTRAIT.contentW / tocNode.offsetWidth;
         const tocBox = tocNode.getBoundingClientRect();
         tocNode.querySelectorAll<HTMLElement>('.toc-entry-row').forEach(row => {
@@ -1273,11 +1412,13 @@ export function ProjectOMExportPage() {
           const targetPage = targetId ? sectionPageMap[targetId] : undefined;
           if (!targetPage) return;
           const box = row.getBoundingClientRect();
-          const x = PORTRAIT.mLeft + (box.left - tocBox.left) * cssToMm;
-          const y = PORTRAIT.mTop + (box.top - tocBox.top) * cssToMm;
-          const w = Math.max(box.width * cssToMm, 20);
-          const h = Math.max(box.height * cssToMm, 8);
-          pdf.link(x, y, w, h, { pageNumber: targetPage });
+          tocHotspots.push({
+            xMm: PORTRAIT.mLeft + (box.left - tocBox.left) * cssToMm,
+            yMm: PORTRAIT.mTop + (box.top - tocBox.top) * cssToMm,
+            wMm: Math.max(box.width * cssToMm, 20),
+            hMm: Math.max(box.height * cssToMm, 8),
+            destPage: targetPage,
+          });
         });
       }
 
@@ -1285,34 +1426,19 @@ export function ProjectOMExportPage() {
       printRoot.style.cssText = savedStyles;
 
       const filename = `OM-Pack-${(project?.project_name || project?.site_name || 'document').replace(/[^a-z0-9]/gi, '-').toLowerCase()}-${new Date().toISOString().split('T')[0]}.pdf`;
-
-      if (nativeInserts.length === 0) {
-        pdf.save(filename);
-      } else {
-        const { PDFDocument } = await import('pdf-lib');
-        const out = currentPage > 0
-          ? await PDFDocument.load(pdf.output('arraybuffer'))
-          : await PDFDocument.create();
-        let offset = 0;
-        for (const insert of nativeInserts) {
-          const src = await PDFDocument.load(insert.bytes, { ignoreEncryption: true });
-          const copied = await out.copyPages(src, src.getPageIndices());
-          let at = Math.min(insert.index + offset, out.getPageCount());
-          for (const page of copied) {
-            out.insertPage(at, page);
-            at += 1;
-          }
-          offset += copied.length;
-        }
-        const merged = await out.save();
-        const blob = new Blob([merged], { type: 'application/pdf' });
-        const href = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = href;
-        link.download = filename;
-        link.click();
-        URL.revokeObjectURL(href);
-      }
+      const out = await mergeNativePdfPages(
+        currentPage > 0 ? pdf.output('arraybuffer') : null,
+        nativeInserts,
+      );
+      await addOmPdfNavigation(out, sectionPageMap, ANCHOR_LABELS, tocPageNum, tocHotspots);
+      const merged = await out.save();
+      const blob = new Blob([merged], { type: 'application/pdf' });
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = href;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(href);
     } catch (err) {
       console.error('PDF generation failed:', err);
       alert('PDF generation failed. Please use the Print button and save as PDF from the print dialog.');
@@ -1450,7 +1576,10 @@ export function ProjectOMExportPage() {
                 const total = hUploads.length + includedScHandoverDocs.filter(d => d.file_url).length + includedOtherHandoverDocs.filter(d => d.file_url).length;
                 return total > 0 ? `${total} document${total !== 1 ? 's' : ''} ready` : handoverDocs.length > 0 || includedScHandoverDocs.length > 0 ? 'Handover data available' : 'Not yet uploaded';
               })(),
-              as_fitted: includedAsFittedDrawings.length > 0 ? `${includedAsFittedDrawings.length} drawing${includedAsFittedDrawings.length !== 1 ? 's' : ''} uploaded` : 'No drawings uploaded',
+              as_fitted: asFittedContent.trim() || asFittedItems.length > 0
+                ? [asFittedContent.trim() ? 'As-fitted record ready' : null, asFittedItems.length > 0 ? `${asFittedItems.length} installed line${asFittedItems.length !== 1 ? 's' : ''}` : null].filter(Boolean).join(' · ')
+                : 'No as-fitted record yet',
+              as_fitted_drawings: includedAsFittedDrawings.length > 0 ? `${includedAsFittedDrawings.length} drawing${includedAsFittedDrawings.length !== 1 ? 's' : ''} uploaded` : 'No drawings uploaded',
               datasheets: (() => { const found = devices.filter(d => d.datasheet).length; return found > 0 ? `${found} of ${devices.length} devices have datasheets` : 'No datasheets found'; })(),
               user_manuals: projectManuals.length > 0 ? `${projectManuals.length} manual${projectManuals.length !== 1 ? 's' : ''} attached` : 'No manuals attached',
             };
@@ -1558,9 +1687,19 @@ export function ProjectOMExportPage() {
               readOnly={packReadOnly}
             />
           )}
+          {activeSection === 'as_fitted' && (
+            <AsFittedRecordSection
+              content={asFittedContent}
+              onChange={setAsFittedContent}
+              onSave={handleSaveAsFitted}
+              saving={asFittedSaving}
+              items={asFittedItems}
+              readOnly={packReadOnly}
+            />
+          )}
           {activeSection === 'schedule' && <ScheduleSection systemGroups={systemGroups} />}
           {activeSection === 'technical_docs' && (
-            <TechnicalDocsSection devices={devices} techDocState={techDocState} techDocBundles={namedTechBundles} documentSystems={documentSystems} />
+            <TechnicalDocsSection devices={devices} techDocState={techDocState} techDocBundles={builderTechBundles} documentSystems={documentSystems} packReadOnly={packReadOnly} />
           )}
           {activeSection === 'maintenance_plan' && (
             <MaintenancePlanSection
@@ -1597,7 +1736,7 @@ export function ProjectOMExportPage() {
               readOnly={packReadOnly}
             />
           )}
-          {activeSection === 'as_fitted' && (
+          {activeSection === 'as_fitted_drawings' && (
             <AsFittedDrawingsSection
               drawings={includedAsFittedDrawings}
               pageImages={pdfPageImages}
@@ -1633,7 +1772,8 @@ export function ProjectOMExportPage() {
           hasMaintPlan={systemGroups.some(g => g.devices.length > 0 && maintenancePlanHasContent(maintPlans[g.system]))}
           hasCommissioning={!!(getUpload('commissioning') || includedCommRecords.length > 0)}
           hasHandover={handoverPackPdfs.length > 0 || handoverDocs.length > 0 || includedScHandoverDocs.length > 0}
-          hasAsFitted={includedAsFittedDrawings.length > 0}
+          hasAsFitted={!!asFittedContent.trim() || asFittedItems.length > 0}
+          hasAsFittedDrawings={includedAsFittedDrawings.length > 0}
           hasDatasheets={devices.some(d => d.datasheet)}
           hasUserManuals={projectManuals.length > 0}
         />
@@ -1643,6 +1783,18 @@ export function ProjectOMExportPage() {
           <>
             <PrintSection title="Scope of Works" anchorId="print-section-scope">
               <div className={usesSimproLayout(scopeContent) ? 'simpro-html' : undefined} dangerouslySetInnerHTML={{ __html: renderDocumentHtml(scopeContent) }} />
+            </PrintSection>
+            <div className="page-break" />
+          </>
+        )}
+
+        {(asFittedContent.trim() || asFittedItems.length > 0) && (
+          <>
+            <PrintSection title="As Fitted" anchorId="print-section-as_fitted">
+              {asFittedItems.length > 0 && <PrintAsFittedItems items={asFittedItems} />}
+              {asFittedContent.trim() ? (
+                <div className={usesSimproLayout(asFittedContent) ? 'simpro-html' : undefined} dangerouslySetInnerHTML={{ __html: renderDocumentHtml(asFittedContent) }} />
+              ) : null}
             </PrintSection>
             <div className="page-break" />
           </>
@@ -1670,6 +1822,21 @@ export function ProjectOMExportPage() {
             return (
               <>
                 {namedTechBundles.flatMap(bundle => {
+                  if (bundle.isProtected) {
+                    const isFirst = firstSection;
+                    firstSection = false;
+                    return [(
+                      <PrintSection
+                        key={bundle.key}
+                        title="Technical Documentation"
+                        subtitle={[bundle.system, bundle.title].filter(Boolean).join(' — ') || undefined}
+                        anchorId={isFirst ? 'print-section-technical_docs' : undefined}
+                        forcePageBreak={!isFirst}
+                      >
+                        <PrintProtectedTechDocNotice title={bundle.title} />
+                      </PrintSection>
+                    )];
+                  }
                   const columns = resolveTechDocColumns(bundle.colConfig, bundle.rows);
                   const landscape = printTableNeedsLandscape(columns.length);
                   const rowChunks = chunkTechDocRows(bundle.rows, landscape ? TECH_DOC_PRINT_ROWS_LANDSCAPE : TECH_DOC_PRINT_ROWS);
@@ -1970,17 +2137,48 @@ export function ProjectOMExportPage() {
 
 // ─── Technical Docs Section ───────────────────────────────────────────────────
 
-function TechnicalDocsSection({ devices, techDocState, techDocBundles, documentSystems }: {
+function TechnicalDocsSection({ devices, techDocState, techDocBundles, documentSystems, packReadOnly }: {
   devices: DeviceWithDatasheet[];
   techDocState: Partial<Record<string, { rows: { id: number; row_index: number; data: Record<string, string> }[]; colConfig: { key: string; display_name: string; visible: boolean; order: number }[] }>>;
   techDocBundles?: TechDocBundle[];
   documentSystems: ProjectSystem[];
+  packReadOnly?: boolean;
 }) {
-  const named = (techDocBundles ?? []).filter(bundle => bundle.rows.length > 0);
+  const named = (techDocBundles ?? []).filter(bundle => bundle.isProtected || bundle.rows.length > 0);
   if (named.length > 0) {
     return (
       <div className="space-y-6">
         {named.map(bundle => {
+          if (bundle.isProtected) {
+            return (
+              <div key={bundle.key} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="flex items-center gap-3 px-6 py-4 border-b border-slate-200 bg-slate-50">
+                  <Lock className="w-4 h-4 text-amber-700" />
+                  <div className="min-w-0 flex-1">
+                    <h3 className="font-semibold text-slate-800 truncate">{bundle.title}</h3>
+                    <p className="text-xs text-amber-800 font-semibold mt-0.5">Protected Document · Client Portal Access</p>
+                  </div>
+                  {bundle.system && <span className="text-xs text-slate-500">{bundle.system}</span>}
+                  {bundle.id && (!packReadOnly || bundle.visibleInPortal !== false) && (
+                    <button
+                      type="button"
+                      onClick={() => void openProtectedTechDoc({ id: bundle.id! })}
+                      className="text-xs px-2 py-1 border border-slate-200 text-slate-600 rounded-lg hover:bg-white"
+                    >
+                      Download
+                    </button>
+                  )}
+                </div>
+                <div className="px-6 py-5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">Password Protected</p>
+                  <p className="text-sm text-slate-600 leading-relaxed">{PROTECTED_DOC_NOTICE}</p>
+                  {bundle.includeInOm === false && !packReadOnly && (
+                    <p className="text-xs text-slate-400 mt-3">This document is hidden from the generated O&amp;M pack.</p>
+                  )}
+                </div>
+              </div>
+            );
+          }
           const visibleCols = resolveTechDocColumns(bundle.colConfig, bundle.rows);
           return (
             <div key={bundle.key} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
@@ -3014,6 +3212,91 @@ function UploadSection({ sectionId, title, description, upload, uploading, onUpl
   );
 }
 
+// ─── As Fitted record — screen view ───────────────────────────────────────────
+
+function AsFittedRecordSection({
+  content, onChange, onSave, saving, items, readOnly,
+}: {
+  content: string;
+  onChange: (value: string) => void;
+  onSave: () => void;
+  saving: boolean;
+  items: AsFittedItemRow[];
+  readOnly: boolean;
+}) {
+  return (
+    <div className="space-y-4">
+      {items.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-100 bg-slate-50">
+            <h3 className="text-sm font-semibold text-slate-800">Quoted vs as-fitted equipment</h3>
+            <p className="text-xs text-slate-500 mt-0.5">Installed quantities and statuses from the As Fitted page.</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                  <th className="px-6 py-2.5 font-semibold">Description</th>
+                  <th className="px-4 py-2.5 font-semibold">Quoted</th>
+                  <th className="px-4 py-2.5 font-semibold">Installed</th>
+                  <th className="px-4 py-2.5 font-semibold">Status</th>
+                  <th className="px-6 py-2.5 font-semibold">Change reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map(item => (
+                  <tr key={item.id} className="border-b border-slate-100 last:border-0">
+                    <td className="px-6 py-3 text-slate-800">{item.installed_description || item.quoted_description || 'Untitled line'}</td>
+                    <td className="px-4 py-3 text-slate-600 tabular-nums">{item.quoted_quantity ?? '—'}</td>
+                    <td className="px-4 py-3 text-slate-800 tabular-nums font-medium">{item.actual_installed_quantity ?? item.quoted_quantity ?? '—'}</td>
+                    <td className="px-4 py-3 text-slate-600">{humanizeOption(item.reconciliation_status)}</td>
+                    <td className="px-6 py-3 text-slate-500">{item.change_reason || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      <MarkdownDocEditor
+        title="As Fitted"
+        content={content}
+        onChange={onChange}
+        onSave={onSave}
+        saving={saving}
+        placeholder="Enter as-fitted works here (supports Markdown formatting)..."
+        emptyHint="No as-fitted record yet. It copies the Scope of Works on the As Fitted page, or you can type it here."
+        readOnly={readOnly}
+      />
+    </div>
+  );
+}
+
+function PrintAsFittedItems({ items }: { items: AsFittedItemRow[] }) {
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '1.25rem', fontSize: '0.78rem' }}>
+      <thead>
+        <tr style={{ background: PACIFIC_LABEL_GREY }}>
+          {['Description', 'Quoted', 'Installed', 'Status', 'Change reason'].map(h => (
+            <th key={h} style={{ textAlign: 'left', padding: '0.45rem 0.55rem', fontSize: '0.62rem', fontWeight: 700, color: PACIFIC_INK, textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: `2px solid ${PACIFIC_RED}` }}>{h}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {items.map(item => (
+          <tr key={item.id}>
+            <td style={{ padding: '0.4rem 0.55rem', borderBottom: '1px solid #ececec' }}>{item.installed_description || item.quoted_description || 'Untitled line'}</td>
+            <td style={{ padding: '0.4rem 0.55rem', borderBottom: '1px solid #ececec' }}>{item.quoted_quantity ?? '—'}</td>
+            <td style={{ padding: '0.4rem 0.55rem', borderBottom: '1px solid #ececec' }}>{item.actual_installed_quantity ?? item.quoted_quantity ?? '—'}</td>
+            <td style={{ padding: '0.4rem 0.55rem', borderBottom: '1px solid #ececec' }}>{humanizeOption(item.reconciliation_status)}</td>
+            <td style={{ padding: '0.4rem 0.55rem', borderBottom: '1px solid #ececec' }}>{item.change_reason || '—'}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 // ─── As Fitted Drawings — screen view ────────────────────────────────────────
 
 function AsFittedDrawingsSection({ drawings, pageImages, documentSystems }: {
@@ -3115,19 +3398,19 @@ function PrintAsFittedDrawings({ drawings, pageImages, documentSystems, skipAnch
       {drawingGroups.flatMap(group =>
         group.records.map(d => {
           const rendered = pageImages[d.file_url];
-          const anchorId = !anchorAssigned ? 'print-section-as_fitted' : undefined;
+          const anchorId = !anchorAssigned ? 'print-section-as_fitted_drawings' : undefined;
           if (!anchorAssigned) anchorAssigned = true;
           return (
             <div
               key={d.id}
+              id={anchorId}
               data-om-source-pdf={d.file_url}
               data-om-source-title={`${group.label} — ${d.title || d.file_name}`}
-              data-print-section="as_fitted"
+              data-print-section="as_fitted_drawings"
             >
               <PrintSection
                 title={`${group.label} — ${d.title || d.file_name}`}
                 subtitle={[d.drawing_number && `#${d.drawing_number}`, d.revision].filter(Boolean).join(' · ') || undefined}
-                anchorId={anchorId}
               >
               {rendered?.failed ? (
                 <div className="border border-slate-200 rounded p-6 text-center text-slate-500 text-sm">
@@ -3312,24 +3595,25 @@ interface TocEntry {
 
 function PrintTableOfContents({
   project,
-  hasScope, hasSchedule, hasTechDocs, hasMaintPlan,
-  hasCommissioning, hasHandover, hasAsFitted, hasDatasheets, hasUserManuals,
+  hasScope, hasAsFitted, hasSchedule, hasTechDocs, hasMaintPlan,
+  hasCommissioning, hasHandover, hasAsFittedDrawings, hasDatasheets, hasUserManuals,
 }: {
   project: any;
-  hasScope: boolean; hasSchedule: boolean; hasTechDocs: boolean; hasMaintPlan: boolean;
-  hasCommissioning: boolean; hasHandover: boolean; hasAsFitted: boolean;
+  hasScope: boolean; hasAsFitted: boolean; hasSchedule: boolean; hasTechDocs: boolean; hasMaintPlan: boolean;
+  hasCommissioning: boolean; hasHandover: boolean; hasAsFittedDrawings: boolean;
   hasDatasheets: boolean; hasUserManuals: boolean;
 }) {
   const entries: TocEntry[] = [];
   let num = 1;
 
   if (hasScope) entries.push({ label: 'Scope of Works', anchorId: 'print-section-scope', number: num++ });
+  if (hasAsFitted) entries.push({ label: 'As Fitted', anchorId: 'print-section-as_fitted', number: num++ });
   if (hasSchedule) entries.push({ label: 'Device Schedule', anchorId: 'print-section-schedule', number: num++ });
   if (hasTechDocs) entries.push({ label: 'Technical Documentation', anchorId: 'print-section-technical_docs', number: num++ });
   if (hasMaintPlan) entries.push({ label: 'Maintenance Plan', anchorId: 'print-section-maintenance_plan', number: num++ });
   if (hasCommissioning) entries.push({ label: 'Commissioning Pack', anchorId: 'print-section-commissioning', number: num++ });
   if (hasHandover) entries.push({ label: 'Handover Documents', anchorId: 'print-section-handover', number: num++ });
-  if (hasAsFitted) entries.push({ label: 'As Fitted', anchorId: 'print-section-as_fitted', number: num++ });
+  if (hasAsFittedDrawings) entries.push({ label: 'As Fitted Drawings', anchorId: 'print-section-as_fitted_drawings', number: num++ });
   if (hasDatasheets) entries.push({ label: 'Datasheets', anchorId: 'print-section-datasheets', number: num++ });
   if (hasUserManuals) entries.push({ label: 'User Manuals', anchorId: 'print-section-user_manuals', number: num++ });
 
@@ -3633,6 +3917,20 @@ function PrintTechnicalDocsLegacy({ devices }: { devices: DeviceWithDatasheet[] 
         ))}
       </tbody>
     </table>
+  );
+}
+
+function PrintProtectedTechDocNotice({ title }: { title: string }) {
+  return (
+    <div style={{ border: `1px solid ${PACIFIC_LABEL_GREY}`, borderRadius: '0.5rem', padding: '1.1rem 1.2rem' }}>
+      <p style={{ fontSize: '1rem', fontWeight: 700, color: PACIFIC_INK, margin: '0 0 0.35rem' }}>{title}</p>
+      <p style={{ fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: PACIFIC_RED, margin: '0 0 0.85rem' }}>
+        Password Protected
+      </p>
+      <p style={{ fontSize: '0.9rem', color: '#58595B', lineHeight: 1.55, margin: 0 }}>
+        {PROTECTED_DOC_NOTICE}
+      </p>
+    </div>
   );
 }
 

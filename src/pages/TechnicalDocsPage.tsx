@@ -9,13 +9,23 @@ import { getCategoryStyle, type ProjectSystem } from '../lib/systems';
 import {
   Upload, Download, X, Check, Eye, EyeOff, Trash2, Settings2,
   GripVertical, CheckCircle, AlertCircle, Table2, FileText,
-  Plus, Pencil, ExternalLink, ClipboardCopy,
+  Plus, Pencil, ExternalLink, ClipboardCopy, Lock,
 } from 'lucide-react';
 import migration039Sql from '../../supabase/migrations/20260917120000_039_tech_doc_documents.sql?raw';
+import migration041Sql from '../../supabase/migrations/20260918120000_041_tech_doc_protected.sql?raw';
 import {
   extractTableFromGrid,
   parseSpreadsheetFile,
 } from '../lib/techDocSpreadsheet';
+import {
+  missingProtectedColumns,
+  movePublicTechDocToPrivate,
+  omUploadsPath,
+  openProtectedTechDoc,
+  removeProtectedTechDoc,
+  TECH_DOCS_PRIVATE_BUCKET,
+  uploadProtectedTechDoc,
+} from '../lib/techDocProtected';
 
 const attemptedRefills = new Set<number>();
 
@@ -44,6 +54,10 @@ interface TechDocDocument {
   file_name: string | null;
   file_url: string | null;
   file_size: number | null;
+  is_protected: boolean;
+  visible_in_portal: boolean;
+  include_in_om: boolean;
+  storage_path: string | null;
   rows: TechDocRow[];
   colConfig: ColConfig[];
   configId: number | null;
@@ -55,11 +69,15 @@ interface PendingDescribe {
   document_type: string;
   system_name: string;
   notes: string;
+  is_protected: boolean;
+  visible_in_portal: boolean;
+  include_in_om: boolean;
 }
 
 const TECH_DOC_TYPES = [
   'Door Schedule',
   'Camera Schedule',
+  'Password Schedule',
   'IP Address Schedule',
   'Port / Patch Schedule',
   'Cable Schedule',
@@ -247,12 +265,6 @@ async function extractTablesFromPDF(file: File): Promise<ExtractedTable[]> {
   return tables;
 }
 
-function omUploadsPath(url: string | null | undefined): string | null {
-  if (!url) return null;
-  const match = url.match(/\/object\/(?:public|sign)\/om-uploads\/(.+?)(?:\?|$)/);
-  return match ? decodeURIComponent(match[1]) : null;
-}
-
 async function downloadTechDocFile(doc: TechDocDocument): Promise<Blob | null> {
   const path = omUploadsPath(doc.file_url);
   if (path) {
@@ -270,7 +282,7 @@ async function downloadTechDocFile(doc: TechDocDocument): Promise<Blob | null> {
 }
 
 async function refillDocumentFromFile(pid: number, doc: TechDocDocument): Promise<TechDocDocument> {
-  if (doc.id <= 0 || !doc.file_url) return doc;
+  if (doc.id <= 0 || doc.is_protected || !doc.file_url) return doc;
   try {
     const blob = await downloadTechDocFile(doc);
     if (!blob) return doc;
@@ -330,7 +342,9 @@ export default function TechnicalDocsPage() {
   const [documents, setDocuments] = useState<TechDocDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [needsMigration, setNeedsMigration] = useState(false);
+  const [needsProtectedMigration, setNeedsProtectedMigration] = useState(false);
   const [migrationCopied, setMigrationCopied] = useState(false);
+  const [protectedCopied, setProtectedCopied] = useState(false);
   const [modal, setModal] = useState<ModalState>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [pdfParsing, setPdfParsing] = useState(false);
@@ -354,6 +368,7 @@ export default function TechnicalDocsPage() {
   const [savingCols, setSavingCols] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const replaceFileRef = useRef<HTMLInputElement>(null);
 
   const includedDocuments = useMemo(() => {
     const included = new Set(projectSystems.map(system => system.name));
@@ -388,6 +403,14 @@ export default function TechnicalDocsPage() {
     } else {
       setNeedsMigration(false);
     }
+    if (docsRes.error && missingProtectedColumns(docsRes.error)) {
+      setNeedsProtectedMigration(true);
+    } else if (docsRes.data && docsRes.data.length > 0 && !('is_protected' in docsRes.data[0])) {
+      setNeedsProtectedMigration(true);
+    } else {
+      const probe = await supabase.from('tech_doc_documents').select('is_protected').eq('project_id', pid).limit(1);
+      setNeedsProtectedMigration(!!probe.error && missingProtectedColumns(probe.error));
+    }
 
     const rows = (rowData ?? []) as Array<TechDocRow & { system_type: string; document_id?: number | null }>;
     const cfgs = cfgData ?? [];
@@ -406,6 +429,10 @@ export default function TechnicalDocsPage() {
         file_name: doc.file_name ?? null,
         file_url: doc.file_url ?? null,
         file_size: doc.file_size ?? null,
+        is_protected: !!doc.is_protected,
+        visible_in_portal: doc.visible_in_portal !== false,
+        include_in_om: doc.include_in_om !== false,
+        storage_path: doc.storage_path ?? null,
         rows: docRows,
         colConfig: (cfg?.columns as ColConfig[]) ?? [],
         configId: cfg?.id ?? null,
@@ -456,6 +483,10 @@ export default function TechnicalDocsPage() {
           file_name: null,
           file_url: null,
           file_size: null,
+          is_protected: false,
+          visible_in_portal: true,
+          include_in_om: true,
+          storage_path: null,
           rows: sysRows,
           colConfig: (cfg?.columns as ColConfig[]) ?? [],
           configId: cfg?.id ?? null,
@@ -465,7 +496,7 @@ export default function TechnicalDocsPage() {
 
     const filled: TechDocDocument[] = [];
     for (const doc of built) {
-      if (doc.rows.length === 0 && doc.file_url && doc.id > 0 && !attemptedRefills.has(doc.id)) {
+      if (doc.rows.length === 0 && doc.file_url && doc.id > 0 && !doc.is_protected && !attemptedRefills.has(doc.id)) {
         attemptedRefills.add(doc.id);
         filled.push(await refillDocumentFromFile(pid, doc));
       } else {
@@ -497,6 +528,9 @@ export default function TechnicalDocsPage() {
       document_type: '',
       system_name: activeSystem || projectSystems[0]?.name || '',
       notes: '',
+      is_protected: false,
+      visible_in_portal: true,
+      include_in_om: true,
     }));
     setPdfError(null);
     setPendingQueue(queued);
@@ -510,9 +544,13 @@ export default function TechnicalDocsPage() {
   const startParseFromDescribe = async () => {
     const pending = pendingQueue[pendingIndex];
     if (!pending) return;
-    const file = pending.file;
     setPendingMeta(pending);
     setPdfError(null);
+    if (pending.is_protected) {
+      await saveProtectedDocument(pending);
+      return;
+    }
+    const file = pending.file;
     const isPdf = file.name.toLowerCase().endsWith('.pdf');
     if (isPdf) {
       setPdfParsing(true);
@@ -569,6 +607,47 @@ export default function TechnicalDocsPage() {
     setImportColCfg(colCfg);
     if (modal?.type === 'pdf_select') {
       setModal({ type: 'import', system: modal.system, rawHeaders: table.headers, previewRows: table.rows, file: modal.file });
+    }
+  };
+
+  const saveProtectedDocument = async (pending: PendingDescribe) => {
+    if (!pid) return;
+    setImporting(true);
+    try {
+      const stored = await uploadProtectedTechDoc(pid, pending.file);
+      const selectedSystem = projectSystems.find(s => s.name === pending.system_name) ?? null;
+      const { data: inserted, error: docErr } = await supabase.from('tech_doc_documents').insert({
+        project_id: pid,
+        title: (pending.title || pending.file.name).trim(),
+        document_type: pending.document_type || null,
+        notes: pending.notes?.trim() || null,
+        file_name: stored.file_name,
+        file_url: null,
+        file_size: stored.file_size,
+        is_protected: true,
+        visible_in_portal: pending.visible_in_portal,
+        include_in_om: pending.include_in_om,
+        storage_bucket: TECH_DOCS_PRIVATE_BUCKET,
+        storage_path: stored.storage_path,
+        ...systemAssignmentFields(selectedSystem ?? { name: pending.system_name, id: undefined }),
+      }).select('id').single();
+      if (docErr) {
+        await removeProtectedTechDoc(stored.storage_path);
+        if (missingProtectedColumns(docErr) || missingTable(docErr)) {
+          setNeedsProtectedMigration(true);
+          throw new Error('Paste 041 SQL in Supabase, then upload again so protected documents can be stored privately.');
+        }
+        throw docErr;
+      }
+      const documentId = Number(inserted?.id);
+      if (!documentId) throw new Error('Document was created without an id.');
+      await load();
+      setExpandedDocId(documentId);
+      advanceQueue();
+    } catch (err: any) {
+      alert('Upload failed: ' + err.message);
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -701,6 +780,7 @@ export default function TechnicalDocsPage() {
       await supabase.from('tech_doc_rows').delete().eq('document_id', doc.id);
       await supabase.from('tech_doc_column_configs').delete().eq('document_id', doc.id);
       await supabase.from('tech_doc_documents').delete().eq('id', doc.id);
+      if (doc.storage_path) await removeProtectedTechDoc(doc.storage_path);
       if (doc.file_url) {
         try {
           const url = new URL(doc.file_url);
@@ -715,20 +795,80 @@ export default function TechnicalDocsPage() {
   };
 
   const saveDocumentMeta = async () => {
-    if (!editingDoc || editingDoc.id <= 0) return;
+    if (!editingDoc || editingDoc.id <= 0 || !pid) return;
     const selectedSystem = projectSystems.find(s => s.name === editingDoc.system_type) ?? null;
     const fields = systemAssignmentFields(selectedSystem ?? (editingDoc.system_type ? { name: editingDoc.system_type, id: undefined } : null));
-    await supabase.from('tech_doc_documents').update({
+    let storagePath = editingDoc.storage_path;
+    let fileUrl = editingDoc.file_url;
+    if (editingDoc.is_protected && !storagePath && fileUrl) {
+      const moved = await movePublicTechDocToPrivate({
+        projectId: pid,
+        fileUrl,
+        fileName: editingDoc.file_name,
+      });
+      if (moved) {
+        storagePath = moved.storage_path;
+        fileUrl = null;
+      }
+    }
+    const { error } = await supabase.from('tech_doc_documents').update({
       title: editingDoc.title,
       document_type: editingDoc.document_type,
       notes: editingDoc.notes,
+      is_protected: editingDoc.is_protected,
+      visible_in_portal: editingDoc.visible_in_portal,
+      include_in_om: editingDoc.include_in_om,
+      storage_bucket: storagePath ? TECH_DOCS_PRIVATE_BUCKET : null,
+      storage_path: storagePath,
+      file_url: fileUrl,
       ...fields,
     }).eq('id', editingDoc.id);
+    if (error) {
+      if (missingProtectedColumns(error)) setNeedsProtectedMigration(true);
+      alert('Save failed: ' + error.message);
+      return;
+    }
     if (fields.system_type) {
       await supabase.from('tech_doc_rows').update({ system_type: fields.system_type }).eq('document_id', editingDoc.id);
     }
     setEditingDoc(null);
     await load();
+  };
+
+  const replaceDocumentFile = async (file: File) => {
+    if (!editingDoc || editingDoc.id <= 0 || !pid) return;
+    try {
+      const previousPath = editingDoc.storage_path;
+      const stored = await uploadProtectedTechDoc(pid, file);
+      const { error } = await supabase.from('tech_doc_documents').update({
+        file_name: stored.file_name,
+        file_size: stored.file_size,
+        file_url: null,
+        storage_bucket: TECH_DOCS_PRIVATE_BUCKET,
+        storage_path: stored.storage_path,
+        is_protected: editingDoc.is_protected,
+      }).eq('id', editingDoc.id);
+      if (error) {
+        await removeProtectedTechDoc(stored.storage_path);
+        throw error;
+      }
+      if (previousPath && previousPath !== stored.storage_path) await removeProtectedTechDoc(previousPath);
+      if (editingDoc.file_url) {
+        const publicPath = omUploadsPath(editingDoc.file_url);
+        if (publicPath) await supabase.storage.from('om-uploads').remove([publicPath]);
+      }
+      setEditingDoc({
+        ...editingDoc,
+        file_name: stored.file_name,
+        file_size: stored.file_size,
+        file_url: null,
+        storage_path: stored.storage_path,
+      });
+      await load();
+    } catch (err: any) {
+      if (missingProtectedColumns(err)) setNeedsProtectedMigration(true);
+      alert('Replace failed: ' + (err.message ?? err));
+    }
   };
 
   // ── Column config ────────────────────────────────────────────────────────────
@@ -788,6 +928,16 @@ export default function TechnicalDocsPage() {
     }
   };
 
+  const copyProtectedMigration = async () => {
+    try {
+      await navigator.clipboard.writeText(migration041Sql);
+      setProtectedCopied(true);
+      window.setTimeout(() => setProtectedCopied(false), 2500);
+    } catch {
+      alert('Clipboard is blocked. Copy supabase/migrations/20260918120000_041_tech_doc_protected.sql manually.');
+    }
+  };
+
   // ── Render ────────────────────────────────────────────────────────────────────
 
   if (loading) {
@@ -832,6 +982,16 @@ export default function TechnicalDocsPage() {
           <button type="button" onClick={() => void copyMigration()} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-cyan-600 text-white hover:bg-cyan-700">
             {migrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
             {migrationCopied ? 'Copied 039 — paste in Supabase' : 'Copy 039 SQL'}
+          </button>
+        </div>
+      )}
+
+      {needsProtectedMigration && (
+        <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 space-y-2">
+          <p className="font-semibold">Paste 041 in Supabase to store password-protected technical documents privately.</p>
+          <button type="button" onClick={() => void copyProtectedMigration()} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-cyan-600 text-white hover:bg-cyan-700">
+            {protectedCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
+            {protectedCopied ? 'Copied 041 — paste in Supabase' : 'Copy 041 SQL'}
           </button>
         </div>
       )}
@@ -905,26 +1065,40 @@ export default function TechnicalDocsPage() {
             return (
               <div key={doc.id} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                 <div className="flex items-center gap-4 px-5 py-4">
-                  <div className="w-9 h-9 bg-cyan-50 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <FileText className="w-4 h-4 text-cyan-700" />
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${doc.is_protected ? 'bg-amber-50' : 'bg-cyan-50'}`}>
+                    {doc.is_protected ? <Lock className="w-4 h-4 text-amber-700" /> : <FileText className="w-4 h-4 text-cyan-700" />}
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-slate-800 truncate">{doc.title}</p>
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-0.5 text-xs text-slate-500">
+                      {doc.is_protected && <span className="bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-semibold">Protected</span>}
+                      {doc.is_protected && <span>Client Portal Access</span>}
+                      {!doc.include_in_om && <span className="bg-slate-100 px-1.5 py-0.5 rounded">Hidden from O&amp;M</span>}
+                      {!doc.visible_in_portal && <span className="bg-slate-100 px-1.5 py-0.5 rounded">Hidden from portal</span>}
                       {doc.document_type && <span className="bg-slate-100 px-1.5 py-0.5 rounded">{doc.document_type}</span>}
                       {doc.system_type && <span>{doc.system_type}</span>}
-                      <span>{doc.rows.length} rows</span>
+                      {!doc.is_protected && <span>{doc.rows.length} rows</span>}
                       {doc.file_name && <span className="truncate max-w-xs">{doc.file_name}</span>}
                       {doc.notes && <span className="truncate max-w-xs">{doc.notes}</span>}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    {doc.file_url && (
-                      <a href={doc.file_url} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-100 inline-flex items-center gap-1">
-                        <ExternalLink className="w-3 h-3" />File
-                      </a>
+                    {(doc.storage_path || doc.file_url) && (
+                      doc.is_protected || doc.storage_path ? (
+                        <button
+                          type="button"
+                          onClick={() => void openProtectedTechDoc({ id: doc.id, storagePath: doc.storage_path, fileName: doc.file_name })}
+                          className="text-xs px-2 py-1 border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-100 inline-flex items-center gap-1"
+                        >
+                          <Download className="w-3 h-3" />File
+                        </button>
+                      ) : (
+                        <a href={doc.file_url ?? undefined} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-100 inline-flex items-center gap-1">
+                          <ExternalLink className="w-3 h-3" />File
+                        </a>
+                      )
                     )}
-                    {doc.rows.length === 0 && doc.file_url && pid && (
+                    {!doc.is_protected && doc.rows.length === 0 && doc.file_url && pid && (
                       <button
                         type="button"
                         onClick={async () => {
@@ -938,16 +1112,18 @@ export default function TechnicalDocsPage() {
                         Reload table
                       </button>
                     )}
+                    {!doc.is_protected && (
                     <button type="button" onClick={() => setExpandedDocId(expanded ? null : doc.id)} className={`text-xs px-2 py-1 border rounded-lg ${expanded ? 'bg-cyan-50 border-cyan-300 text-cyan-700' : 'border-slate-200 text-slate-500 hover:bg-slate-100'}`}>
                       {expanded ? 'Hide table' : 'View table'}
                     </button>
-                    <button type="button" onClick={() => openColConfig(doc)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><Settings2 className="w-3.5 h-3.5" /></button>
-                    <button type="button" onClick={() => exportCSV(doc)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><Download className="w-3.5 h-3.5" /></button>
+                    )}
+                    {!doc.is_protected && <button type="button" onClick={() => openColConfig(doc)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><Settings2 className="w-3.5 h-3.5" /></button>}
+                    {!doc.is_protected && <button type="button" onClick={() => exportCSV(doc)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><Download className="w-3.5 h-3.5" /></button>}
                     {doc.id > 0 && <button type="button" onClick={() => setEditingDoc(doc)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><Pencil className="w-3.5 h-3.5" /></button>}
                     <button type="button" onClick={() => void deleteDocument(doc)} className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg"><Trash2 className="w-3.5 h-3.5" /></button>
                   </div>
                 </div>
-                {expanded && (
+                {expanded && !doc.is_protected && (
                   visibleCols.length === 0 ? (
                     <p className="px-5 pb-4 text-sm text-slate-400">No columns configured.</p>
                   ) : (
@@ -1031,11 +1207,35 @@ export default function TechnicalDocsPage() {
                 <label className="block text-xs font-semibold text-slate-600 mb-1.5">Notes</label>
                 <textarea value={currentPending.notes} onChange={e => updateCurrentPending({ notes: e.target.value })} rows={2} className={`${ic} resize-none`} placeholder="Optional description" />
               </div>
+              <label className="flex items-start gap-3 rounded-xl border border-slate-200 px-3 py-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 rounded border-slate-300"
+                  checked={currentPending.is_protected}
+                  onChange={e => updateCurrentPending({ is_protected: e.target.checked })}
+                />
+                <span>
+                  <span className="block text-sm font-semibold text-slate-800">Password Protected / Sensitive Document</span>
+                  <span className="block text-xs text-slate-500 mt-0.5">Stored for authorised Client Portal users. The original file is not embedded in the downloaded O&amp;M.</span>
+                </span>
+              </label>
+              {currentPending.is_protected && (
+                <div className="space-y-2 pl-1">
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input type="checkbox" className="rounded border-slate-300" checked={currentPending.include_in_om} onChange={e => updateCurrentPending({ include_in_om: e.target.checked })} />
+                    Reference this document in the O&amp;M
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input type="checkbox" className="rounded border-slate-300" checked={currentPending.visible_in_portal} onChange={e => updateCurrentPending({ visible_in_portal: e.target.checked })} />
+                    Visible in the Client Portal
+                  </label>
+                </div>
+              )}
             </div>
             <div className="px-6 pb-6 flex justify-end gap-3">
               <button onClick={() => { setPendingQueue([]); setPendingIndex(0); }} className="px-4 py-2 text-slate-600 font-medium text-sm">Cancel</button>
-              <button onClick={() => void startParseFromDescribe()} disabled={!currentPending.title.trim() || pdfParsing} className="inline-flex items-center gap-2 px-5 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 font-medium text-sm disabled:opacity-40">
-                Continue
+              <button onClick={() => void startParseFromDescribe()} disabled={!currentPending.title.trim() || pdfParsing || importing} className="inline-flex items-center gap-2 px-5 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 font-medium text-sm disabled:opacity-40">
+                {importing ? 'Saving…' : currentPending.is_protected ? 'Upload protected file' : 'Continue'}
               </button>
             </div>
           </div>
@@ -1055,6 +1255,42 @@ export default function TechnicalDocsPage() {
               {projectSystems.map(system => <option key={system.name} value={system.name}>{system.name}</option>)}
             </select>
             <textarea value={editingDoc.notes ?? ''} onChange={e => setEditingDoc({ ...editingDoc, notes: e.target.value })} rows={2} className={`${ic} resize-none`} />
+            <label className="flex items-start gap-3 rounded-xl border border-slate-200 px-3 py-3 cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5 rounded border-slate-300"
+                checked={editingDoc.is_protected}
+                onChange={e => setEditingDoc({ ...editingDoc, is_protected: e.target.checked })}
+              />
+              <span>
+                <span className="block text-sm font-semibold text-slate-800">Password Protected / Sensitive Document</span>
+                <span className="block text-xs text-slate-500 mt-0.5">The original file is kept for authorised Client Portal users and is not embedded in the O&amp;M.</span>
+              </span>
+            </label>
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input type="checkbox" className="rounded border-slate-300" checked={editingDoc.include_in_om} onChange={e => setEditingDoc({ ...editingDoc, include_in_om: e.target.checked })} />
+              Reference this document in the O&amp;M
+            </label>
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input type="checkbox" className="rounded border-slate-300" checked={editingDoc.visible_in_portal} onChange={e => setEditingDoc({ ...editingDoc, visible_in_portal: e.target.checked })} />
+              Visible in the Client Portal
+            </label>
+            <div>
+              <input
+                ref={replaceFileRef}
+                type="file"
+                className="hidden"
+                onChange={e => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (file) void replaceDocumentFile(file);
+                }}
+              />
+              <button type="button" onClick={() => replaceFileRef.current?.click()} className="text-sm font-medium px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">
+                Replace document
+              </button>
+              {editingDoc.file_name && <p className="text-xs text-slate-400 mt-1.5">{editingDoc.file_name}</p>}
+            </div>
             <div className="flex justify-end gap-2">
               <button onClick={() => setEditingDoc(null)} className="px-3 py-1.5 text-sm text-slate-600 border border-slate-300 rounded-lg">Cancel</button>
               <button onClick={() => void saveDocumentMeta()} className="px-3 py-1.5 text-sm bg-cyan-600 text-white rounded-lg">Save</button>
