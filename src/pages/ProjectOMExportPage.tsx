@@ -262,7 +262,7 @@ const SECTIONS: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: 'cover',              label: 'Cover Page',           icon: BookOpen },
   { id: 'scope',              label: 'Scope of Works',       icon: FileText },
   { id: 'as_fitted',          label: 'As Fitted',            icon: ClipboardList },
-  { id: 'schedule',           label: 'Device Schedule',      icon: ClipboardCheck },
+  { id: 'schedule',           label: 'Device Schedule and Warranties',      icon: ClipboardCheck },
   { id: 'technical_docs',     label: 'Technical Docs',       icon: Wifi },
   { id: 'maintenance_plan',   label: 'Maintenance Plan',     icon: CalendarCheck },
   { id: 'commissioning',      label: 'Commissioning Pack',   icon: CheckCircle },
@@ -1296,7 +1296,7 @@ export function ProjectOMExportPage() {
         'print-section-toc':              'Table of Contents',
         'print-section-cover':            'Cover Page',
         'print-section-scope':            'Scope of Works',
-        'print-section-schedule':         'Device Schedule',
+        'print-section-schedule':         'Device Schedule and Warranties',
         'print-section-technical_docs':   'Technical Documentation',
         'print-section-maintenance_plan': 'Maintenance Plan',
         'print-section-commissioning':    'Commissioning Pack',
@@ -1815,7 +1815,7 @@ export function ProjectOMExportPage() {
 
         {devices.length > 0 && (
           <>
-            <PrintSection title="Device Schedule" anchorId="print-section-schedule">
+            <PrintSection title="Device Schedule and Warranties" anchorId="print-section-schedule">
               {systemGroups.map(g => <PrintDeviceTable key={g.system} system={g.system} devices={g.devices} />)}
             </PrintSection>
             <div className="page-break" />
@@ -3713,7 +3713,7 @@ function PrintTableOfContents({
 
   if (hasScope) entries.push({ label: 'Scope of Works', anchorId: 'print-section-scope', number: num++ });
   if (hasAsFitted) entries.push({ label: 'As Fitted', anchorId: 'print-section-as_fitted', number: num++ });
-  if (hasSchedule) entries.push({ label: 'Device Schedule', anchorId: 'print-section-schedule', number: num++ });
+  if (hasSchedule) entries.push({ label: 'Device Schedule and Warranties', anchorId: 'print-section-schedule', number: num++ });
   if (hasTechDocs) entries.push({ label: 'Technical Documentation', anchorId: 'print-section-technical_docs', number: num++ });
   if (hasMaintPlan) entries.push({ label: 'Maintenance Plan', anchorId: 'print-section-maintenance_plan', number: num++ });
   if (hasCommissioning) entries.push({ label: 'Commissioning Pack', anchorId: 'print-section-commissioning', number: num++ });

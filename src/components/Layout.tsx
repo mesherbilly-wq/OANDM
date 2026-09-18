@@ -16,7 +16,7 @@ import { useUserAccess } from '../lib/userAccess';
 const PROJECT_MODULES = [
   { name: 'Overview',           slug: 'info',          icon: Info },
   { name: 'Document Mgmt',      slug: 'documents',     icon: FileText },
-  { name: 'Device Schedule',    slug: 'schedule',      icon: ClipboardCheck },
+  { name: 'Device Schedule and Warranties',    slug: 'schedule',      icon: ClipboardCheck },
   { name: 'Systems',            slug: 'systems',       icon: Cpu,           hasChildren: true },
   { name: 'Scope of Works',     slug: 'scope',         icon: ScrollText },
   { name: 'As Fitted',          slug: 'as-fitted-scope', icon: ClipboardList },
@@ -148,7 +148,7 @@ export function Layout({ companyName, userEmail, onSignOut }: {
                               onClick={() => setSidebarOpen(false)}
                               className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-slate-500 hover:text-slate-300 hover:bg-slate-800/60"
                             >
-                              <span className="font-medium">Set types on Device Schedule</span>
+                              <span className="font-medium">Set types on Device Schedule and Warranties</span>
                             </Link>
                           ) : (
                             populatedSystems.map(system => {

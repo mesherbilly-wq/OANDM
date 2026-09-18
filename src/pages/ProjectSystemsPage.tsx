@@ -686,7 +686,7 @@ export default function ProjectSystemsPage() {
             <div className="px-5 py-3.5 text-sm text-slate-500">
               No systems yet — set system types on{' '}
               <Link to={`/projects/${id}/schedule`} className="text-cyan-700 font-medium hover:underline">
-                Device Schedule
+                Device Schedule and Warranties
               </Link>
               , then they appear here.
             </div>
