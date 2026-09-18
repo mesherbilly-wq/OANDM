@@ -2,6 +2,7 @@ import type { SystemCategory } from '../types';
 import type { GroupedEquipment } from './deviceGrouping';
 import { getDevicePrefix } from './deviceLabel';
 import { clampLineQuantity } from './devicePersistConstants';
+import { appendProductFieldNotes, extractProductCategoryFromNotes } from './deviceProductFields';
 import { saveProjectSystemRecord } from './projectSystemsDb';
 import { notifyProjectDevicesChanged, resolveDeviceCategory } from './systems';
 import { supabase } from './supabase';
@@ -52,6 +53,7 @@ export interface EquipmentGroupUpdates {
   notes?: string | null;
   ai_confidence?: number | null;
   quantity?: number;
+  warranty_years?: number | null;
   system_type?: string | null;
   project_system_id?: number | null;
   system_category?: SystemCategory | null;
@@ -82,8 +84,24 @@ export async function updateEquipmentGroup(
     if (error) return error.message;
   }
 
+  if (updates.warranty_years !== undefined) {
+    const sharedNotes = updates.notes !== undefined ? updates.notes : undefined;
+    for (const device of group.devices) {
+      const sourceNotes = sharedNotes !== undefined ? sharedNotes : device.notes;
+      const notes = appendProductFieldNotes(
+        sourceNotes,
+        extractProductCategoryFromNotes(sourceNotes),
+        updates.warranty_years,
+      );
+      const { error } = await supabase.from('devices').update({ notes }).eq('id', device.id);
+      if (error) return error.message;
+    }
+  }
+
   if (updates.quantity === undefined) {
-    if (Object.keys(fieldUpdates).length > 0) notifyProjectDevicesChanged();
+    if (Object.keys(fieldUpdates).length > 0 || updates.warranty_years !== undefined) {
+      notifyProjectDevicesChanged();
+    }
     return null;
   }
 

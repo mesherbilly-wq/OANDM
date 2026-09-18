@@ -27,7 +27,7 @@ import { ManufacturerSuggestHelper } from '../components/ManufacturerSuggestHelp
 import { useProject } from './ProjectLayout';
 import type { ManufacturerSuggestion } from '../lib/manufacturerSuggestion';
 import { saveProductModelPairIfNew } from '../lib/productModelPairing';
-import { formatWarrantyYears, getDeviceProductDescription, extractProductCategoryFromNotes, extractWarrantyYearsFromNotes } from '../lib/deviceProductFields';
+import { formatWarrantyYears, getDeviceProductDescription, extractProductCategoryFromNotes, extractWarrantyYearsFromNotes, appendProductFieldNotes, parseWarrantyYearsInput } from '../lib/deviceProductFields';
 import {
   enrichDeviceWithAutoManufacturer,
   extractPendingManufacturerSuggestion,
@@ -62,8 +62,8 @@ function getDevicePendingSuggestion(device: Device): PendingManufacturerSuggesti
   return extractPendingManufacturerSuggestion(device.notes);
 }
 
-type GroupedField = 'description' | 'manufacturer' | 'model' | 'quantity' | 'location';
-type IndividualField = 'description' | 'manufacturer' | 'model' | 'location';
+type GroupedField = 'description' | 'manufacturer' | 'model' | 'quantity' | 'location' | 'warranty';
+type IndividualField = 'description' | 'manufacturer' | 'model' | 'location' | 'warranty';
 
 type EditingCell =
   | { mode: 'grouped'; rowKey: string; field: GroupedField; draft: string }
@@ -496,6 +496,11 @@ export default function ProjectSystemsPage() {
         case 'location':
           updates.location = trimmed || null;
           break;
+        case 'warranty': {
+          const { parsed, valid } = parseWarrantyYearsInput(editingCell.draft);
+          if (valid) updates.warranty_years = parsed;
+          break;
+        }
       }
 
       if (Object.keys(updates).length > 0) {
@@ -531,7 +536,7 @@ export default function ProjectSystemsPage() {
       }
 
       const hadManufacturer = Boolean(device.manufacturer?.trim());
-      const updates: Partial<Pick<Device, 'model_name' | 'manufacturer' | 'model_number' | 'location'>> = {};
+      const updates: Partial<Pick<Device, 'model_name' | 'manufacturer' | 'model_number' | 'location' | 'notes'>> = {};
       switch (editingCell.field) {
         case 'description':
           updates.model_name = trimmed || null;
@@ -546,6 +551,17 @@ export default function ProjectSystemsPage() {
         case 'location':
           updates.location = trimmed || null;
           break;
+        case 'warranty': {
+          const { parsed, valid } = parseWarrantyYearsInput(editingCell.draft);
+          if (valid) {
+            updates.notes = appendProductFieldNotes(
+              device.notes,
+              extractProductCategoryFromNotes(device.notes),
+              parsed,
+            );
+          }
+          break;
+        }
       }
 
       if (Object.keys(updates).length > 0) {
@@ -922,7 +938,7 @@ export default function ProjectSystemsPage() {
                       {row.product_category || '—'}
                     </td>
                     <td className="px-4 py-3 text-slate-600">
-                      {formatWarrantyYears(row.warranty_years)}
+                      {renderGroupedCell(row, 'warranty', formatWarrantyYears(row.warranty_years))}
                     </td>
                     <td className="px-4 py-3 font-semibold text-slate-900">
                       {renderGroupedCell(row, 'quantity', String(row.quantity))}
@@ -1013,7 +1029,7 @@ export default function ProjectSystemsPage() {
                       {extractProductCategoryFromNotes(d.notes) || '—'}
                     </td>
                     <td className="px-4 py-3 text-slate-600">
-                      {formatWarrantyYears(extractWarrantyYearsFromNotes(d.notes))}
+                      {renderIndividualCell(d, 'warranty', formatWarrantyYears(extractWarrantyYearsFromNotes(d.notes)))}
                     </td>
                     <td className="px-4 py-3 text-slate-500 max-w-[180px]">
                       {renderIndividualCell(d, 'location', d.location ?? '')}

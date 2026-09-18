@@ -5,7 +5,13 @@ import { supabase } from '../lib/supabase';
 import { groupDevices, getGroupRowKey, type GroupedEquipment } from '../lib/deviceGrouping';
 import { fetchProjectDevices } from '../lib/fetchProjectDevices';
 import { assignDevicesToNamedSystem, fetchProjectSystems, loadProjectSystemsForProject } from '../lib/projectSystemsDb';
-import { getDeviceProductDescription } from '../lib/deviceProductFields';
+import {
+  appendProductFieldNotes,
+  extractProductCategoryFromNotes,
+  extractWarrantyYearsFromNotes,
+  getDeviceProductDescription,
+  parseWarrantyYearsInput,
+} from '../lib/deviceProductFields';
 import {
   inferSystemTypeName,
   shouldAutoAssignSystemType,
@@ -98,6 +104,7 @@ export default function DeviceSchedulePage() {
   const [editDevice, setEditDevice] = useState<Device | null>(null);
   const [qtyDrafts, setQtyDrafts] = useState<Record<string, string>>({});
   const [descDrafts, setDescDrafts] = useState<Record<string, string>>({});
+  const [warrantyDrafts, setWarrantyDrafts] = useState<Record<string, string>>({});
   const [savingRowKey, setSavingRowKey] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const autoAssigningRef = useRef(false);
@@ -380,6 +387,64 @@ export default function DeviceSchedulePage() {
     await fetchDevices({ silent: true });
   };
 
+  const commitGroupWarranty = async (group: GroupedEquipment) => {
+    if (!projectIdNum) return;
+    const key = getGroupRowKey(group);
+    const raw = warrantyDrafts[key];
+    if (raw === undefined) return;
+    const { parsed, valid } = parseWarrantyYearsInput(raw);
+    if (!valid) {
+      clearDraft(setWarrantyDrafts, key);
+      return;
+    }
+    if (parsed === (group.warranty_years ?? null)) {
+      clearDraft(setWarrantyDrafts, key);
+      return;
+    }
+    setSavingRowKey(key);
+    setSaveError(null);
+    const error = await updateEquipmentGroup(projectIdNum, group, { warranty_years: parsed }, { ...prefixCounters });
+    setSavingRowKey(null);
+    if (error) {
+      setSaveError(error);
+      return;
+    }
+    clearDraft(setWarrantyDrafts, key);
+    await fetchDevices({ silent: true });
+  };
+
+  const commitDeviceWarranty = async (device: Device) => {
+    const key = `device:${device.id}`;
+    const raw = warrantyDrafts[key];
+    if (raw === undefined) return;
+    const { parsed, valid } = parseWarrantyYearsInput(raw);
+    if (!valid) {
+      clearDraft(setWarrantyDrafts, key);
+      return;
+    }
+    const current = extractWarrantyYearsFromNotes(device.notes);
+    if (parsed === current) {
+      clearDraft(setWarrantyDrafts, key);
+      return;
+    }
+    const notes = appendProductFieldNotes(
+      device.notes,
+      extractProductCategoryFromNotes(device.notes),
+      parsed,
+    );
+    setSavingRowKey(key);
+    setSaveError(null);
+    const { error } = await supabase.from('devices').update({ notes }).eq('id', device.id);
+    setSavingRowKey(null);
+    if (error) {
+      setSaveError(error.message);
+      return;
+    }
+    clearDraft(setWarrantyDrafts, key);
+    notifyProjectDevicesChanged();
+    applyDevicePatch([device.id], { notes });
+  };
+
   const clearDraft = (setter: React.Dispatch<React.SetStateAction<Record<string, string>>>, key: string) => {
     setter(current => {
       const next = { ...current };
@@ -608,6 +673,21 @@ export default function DeviceSchedulePage() {
           <td className="px-4 py-3 text-gray-700">{device.mac_address || '-'}</td>
           <td className="px-4 py-3 text-gray-700">{device.model_number || '-'}</td>
           <td className="px-4 py-3">
+            <input
+              type="number"
+              min={0}
+              className="w-20 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-900"
+              placeholder="Years"
+              value={warrantyDrafts[`device:${device.id}`] ?? (extractWarrantyYearsFromNotes(device.notes) != null ? String(extractWarrantyYearsFromNotes(device.notes)) : '')}
+              disabled={savingRowKey === `device:${device.id}`}
+              onChange={event => setWarrantyDrafts(current => ({ ...current, [`device:${device.id}`]: event.target.value }))}
+              onBlur={() => void commitDeviceWarranty(device)}
+              onKeyDown={event => {
+                if (event.key === 'Enter') event.currentTarget.blur();
+              }}
+            />
+          </td>
+          <td className="px-4 py-3">
             <span className={`text-xs px-2 py-1 rounded-full ${
               device.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'
             }`}>
@@ -765,7 +845,7 @@ export default function DeviceSchedulePage() {
             <table className="w-full">
               <thead>
                 <tr className="bg-gray-100 border-b border-gray-200">
-                  {['System Type', 'Description', 'Manufacturer', 'Model', 'Quantity', ''].map(h => (
+                  {['System Type', 'Description', 'Manufacturer', 'Model', 'Quantity', 'Warranty', ''].map(h => (
                     <th key={h || 'actions'} className="px-4 py-3 text-left font-semibold text-gray-900">{h}</th>
                   ))}
                 </tr>
@@ -818,6 +898,21 @@ export default function DeviceSchedulePage() {
                         />
                       </td>
                       <td className="px-4 py-3">
+                        <input
+                          type="number"
+                          min={0}
+                          className="w-20 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-900"
+                          placeholder="Years"
+                          value={warrantyDrafts[rowKey] ?? (row.warranty_years != null ? String(row.warranty_years) : '')}
+                          disabled={savingRowKey === rowKey}
+                          onChange={event => setWarrantyDrafts(current => ({ ...current, [rowKey]: event.target.value }))}
+                          onBlur={() => void commitGroupWarranty(row)}
+                          onKeyDown={event => {
+                            if (event.key === 'Enter') event.currentTarget.blur();
+                          }}
+                        />
+                      </td>
+                      <td className="px-4 py-3">
                         <div className="flex items-center justify-end gap-1">
                           <button
                             type="button"
@@ -858,6 +953,7 @@ export default function DeviceSchedulePage() {
                 <th className="px-4 py-3 text-left font-semibold text-gray-900">Type</th>
                 <th className="px-4 py-3 text-left font-semibold text-gray-900">Manufacturer</th>
                 <th className="px-4 py-3 text-left font-semibold text-gray-900">Model</th>
+                <th className="px-4 py-3 text-left font-semibold text-gray-900">Warranty</th>
                 <th className="px-4 py-3 text-left font-semibold text-gray-900">Status</th>
                 <th className="px-4 py-3 text-left font-semibold text-gray-900">Actions</th>
               </tr>

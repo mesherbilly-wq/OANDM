@@ -40,6 +40,16 @@ export function extractWarrantyYearsFromNotes(notes: string | null | undefined):
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
+export function parseWarrantyYearsInput(raw: string): { parsed: number | null; valid: boolean } {
+  const trimmed = raw.trim();
+  if (!trimmed) return { parsed: null, valid: true };
+  const match = trimmed.match(/^(\d+)\s*(y|yr|yrs|year|years)?\.?$/i);
+  if (!match) return { parsed: null, valid: false };
+  const parsed = parseInt(match[1], 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return { parsed: null, valid: false };
+  return { parsed, valid: true };
+}
+
 export function formatWarrantyYears(value: number | null | undefined): string {
   if (value == null) return '—';
   return `${value} year${value === 1 ? '' : 's'}`;

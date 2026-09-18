@@ -174,7 +174,7 @@ export function Layout({ companyName, userEmail, onSignOut }: {
                   <Link key={mod.slug} to={href} onClick={() => setSidebarOpen(false)}
                     className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all ${active ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>
                     <mod.icon className="w-4 h-4 flex-shrink-0" />
-                    <span className="font-medium">{mod.name}</span>
+                    <span className="font-medium leading-snug">{mod.name}</span>
                   </Link>
                 );
               })}

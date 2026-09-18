@@ -11,6 +11,7 @@ import { fetchProjectSystems } from '../lib/projectSystemsDb';
 import { findDatasheetForDeviceFields } from '../lib/datasheetMatching';
 import { FALLBACK_DOCUMENT_DEFINITIONS, titleForLegacyDocumentId } from '../lib/handoverDocumentConfig';
 import { matchEquipmentInputToProduct } from '../integrations/core/productMatching';
+import { extractWarrantyYearsFromNotes } from '../lib/deviceProductFields';
 import { useProject } from './ProjectLayout';
 import type { Device, CommissioningRecord, HandoverDocument, Datasheet, ProjectSystemRecord } from '../types';
 import { canAccessDocumentManagement, isEndUser } from '../lib/appRoles';
@@ -33,7 +34,7 @@ import {
   Camera, Lock, ShieldAlert, PhoneCall, ScanLine, Radar, Network,
   Building2, Calendar, User, Tag, CalendarCheck, Loader2, Layers,
   ListOrdered, Wifi, BookMarked, Plus, Search, Trash2, Download,
-  ClipboardList, Lock, Eye,
+  ClipboardList, Eye,
 } from 'lucide-react';
 import { humanizeOption } from '../lib/schemaForm';
 import { openProtectedTechDoc, PROTECTED_DOC_NOTICE, TECH_DOC_DOCUMENT_SELECT, TECH_DOC_DOCUMENT_SELECT_BASE } from '../lib/techDocProtected';
@@ -255,11 +256,12 @@ interface DeviceWithDatasheet extends Device {
   maintenanceNotes: string | null;
 }
 
-type Section = 'index' | 'cover' | 'scope' | 'as_fitted' | 'schedule' | 'technical_docs' | 'maintenance_plan' | 'commissioning' | 'handover' | 'as_fitted_drawings' | 'datasheets' | 'user_manuals';
+type Section = 'index' | 'cover' | 'contractor' | 'scope' | 'as_fitted' | 'schedule' | 'technical_docs' | 'maintenance_plan' | 'commissioning' | 'handover' | 'as_fitted_drawings' | 'datasheets' | 'user_manuals';
 
 const SECTIONS: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: 'index',              label: 'Table of Contents',    icon: ListOrdered },
   { id: 'cover',              label: 'Cover Page',           icon: BookOpen },
+  { id: 'contractor',         label: 'Contractor Information', icon: Building2 },
   { id: 'scope',              label: 'Scope of Works',       icon: FileText },
   { id: 'as_fitted',          label: 'As Fitted',            icon: ClipboardList },
   { id: 'schedule',           label: 'Device Schedule and Warranties',      icon: ClipboardCheck },
@@ -275,6 +277,7 @@ const SECTIONS: { id: Section; label: string; icon: React.ElementType }[] = [
 const PRINT_SECTION_ANCHOR: Record<Section, string> = {
   index: 'print-section-toc',
   cover: 'print-section-cover',
+  contractor: 'print-section-contractor',
   scope: 'print-section-scope',
   as_fitted: 'print-section-as_fitted',
   schedule: 'print-section-schedule',
@@ -666,7 +669,7 @@ export function ProjectOMExportPage() {
       return {
         ...d,
         datasheet: ds ?? null,
-        warrantyYears: pm?.warranty_years ?? null,
+        warrantyYears: extractWarrantyYearsFromNotes(d.notes) ?? pm?.warranty_years ?? null,
         maintenanceNotes: pm?.maintenance_notes ?? null,
       };
     });
@@ -947,6 +950,7 @@ export function ProjectOMExportPage() {
   const sectionStatus = (s: Section): 'complete' | 'partial' | 'empty' => {
     if (s === 'index') return 'complete';
     if (s === 'cover') return 'complete';
+    if (s === 'contractor') return contractorHasInfo(contractorProfile) ? 'complete' : 'empty';
     if (s === 'scope') return scopeContent ? 'complete' : 'empty';
     if (s === 'schedule') return devices.length > 0 ? 'complete' : 'empty';
     if (s === 'technical_docs') {
@@ -1295,6 +1299,7 @@ export function ProjectOMExportPage() {
       const ANCHOR_LABELS: Record<string, string> = {
         'print-section-toc':              'Table of Contents',
         'print-section-cover':            'Cover Page',
+        'print-section-contractor':       'Contractor Information',
         'print-section-scope':            'Scope of Works',
         'print-section-schedule':         'Device Schedule and Warranties',
         'print-section-technical_docs':   'Technical Documentation',
@@ -1525,7 +1530,7 @@ export function ProjectOMExportPage() {
       {/* ── Layout: sidebar + content ── */}
       <div className="flex gap-5 print:hidden">
         {/* Sidebar nav */}
-        <div className="w-52 flex-shrink-0">
+        <div className="w-64 flex-shrink-0">
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
             {SECTIONS.map((s, i) => {
               const st = sectionStatus(s.id);
@@ -1551,7 +1556,7 @@ export function ProjectOMExportPage() {
                     />
                   )}
                   <s.icon className={`w-4 h-4 flex-shrink-0 ${isActive ? 'text-cyan-600' : 'text-slate-400'}`} />
-                  <span className="flex-1 font-medium truncate">{s.label}</span>
+                  <span className="flex-1 font-medium leading-snug">{s.label}</span>
                   {st === 'complete' && <span className="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0" />}
                   {st === 'partial' && <span className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0" />}
                   {st === 'empty' && <span className="w-2 h-2 rounded-full bg-slate-200 flex-shrink-0" />}
@@ -1572,6 +1577,9 @@ export function ProjectOMExportPage() {
             const contentSections = SECTIONS.filter(s => s.id !== 'index');
             const sectionDetails: Record<string, string> = {
               cover: project?.project_name ? `${project.project_name}${project.client_name ? ' — ' + project.client_name : ''}` : 'Project overview and system summary',
+              contractor: contractorHasInfo(contractorProfile)
+                ? [contractorProfile?.company_name, contractorProfile?.telephone, contractorProfile?.email].filter(Boolean).join(' · ')
+                : 'Fill in Document Management',
               scope: scopeContent ? 'Scope of works document ready' : 'Not yet generated',
               schedule: devices.length > 0 ? `${devices.length} device${devices.length !== 1 ? 's' : ''} across ${systemGroups.length} system${systemGroups.length !== 1 ? 's' : ''}` : 'No devices added',
               technical_docs: (() => {
@@ -1684,6 +1692,7 @@ export function ProjectOMExportPage() {
             );
           })()}
           {activeSection === 'cover' && <CoverSection project={project} devices={devices} systemGroups={systemGroups} contractor={contractorProfile} authority={docAuthority} />}
+          {activeSection === 'contractor' && <ContractorSection contractor={contractorProfile} />}
           {activeSection === 'scope' && (
             <MarkdownDocEditor
               title="Scope of Works"
@@ -1776,9 +1785,10 @@ export function ProjectOMExportPage() {
         </div>
         <div className="page-break" />
 
-        {/* Table of Contents — page 2 */}
+        {/* Table of Contents */}
         <PrintTableOfContents
           project={project}
+          hasContractor={contractorHasInfo(contractorProfile)}
           hasScope={!!scopeContent}
           hasSchedule={devices.length > 0}
           hasTechDocs={namedTechBundles.length > 0 || importedTechSystems.length > 0 || devices.some(d => d.ip_address || d.mac_address || d.firmware_version || d.username_hint || d.password_hint || d.controller_address || d.vlan || d.network_zone)}
@@ -1791,6 +1801,15 @@ export function ProjectOMExportPage() {
           hasUserManuals={projectManuals.length > 0}
         />
         <div className="page-break" />
+
+        {contractorHasInfo(contractorProfile) && (
+          <>
+            <PrintSection title="Contractor Information" anchorId="print-section-contractor">
+              <PrintContractorInformation contractor={contractorProfile} />
+            </PrintSection>
+            <div className="page-break" />
+          </>
+        )}
 
         {scopeContent && (
           <>
@@ -2831,6 +2850,93 @@ function CoverSection({ project, devices, systemGroups, contractor, authority }:
   );
 }
 
+function contractorHasInfo(contractor: any): boolean {
+  if (!contractor) return false;
+  return [
+    contractor.company_name,
+    contractor.address_line1,
+    contractor.address_line2,
+    contractor.city,
+    contractor.postcode,
+    contractor.telephone,
+    contractor.email,
+    contractor.website,
+    contractor.company_reg_number,
+    contractor.vat_number,
+    contractor.nsi_number,
+    contractor.ssaib_number,
+    contractor.other_certifications,
+  ].some(value => typeof value === 'string' && value.trim());
+}
+
+function contractorAddressLines(contractor: any): string[] {
+  return [
+    contractor?.address_line1,
+    contractor?.address_line2,
+    [contractor?.city, contractor?.postcode].filter(Boolean).join(' '),
+  ].map(value => (typeof value === 'string' ? value.trim() : '')).filter(Boolean);
+}
+
+function ContractorSection({ contractor }: { contractor: any }) {
+  const { role } = useUserAccess();
+  const address = contractorAddressLines(contractor);
+  const filled = contractorHasInfo(contractor);
+  const details: { label: string; value?: string | null }[] = [
+    { label: 'Company', value: contractor?.company_name },
+    { label: 'Address', value: address.join('\n') || null },
+    { label: 'Telephone', value: contractor?.telephone },
+    { label: 'Email', value: contractor?.email },
+    { label: 'Website', value: contractor?.website },
+    { label: 'Companies House', value: contractor?.company_reg_number },
+    { label: 'VAT Number', value: contractor?.vat_number },
+    { label: 'NSI', value: contractor?.nsi_number },
+    { label: 'SSAIB', value: contractor?.ssaib_number },
+    { label: 'Other certifications', value: contractor?.other_certifications },
+  ].filter(row => row.value);
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
+      <div className="flex items-center gap-2">
+        <Building2 className="w-4 h-4 text-slate-400" />
+        <h3 className="font-semibold text-slate-800">Contractor Information</h3>
+        <span className="ml-auto text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full font-medium">Auto-populated</span>
+      </div>
+
+      {filled ? (
+        <div className="border border-slate-200 rounded-lg overflow-hidden">
+          <div className="bg-[#C00000] text-white px-6 py-4 flex items-center gap-4">
+            {contractor?.logo_url ? (
+              <img src={contractor.logo_url} alt="" className="h-10 object-contain bg-white rounded px-2 py-1" />
+            ) : null}
+            <div>
+              <p className="text-lg font-semibold leading-tight">{contractor?.company_name || 'Contractor'}</p>
+              {contractor?.website && <p className="text-xs text-white/80 mt-0.5">{contractor.website}</p>}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-6">
+            {details.map(row => (
+              <div key={row.label} className={row.label === 'Address' || row.label === 'Other certifications' ? 'sm:col-span-2' : ''}>
+                <p className="text-xs text-slate-400 font-medium uppercase tracking-wider">{row.label}</p>
+                <p className="text-sm font-semibold text-slate-800 whitespace-pre-line mt-0.5">{row.value}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="border border-dashed border-slate-300 rounded-lg px-6 py-10 text-center text-sm text-slate-500">
+          No contractor details yet.
+        </div>
+      )}
+
+      <p className="text-xs text-slate-400">
+        {canAccessDocumentManagement(role)
+          ? <>This page pulls from Document Management — fill in <strong>Contractor Information</strong> to complete it. It is reused on every O&M pack.</>
+          : <>This page pulls from Document Management. Ask an admin to fill Contractor Information.</>}
+      </p>
+    </div>
+  );
+}
+
 function InfoRow({ icon: Icon, label, value }: { icon: React.ElementType; label: string; value?: string | null }) {
   return (
     <div className="flex items-start gap-2.5">
@@ -3700,10 +3806,11 @@ interface TocEntry {
 
 function PrintTableOfContents({
   project,
-  hasScope, hasAsFitted, hasSchedule, hasTechDocs, hasMaintPlan,
+  hasContractor, hasScope, hasAsFitted, hasSchedule, hasTechDocs, hasMaintPlan,
   hasCommissioning, hasHandover, hasAsFittedDrawings, hasDatasheets, hasUserManuals,
 }: {
   project: any;
+  hasContractor: boolean;
   hasScope: boolean; hasAsFitted: boolean; hasSchedule: boolean; hasTechDocs: boolean; hasMaintPlan: boolean;
   hasCommissioning: boolean; hasHandover: boolean; hasAsFittedDrawings: boolean;
   hasDatasheets: boolean; hasUserManuals: boolean;
@@ -3711,6 +3818,7 @@ function PrintTableOfContents({
   const entries: TocEntry[] = [];
   let num = 1;
 
+  if (hasContractor) entries.push({ label: 'Contractor Information', anchorId: 'print-section-contractor', number: num++ });
   if (hasScope) entries.push({ label: 'Scope of Works', anchorId: 'print-section-scope', number: num++ });
   if (hasAsFitted) entries.push({ label: 'As Fitted', anchorId: 'print-section-as_fitted', number: num++ });
   if (hasSchedule) entries.push({ label: 'Device Schedule and Warranties', anchorId: 'print-section-schedule', number: num++ });
@@ -3786,6 +3894,47 @@ function PrintTableOfContents({
           This document has been automatically generated. All information should be verified against site records.
         </p>
         <p style={{ fontSize: '0.65rem', color: PACIFIC_RED, margin: 0, fontWeight: 700 }}>Pacific Fire &amp; Security</p>
+      </div>
+    </div>
+  );
+}
+
+function PrintContractorInformation({ contractor }: { contractor: any }) {
+  const address = contractorAddressLines(contractor);
+  const rows: [string, string][] = [];
+  if (contractor?.company_name) rows.push(['Company', contractor.company_name]);
+  if (address.length) rows.push(['Address', address.join('\n')]);
+  if (contractor?.telephone) rows.push(['Telephone', contractor.telephone]);
+  if (contractor?.email) rows.push(['Email', contractor.email]);
+  if (contractor?.website) rows.push(['Website', contractor.website]);
+  if (contractor?.company_reg_number) rows.push(['Companies House', contractor.company_reg_number]);
+  if (contractor?.vat_number) rows.push(['VAT Number', contractor.vat_number]);
+  if (contractor?.nsi_number) rows.push(['NSI', contractor.nsi_number]);
+  if (contractor?.ssaib_number) rows.push(['SSAIB', contractor.ssaib_number]);
+  if (contractor?.other_certifications) rows.push(['Other certifications', contractor.other_certifications]);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
+        {contractor?.logo_url ? (
+          <img src={contractor.logo_url} alt="" style={{ height: '3rem', objectFit: 'contain' }} />
+        ) : null}
+        <div>
+          <p style={{ fontSize: '1.15rem', fontWeight: 800, color: PACIFIC_INK, margin: 0 }}>
+            {contractor?.company_name || 'Contractor'}
+          </p>
+          {contractor?.website ? (
+            <p style={{ fontSize: '0.8rem', color: '#58595B', margin: '0.25rem 0 0' }}>{contractor.website}</p>
+          ) : null}
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem 2rem' }}>
+        {rows.map(([label, value]) => (
+          <div key={label} style={{ gridColumn: label === 'Address' || label === 'Other certifications' ? '1 / -1' : undefined }}>
+            <p style={{ fontSize: '0.6rem', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#94a3b8', margin: '0 0 0.2rem' }}>{label}</p>
+            <p style={{ fontSize: '0.9rem', fontWeight: 600, color: '#1e293b', margin: 0, whiteSpace: 'pre-line' }}>{value}</p>
+          </div>
+        ))}
       </div>
     </div>
   );
