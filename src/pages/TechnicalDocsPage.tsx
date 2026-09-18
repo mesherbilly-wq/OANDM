@@ -15,6 +15,10 @@ import migration039Sql from '../../supabase/migrations/20260917120000_039_tech_d
 import migration041Sql from '../../supabase/migrations/20260918120000_041_tech_doc_protected.sql?raw';
 import migration042Sql from '../../supabase/migrations/20260918130000_042_tech_doc_file_password.sql?raw';
 import {
+  ProtectedTechDocPasswordPrompt,
+  ProtectedTechDocViewer,
+} from '../components/ProtectedTechDocAccess';
+import {
   extractTableFromGrid,
   parseSpreadsheetFile,
 } from '../lib/techDocSpreadsheet';
@@ -435,6 +439,18 @@ export default function TechnicalDocsPage() {
   const [editPassword, setEditPassword] = useState('');
   const [showPendingPassword, setShowPendingPassword] = useState(false);
   const [showEditPassword, setShowEditPassword] = useState(false);
+  const [fileAccess, setFileAccess] = useState<{
+    id: number;
+    title: string;
+    storagePath: string | null;
+    fileName: string | null;
+    mode: 'view' | 'download';
+    password: string;
+    error: string | null;
+    busy: boolean;
+  } | null>(null);
+  const [fileViewer, setFileViewer] = useState<{ url: string; title: string; fileName: string | null } | null>(null);
+  const [unlockedPasswords, setUnlockedPasswords] = useState<Record<number, string>>({});
   const [modal, setModal] = useState<ModalState>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [pdfParsing, setPdfParsing] = useState(false);
@@ -755,8 +771,12 @@ export default function TechnicalDocsPage() {
       try {
         await setTechDocFilePassword(documentId, password);
       } catch (err: any) {
-        if (missingProtectedColumns(err)) setNeedsPasswordMigration(true);
-        throw new Error('Paste 042 SQL in Supabase, then set the document password.');
+        const msg = err?.message ?? '';
+        if (missingProtectedColumns(err) || /could not find the function|schema cache|crypt\(|gen_salt/i.test(msg)) {
+          setNeedsPasswordMigration(true);
+          throw new Error('Paste 042 SQL in Supabase, then set the document password.');
+        }
+        throw new Error(msg || 'Could not set the document password.');
       }
       await load();
       setExpandedDocId(documentId);
@@ -1117,6 +1137,63 @@ export default function TechnicalDocsPage() {
     }
   };
 
+  const openProtectedFile = async (
+    doc: Pick<TechDocDocument, 'id' | 'title' | 'storage_path' | 'file_name' | 'has_file_password'>,
+    mode: 'view' | 'download',
+    typed?: string,
+  ) => {
+    const cached = unlockedPasswords[doc.id];
+    if (doc.has_file_password && typed == null && !cached) {
+      setFileAccess({
+        id: doc.id,
+        title: doc.title,
+        storagePath: doc.storage_path,
+        fileName: doc.file_name,
+        mode,
+        password: '',
+        error: null,
+        busy: false,
+      });
+      return;
+    }
+    const password = typed ?? cached ?? null;
+    try {
+      if (fileAccess) setFileAccess({ ...fileAccess, busy: true, error: null });
+      const url = await openProtectedTechDoc({
+        id: doc.id,
+        storagePath: doc.storage_path,
+        fileName: doc.file_name,
+        hasFilePassword: doc.has_file_password,
+        password,
+        mode,
+      });
+      if (doc.has_file_password && password) {
+        setUnlockedPasswords(prev => ({ ...prev, [doc.id]: password }));
+      }
+      setFileAccess(null);
+      if (mode === 'view') {
+        if (!url) throw new Error('Could not open the document');
+        setFileViewer({ url, title: doc.title, fileName: doc.file_name });
+      }
+    } catch (err: any) {
+      const message = err?.message ?? 'Could not open the document';
+      if (doc.has_file_password) {
+        setFileAccess({
+          id: doc.id,
+          title: doc.title,
+          storagePath: doc.storage_path,
+          fileName: doc.file_name,
+          mode,
+          password: typed ?? '',
+          error: message,
+          busy: false,
+        });
+      } else {
+        alert(message);
+      }
+    }
+  };
+
   // ── Render ────────────────────────────────────────────────────────────────────
 
   if (loading) {
@@ -1275,13 +1352,22 @@ export default function TechnicalDocsPage() {
                   <div className="flex items-center gap-2 flex-shrink-0">
                     {(doc.storage_path || doc.file_url) && (
                       doc.is_protected || doc.storage_path ? (
-                        <button
-                          type="button"
-                          onClick={() => void openProtectedTechDoc({ id: doc.id, storagePath: doc.storage_path, fileName: doc.file_name })}
-                          className="text-xs px-2 py-1 border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-100 inline-flex items-center gap-1"
-                        >
-                          <Download className="w-3 h-3" />File
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => void openProtectedFile(doc, 'view')}
+                            className="text-xs px-2 py-1 border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-100 inline-flex items-center gap-1"
+                          >
+                            <Eye className="w-3 h-3" />View
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void openProtectedFile(doc, 'download')}
+                            className="text-xs px-2 py-1 border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-100 inline-flex items-center gap-1"
+                          >
+                            <Download className="w-3 h-3" />Download
+                          </button>
+                        </div>
                       ) : (
                         <a href={doc.file_url ?? undefined} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-100 inline-flex items-center gap-1">
                           <ExternalLink className="w-3 h-3" />File
@@ -1766,6 +1852,36 @@ export default function TechnicalDocsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {fileAccess && (
+        <ProtectedTechDocPasswordPrompt
+          title={fileAccess.title}
+          actionLabel={fileAccess.mode === 'view' ? 'View' : 'Download'}
+          password={fileAccess.password}
+          error={fileAccess.error}
+          busy={fileAccess.busy}
+          onPasswordChange={password => setFileAccess({ ...fileAccess, password, error: null })}
+          onCancel={() => setFileAccess(null)}
+          onConfirm={() => {
+            void openProtectedFile({
+              id: fileAccess.id,
+              title: fileAccess.title,
+              storage_path: fileAccess.storagePath,
+              file_name: fileAccess.fileName,
+              has_file_password: true,
+            }, fileAccess.mode, fileAccess.password);
+          }}
+        />
+      )}
+
+      {fileViewer && (
+        <ProtectedTechDocViewer
+          url={fileViewer.url}
+          title={fileViewer.title}
+          fileName={fileViewer.fileName}
+          onClose={() => setFileViewer(null)}
+        />
       )}
 
       {revealedPassword && (

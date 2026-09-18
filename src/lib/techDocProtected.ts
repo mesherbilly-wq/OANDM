@@ -69,7 +69,7 @@ export async function signedTechDocUrl(
 ): Promise<string | null> {
   const { data, error } = await supabase.storage.from(TECH_DOCS_PRIVATE_BUCKET).createSignedUrl(
     storagePath,
-    60,
+    120,
     downloadName ? { download: downloadName } : undefined,
   );
   if (error || !data?.signedUrl) return null;
@@ -92,36 +92,44 @@ export async function openProtectedTechDoc(opts: {
   storagePath?: string | null;
   fileName?: string | null;
   password?: string | null;
+  hasFilePassword?: boolean;
   requireUnlock?: boolean;
+  mode?: 'view' | 'download';
 }): Promise<string | null> {
+  const mode = opts.mode ?? 'download';
   let path = opts.storagePath ?? null;
   let fileName = opts.fileName ?? null;
-  if (!path) {
+  let hasFilePassword = opts.hasFilePassword;
+  if (!path || hasFilePassword == null) {
     const { data, error } = await supabase
       .from('tech_doc_documents')
       .select('storage_path, file_name, has_file_password')
       .eq('id', opts.id)
       .maybeSingle();
     if (error || !data?.storage_path) return null;
-    path = data.storage_path;
+    path = path || data.storage_path;
     fileName = fileName || data.file_name;
-    if (opts.requireUnlock && data.has_file_password && opts.password == null) {
-      throw new Error('Document password required');
-    }
+    hasFilePassword = hasFilePassword ?? !!data.has_file_password;
   }
-  if (opts.requireUnlock || opts.password != null) {
+  const needsPassword = !!hasFilePassword;
+  if (needsPassword && (opts.password == null || opts.password === '')) {
+    throw new Error('Document password required');
+  }
+  if (needsPassword || opts.password != null) {
     const unlocked = await unlockTechDocFile(opts.id, opts.password ?? '');
     if (!unlocked) throw new Error('Incorrect document password');
   }
-  const url = await signedTechDocUrl(path, fileName);
+  const url = await signedTechDocUrl(path, mode === 'download' ? fileName : null);
   if (!url) return null;
-  const link = document.createElement('a');
-  link.href = url;
-  link.rel = 'noopener';
-  link.download = fileName || 'document';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  if (mode === 'download') {
+    const link = document.createElement('a');
+    link.href = url;
+    link.rel = 'noopener';
+    link.download = fileName || 'document';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
   return url;
 }
 

@@ -1,6 +1,6 @@
 -- File password for protected technical documents. Requires 041.
 
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
 
 ALTER TABLE public.tech_doc_documents
   ADD COLUMN IF NOT EXISTS file_password_hash TEXT,
@@ -26,7 +26,7 @@ CREATE OR REPLACE FUNCTION public.set_tech_doc_file_password(doc_id bigint, new_
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 BEGIN
   IF public.app_role() NOT IN ('admin', 'staff') THEN
@@ -36,7 +36,7 @@ BEGIN
     RAISE EXCEPTION 'Password must be at least 6 characters';
   END IF;
   UPDATE public.tech_doc_documents
-  SET file_password_hash = crypt(btrim(new_password), gen_salt('bf')),
+  SET file_password_hash = extensions.crypt(btrim(new_password), extensions.gen_salt('bf')),
       has_file_password = true
   WHERE id = doc_id
     AND public.can_access_project(project_id);
@@ -50,7 +50,7 @@ CREATE OR REPLACE FUNCTION public.clear_tech_doc_file_password(doc_id bigint)
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 BEGIN
   IF public.app_role() NOT IN ('admin', 'staff') THEN
@@ -72,7 +72,7 @@ CREATE OR REPLACE FUNCTION public.unlock_tech_doc_file(doc_id bigint, typed_pass
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
   doc public.tech_doc_documents%ROWTYPE;
@@ -95,7 +95,7 @@ BEGIN
   IF COALESCE(doc.has_file_password, false) THEN
     IF typed_password IS NULL
        OR doc.file_password_hash IS NULL
-       OR doc.file_password_hash <> crypt(btrim(typed_password), doc.file_password_hash) THEN
+       OR doc.file_password_hash <> extensions.crypt(btrim(typed_password), doc.file_password_hash) THEN
       RETURN false;
     END IF;
   END IF;
@@ -112,9 +112,6 @@ $$;
 GRANT EXECUTE ON FUNCTION public.set_tech_doc_file_password(bigint, text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.clear_tech_doc_file_password(bigint) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.unlock_tech_doc_file(bigint, text) TO authenticated;
-
-REVOKE SELECT (file_password_hash) ON public.tech_doc_documents FROM anon, authenticated;
-REVOKE UPDATE (file_password_hash) ON public.tech_doc_documents FROM anon, authenticated;
 
 DROP POLICY IF EXISTS "tech_docs_private_select" ON storage.objects;
 CREATE POLICY "tech_docs_private_select"
@@ -145,3 +142,5 @@ CREATE POLICY "tech_docs_private_select"
       )
     )
   );
+
+NOTIFY pgrst, 'reload schema';
