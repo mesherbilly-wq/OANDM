@@ -46,14 +46,24 @@ function App() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
+      setSession(prev => {
+        if (!session) return prev;
+        if (prev?.user.id === session.user.id) return prev;
+        return session;
+      });
       setSessionLoading(false);
       if (session) loadCompany();
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session) loadCompany();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (event === 'SIGNED_OUT') {
+        setSession(null);
+        setCompanyName('');
+        return;
+      }
+      if (!nextSession) return;
+      setSession(prev => (prev?.user.id === nextSession.user.id ? prev : nextSession));
+      loadCompany();
     });
 
     return () => subscription.unsubscribe();
@@ -145,16 +155,13 @@ function AuthedApp({
 }) {
   const { role, roleLoading } = useUserAccess();
 
-  if (roleLoading) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="w-8 h-8 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
-
   return (
     <BrowserRouter>
+      {roleLoading ? (
+        <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+          <div className="w-8 h-8 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : (
       <Routes>
         <Route path="/f/:token" element={<PublicHandoverFormPage />} />
         <Route path="/r/:token" element={<DocumentReturnPage />} />
@@ -202,6 +209,7 @@ function AuthedApp({
         </Route>
         <Route path="*" element={<Navigate to={defaultHomePath(role)} replace />} />
       </Routes>
+      )}
     </BrowserRouter>
   );
 }

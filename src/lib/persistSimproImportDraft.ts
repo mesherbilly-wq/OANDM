@@ -29,7 +29,13 @@ import {
 import { buildSdpAnswers, buildSdpSnapshot } from './sdpAnswers';
 
 const DEVICE_INSERT_BATCH = 100;
-const SOURCE_DOCUMENT = 'Simpro Import';
+
+function sourceDocumentLabel(connectorId: ImportReviewDraft['source']['connectorId']): string {
+  if (connectorId === 'ai_documents') return 'AI Documents';
+  if (connectorId === 'ai_drawings') return 'AI Drawings';
+  if (connectorId === 'simpro') return 'Simpro Import';
+  return 'Import';
+}
 
 /** @deprecated Use getImportReviewCreateConfirmationIssues for confirm dialogs. */
 export function getSimproImportPersistWarnings(draft: ImportReviewDraft): ImportReviewIssue[] {
@@ -154,7 +160,7 @@ function buildDeviceRows(
           matched: item.matched,
           datasheet_found: hasDatasheet,
           status: 'active',
-          source_document: SOURCE_DOCUMENT,
+          source_document: sourceDocumentLabel(draft.source.connectorId),
         });
       }
     }
@@ -300,7 +306,7 @@ export async function persistSimproImportReviewDraft(
       equipment: asFittedRows.map(item => ({
         item: String(item.quoted_description ?? ''),
         qty_proposed: item.quoted_quantity as number | null,
-        source: item.source_quote_line_id ? `Simpro line ${item.source_quote_line_id}` : 'Simpro quote line',
+        source: item.source_quote_line_id ? `Import line ${item.source_quote_line_id}` : 'Imported quote line',
       })),
       discipline: draft.systems.filter(system => system.selected).map(system => system.name).join(', ') || undefined,
     });

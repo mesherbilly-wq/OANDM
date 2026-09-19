@@ -57,7 +57,7 @@ export function UserAccessProvider({ user, children }: { user: User; children: R
     setRole(next.role);
     setProfilesReady(next.profilesReady);
     setRoleLoading(false);
-  }, [user]);
+  }, [user.id, user.email]);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,7 +71,7 @@ export function UserAccessProvider({ user, children }: { user: User; children: R
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [user.id]);
 
   const value = useMemo(
     () => ({ role, userId: user.id, roleLoading, profilesReady, refreshRole }),

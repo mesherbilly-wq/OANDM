@@ -6,19 +6,27 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-const VALID_SYSTEM_TYPES = ["CCTV", "Access Control", "Intercom", "Intruder", "Networking"];
+const VALID_SYSTEM_TYPES = ["CCTV", "Access Control", "Intercom", "Intruder", "Networking", "Fire"];
 
-const PROMPT = `You are analysing security integration project documents (quotes, proposals, scope of works, design specifications).
+const PROMPT = `You are extracting a security / fire project from quote, proposal, or specification documents so it can be imported the same way as a Simpro job.
 
-Extract all relevant project information and return ONLY a valid JSON object — no markdown, no explanation, no code fences.
+Return ONLY a valid JSON object — no markdown, no explanation, no code fences.
+
+Do NOT write method statements, risk assessments, RAMS, commissioning packs, asset registers, O&M packs, or handover certificates. Capture the data that is already in the documents.
 
 Required JSON structure:
 {
   "project_name": "concise project name (derive from client + site if not explicit)",
   "client_name": "client or customer company name, null if unknown",
-  "site_name": "site address or building name, null if unknown",
+  "site_name": "site or building name, null if unknown",
+  "site_address": "full site address if present, null if unknown",
+  "job_number": "job number if present, else null",
+  "quote_number": "quote or tender number if present, else null",
+  "project_number": "project number if present, else null",
   "project_manager": "project manager name if mentioned, else null",
-  "project_summary": "2-3 sentences describing the project scope and objectives",
+  "engineer": "engineer name if mentioned, else null",
+  "project_notes": "short factual notes from the documents, else null",
+  "scope_of_works": "<p>HTML of the customer scope / description using the source wording</p>",
   "system_types": ["CCTV"],
   "devices": [
     {
@@ -26,20 +34,23 @@ Required JSON structure:
       "device_type": "IP Camera",
       "manufacturer": "Hikvision",
       "model_number": "DS-2CD2347G2-LU",
+      "model_name": "4MP ColorVu Dome",
       "quantity": 10,
       "location": "Car Park Level 1",
-      "notes": "4MP ColorVu, IR 60m"
+      "notes": "IR 60m"
     }
   ]
 }
 
 Rules:
-- system_types must only contain values from: CCTV, Access Control, Intercom, Intruder, Networking
-- Each device's system_type must also be one of those five values
-- Extract EVERY device/equipment item mentioned — cameras, recorders, access panels, readers, intercoms, sensors, switches, power supplies if itemised
+- system_type should be CCTV, Access Control, Intercom, Intruder, Networking, or Fire when that is clearly the install type; otherwise use the document section / cost centre name
+- Extract EVERY product / equipment line — cameras, recorders, panels, readers, intercoms, sensors, switches, power supplies, and named materials
+- Do not import labour, prelims, sundries, attendance, VAT, profit, or commercial cost-only lines
 - quantity must be an integer (default 1 if not specified)
 - Use null for any field that cannot be determined from the documents
-- Be thorough — extract all line items from schedules, bill of materials, and equipment lists
+- scope_of_works must be HTML (p, ul, ol, li, h2, h3, strong) that keeps the source wording and layout
+- Do not put equipment schedules, part lists, prices, rates, VAT, or totals in scope_of_works
+- If source HTML is provided, follow that structure; do not invent extra sections
 - If multiple documents are provided, merge their information intelligently`;
 
 Deno.serve(async (req: Request) => {
@@ -74,7 +85,13 @@ Deno.serve(async (req: Request) => {
     const header = `\n\n--- Document: ${doc.name} ---\n`;
     const remaining = MAX_CHARS - combined.length - header.length;
     if (remaining <= 0) break;
-    combined += header + doc.content.slice(0, remaining);
+    combined += header + String(doc.content ?? "").slice(0, remaining);
+    const html = typeof doc.html === "string" ? doc.html.trim() : "";
+    if (!html) continue;
+    const htmlHeader = "\n\n[Source HTML for layout — copy wording and structure into scope_of_works]\n";
+    const htmlRemaining = MAX_CHARS - combined.length - htmlHeader.length;
+    if (htmlRemaining <= 0) break;
+    combined += htmlHeader + html.slice(0, htmlRemaining);
   }
 
   try {
@@ -123,13 +140,14 @@ Deno.serve(async (req: Request) => {
       extracted.system_types = [];
     }
 
-    // Sanitise devices
+    // Sanitise devices — keep the source section name when it is not a known install type
     if (Array.isArray(extracted.devices)) {
       extracted.devices = extracted.devices.map((d: any) => ({
-        system_type: VALID_SYSTEM_TYPES.includes(d.system_type) ? d.system_type : "CCTV",
-        device_type: d.device_type ?? "Device",
+        system_type: d.system_type ?? null,
+        device_type: d.device_type ?? d.model_name ?? "Device",
         manufacturer: d.manufacturer ?? null,
         model_number: d.model_number ?? null,
+        model_name: d.model_name ?? d.device_type ?? null,
         quantity: typeof d.quantity === "number" && d.quantity > 0 ? Math.round(d.quantity) : 1,
         location: d.location ?? null,
         notes: d.notes ?? null,

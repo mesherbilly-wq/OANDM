@@ -15,6 +15,7 @@ export { bigChangeConnector } from './bigchange/BigChangeConnector';
 export { csvConnector } from './csv/CsvConnector';
 export { excelConnector } from './excel/ExcelConnector';
 export { aiDocumentsConnector } from './aiDocuments/AiDocumentsConnector';
+export { normalizeAiExtract } from './aiDocuments/normalizeAiExtract';
 export { aiDrawingsConnector } from './aiDrawings/AiDrawingsConnector';
 export { manualConnector, createManualReviewDraft } from './manual/ManualConnector';
 export { createPlannedConnector } from './createPlannedConnector';

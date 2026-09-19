@@ -63,6 +63,18 @@ function displayValue(value: string | null | undefined): string {
   return value?.trim() ? value : '—';
 }
 
+function importSourceLabel(draft: ImportReviewDraft): string {
+  const id = draft.source.connectorId;
+  if (id === 'ai_documents') return 'AI Documents';
+  if (id === 'ai_drawings') return 'AI Drawings';
+  if (id === 'simpro') return 'Simpro';
+  return 'Import';
+}
+
+function isSimproDraft(draft: ImportReviewDraft): boolean {
+  return draft.source.connectorId === 'simpro';
+}
+
 function normalizeQuantity(value: string): number {
   const parsed = parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed < 1) return 1;
@@ -152,7 +164,8 @@ function SelectionSummary({ draft }: { draft: ImportReviewDraft }) {
   const summary = importSelectionSummary(draft);
   return (
     <p className="text-cyan-800/90 mt-0.5">
-      Job {displayValue(draft.project.jobNumber)} · Simpro ID {displayValue(draft.project.projectNumber)} ·{' '}
+      {draft.project.jobNumber ? `Job ${displayValue(draft.project.jobNumber)} · ` : ''}
+      {isSimproDraft(draft) ? `Simpro ID ${displayValue(draft.project.projectNumber)} · ` : draft.project.projectNumber ? `Project ${displayValue(draft.project.projectNumber)} · ` : ''}
       {summary.selectedSystems} of {summary.totalSystems} system{summary.totalSystems !== 1 ? 's' : ''} ·{' '}
       {summary.selectedLines} of {summary.totalLines} equipment line{summary.totalLines !== 1 ? 's' : ''} ·{' '}
       {summary.deviceUnits} device unit{summary.deviceUnits !== 1 ? 's' : ''}
@@ -474,7 +487,7 @@ export function ImportReviewPage() {
     try {
       const latestSession = getSimproImportSession();
       if (!latestSession) {
-        throw new Error('Import session expired. Please run the Simpro import again.');
+        throw new Error('Import session expired. Please run the import again.');
       }
       const { projectId } = await persistSimproImportReviewDraft(latestSession.draft);
       clearSimproImportSession();
@@ -497,7 +510,7 @@ export function ImportReviewPage() {
               <div>
                 <h1 className="text-2xl font-bold text-slate-900">Import Review</h1>
                 <p className="text-sm text-slate-500">
-                  Review the Simpro cost model, then create the OANDM project
+                  Review the imported project, then create the OANDM project
                 </p>
               </div>
             </div>
@@ -522,7 +535,7 @@ export function ImportReviewPage() {
       </div>
 
       <div className="mb-5 rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm text-cyan-900">
-        <p className="font-semibold">Simpro import draft (session only)</p>
+        <p className="font-semibold">{importSourceLabel(draft)} import draft (session only)</p>
         <SelectionSummary draft={draft} />
       </div>
 
@@ -548,7 +561,7 @@ export function ImportReviewPage() {
           <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
           <span>
             The Product Database is empty — import your product CSV first to autofill Manufacturer, Product
-            Category, and Warranty on blank Simpro lines.
+            Category, and Warranty on blank import lines.
           </span>
         </div>
       )}
@@ -560,7 +573,7 @@ export function ImportReviewPage() {
             <p>
               Loaded {productDatabaseStatus.productCount.toLocaleString()} Product Database rows but no blank fields
               were filled. {productDatabaseEnrichment.unmatchedLines} of {productDatabaseEnrichment.equipmentLines}{' '}
-              equipment lines had no Part Number match — check that Simpro Part Number matches{' '}
+              equipment lines had no Part Number match — check that the imported Part Number matches{' '}
               <strong>Manufacturers Part Number</strong> in your CSV.
             </p>
             <button
@@ -626,7 +639,7 @@ export function ImportReviewPage() {
               <ReadOnlyField label="Project Name" value={draft.project.projectName} />
             </div>
             <ReadOnlyField label="Job Number" value={draft.project.jobNumber} />
-            <ReadOnlyField label="Simpro ID" value={draft.project.projectNumber} />
+            <ReadOnlyField label={isSimproDraft(draft) ? 'Simpro ID' : 'Project Number'} value={draft.project.projectNumber} />
             <ReadOnlyField label="Client" value={draft.project.clientName} icon={Building} />
             <ReadOnlyField label="Site" value={draft.project.siteName} icon={MapPin} />
             <ReadOnlyField label="Site Address" value={draft.project.siteAddress} />
@@ -941,7 +954,7 @@ export function ImportReviewPage() {
             <details className="rounded-xl border border-slate-200 bg-white overflow-hidden group">
               <summary className="flex items-center gap-2 px-4 py-3 cursor-pointer select-none list-none bg-slate-50 border-b border-slate-100 text-sm font-semibold text-slate-700">
                 <ChevronDown className="w-4 h-4 transition-transform group-open:rotate-180" />
-                Original Simpro Description (HTML)
+                Original Description (HTML)
               </summary>
               <pre className="text-[11px] text-slate-600 p-4 overflow-x-auto max-h-64 whitespace-pre-wrap break-all">
                 {originalDescriptionHtml}
@@ -960,7 +973,7 @@ export function ImportReviewPage() {
           <details open className="rounded-xl border border-slate-200 bg-white overflow-hidden group">
             <summary className="flex items-center gap-2 px-4 py-3 cursor-pointer select-none list-none bg-slate-50 border-b border-slate-100 text-sm font-semibold text-slate-700">
               <ChevronDown className="w-4 h-4 transition-transform group-open:rotate-180" />
-              Raw Simpro job JSON
+              Raw import JSON
             </summary>
             <pre className="text-[11px] text-slate-600 p-4 overflow-x-auto max-h-96">
               {JSON.stringify(rawJob, null, 2)}

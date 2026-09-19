@@ -2,11 +2,11 @@ import { createPlannedConnector } from '../createPlannedConnector';
 
 /**
  * AI document extraction import.
- * Will wrap existing `extract-project` output in a later phase without changing that flow today.
+ * Create Project extracts with AI, then normalises into Import Review like Simpro.
  */
 export const aiDocumentsConnector = createPlannedConnector({
   id: 'ai_documents',
   label: 'AI Documents',
-  description: 'Extract project and device data from quotes, proposals, and specifications (PDF or Word).',
+  description: 'Extract project details, equipment and scope from quotes, proposals, and specifications (PDF or Word).',
   supportsSearch: false,
 });
