@@ -9,7 +9,7 @@ import { getCategoryStyle, type ProjectSystem } from '../lib/systems';
 import {
   Upload, Download, X, Check, Eye, EyeOff, Trash2, Settings2,
   GripVertical, CheckCircle, AlertCircle, Table2, FileText,
-  Plus, Pencil, ExternalLink, ClipboardCopy, Lock,
+  Plus, Pencil, ExternalLink, ClipboardCopy, Lock, ImageIcon,
 } from 'lucide-react';
 import migration039Sql from '../../supabase/migrations/20260917120000_039_tech_doc_documents.sql?raw';
 import migration041Sql from '../../supabase/migrations/20260918120000_041_tech_doc_protected.sql?raw';
@@ -22,6 +22,11 @@ import {
   extractTableFromGrid,
   parseSpreadsheetFile,
 } from '../lib/techDocSpreadsheet';
+import {
+  extractTechDocTableFromPicture,
+  isTechDocImageFile,
+  TECH_DOC_IMAGE_ACCEPT,
+} from '../lib/techDocPictureImport';
 import {
   clearTechDocFilePassword,
   generateFilePassword,
@@ -455,6 +460,7 @@ export default function TechnicalDocsPage() {
   const [modal, setModal] = useState<ModalState>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [pdfParsing, setPdfParsing] = useState(false);
+  const [extractingLabel, setExtractingLabel] = useState('Scanning PDF for tables…');
   const [pendingQueue, setPendingQueue] = useState<PendingDescribe[]>([]);
   const [pendingIndex, setPendingIndex] = useState(0);
 
@@ -475,6 +481,7 @@ export default function TechnicalDocsPage() {
   const [savingCols, setSavingCols] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pictureInputRef = useRef<HTMLInputElement>(null);
   const replaceFileRef = useRef<HTMLInputElement>(null);
 
   const includedDocuments = useMemo(() => {
@@ -677,8 +684,38 @@ export default function TechnicalDocsPage() {
       return;
     }
     const file = pending.file;
+    if (isTechDocImageFile(file)) {
+      setExtractingLabel('Reading table from picture with AI…');
+      setPdfParsing(true);
+      try {
+        const tables = await extractTechDocTableFromPicture(file);
+        if (tables.length === 1) {
+          const table = tables[0];
+          setImportColCfg(table.headers.map((h, i) => ({ key: h, display_name: h, visible: true, order: i })));
+          setModal({ type: 'import', system: pending.system_name, rawHeaders: table.headers, previewRows: table.rows, file });
+        } else {
+          setModal({
+            type: 'pdf_select',
+            system: pending.system_name,
+            file,
+            tables: tables.map((table, i) => ({
+              headers: table.headers,
+              rows: table.rows,
+              pageNum: i + 1,
+              label: table.label,
+            })),
+          });
+        }
+      } catch (err: any) {
+        setPdfError(err?.message ?? 'Could not read a table from that picture. Try a clearer photo or upload a spreadsheet.');
+      } finally {
+        setPdfParsing(false);
+      }
+      return;
+    }
     const isPdf = file.name.toLowerCase().endsWith('.pdf');
     if (isPdf) {
+      setExtractingLabel('Scanning PDF for tables…');
       setPdfParsing(true);
       try {
         const tables = await extractTablesFromPDF(file);
@@ -1215,21 +1252,39 @@ export default function TechnicalDocsPage() {
         className="hidden"
         onChange={handleFileChange}
       />
+      <input
+        ref={pictureInputRef}
+        type="file"
+        accept={TECH_DOC_IMAGE_ACCEPT}
+        multiple
+        className="hidden"
+        onChange={handleFileChange}
+      />
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="font-semibold text-slate-900">Technical Documentation</h2>
-            <p className="text-xs text-slate-500 mt-0.5">Upload spreadsheets, name what each document is, and keep more than one per system.</p>
+            <p className="text-xs text-slate-500 mt-0.5">Upload a spreadsheet or a photo of a schedule, name what it is, and keep more than one per system.</p>
           </div>
-          <button
-            type="button"
-            onClick={() => { setPdfError(null); fileInputRef.current?.click(); }}
-            disabled={pdfParsing}
-            className="inline-flex items-center gap-2 bg-cyan-600 text-white px-4 py-2 rounded-xl hover:bg-cyan-700 text-sm font-medium disabled:opacity-50"
-          >
-            <Plus className="w-4 h-4" />Add spreadsheet
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => { setPdfError(null); fileInputRef.current?.click(); }}
+              disabled={pdfParsing}
+              className="inline-flex items-center gap-2 bg-cyan-600 text-white px-4 py-2 rounded-xl hover:bg-cyan-700 text-sm font-medium disabled:opacity-50"
+            >
+              <Plus className="w-4 h-4" />Add spreadsheet
+            </button>
+            <button
+              type="button"
+              onClick={() => { setPdfError(null); pictureInputRef.current?.click(); }}
+              disabled={pdfParsing}
+              className="inline-flex items-center gap-2 border border-cyan-200 bg-cyan-50 text-cyan-800 px-4 py-2 rounded-xl hover:bg-cyan-100 text-sm font-medium disabled:opacity-50"
+            >
+              <ImageIcon className="w-4 h-4" />Import from picture
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1274,7 +1329,7 @@ export default function TechnicalDocsPage() {
       {pdfParsing && (
         <div className="flex items-center gap-3 bg-cyan-50 border border-cyan-200 rounded-xl px-4 py-3">
           <div className="w-4 h-4 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
-          <p className="text-sm font-medium text-cyan-800">Scanning PDF for tables…</p>
+          <p className="text-sm font-medium text-cyan-800">{extractingLabel}</p>
         </div>
       )}
 
@@ -1322,7 +1377,7 @@ export default function TechnicalDocsPage() {
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
           <Table2 className="w-10 h-10 text-slate-200 mx-auto mb-3" />
           <p className="text-sm font-medium text-slate-500">No technical documents{activeSystem ? ` for ${activeSystem}` : ''} yet</p>
-          <p className="text-xs text-slate-400 mt-1">Upload a spreadsheet and describe what it is — door schedule, IP table, and so on.</p>
+          <p className="text-xs text-slate-400 mt-1">Upload a spreadsheet or a picture of a schedule — door schedule, zone list, IP table, and so on.</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -1539,7 +1594,7 @@ export default function TechnicalDocsPage() {
             <div className="px-6 pb-6 flex justify-end gap-3">
               <button onClick={() => { setPendingQueue([]); setPendingIndex(0); }} className="px-4 py-2 text-slate-600 font-medium text-sm">Cancel</button>
               <button onClick={() => void startParseFromDescribe()} disabled={!currentPending.title.trim() || pdfParsing || importing} className="inline-flex items-center gap-2 px-5 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 font-medium text-sm disabled:opacity-40">
-                {importing ? 'Saving…' : currentPending.is_protected ? 'Upload protected file' : 'Continue'}
+                {importing ? 'Saving…' : currentPending.is_protected ? 'Upload protected file' : isTechDocImageFile(currentPending.file) ? 'Read table with AI' : 'Continue'}
               </button>
             </div>
           </div>
