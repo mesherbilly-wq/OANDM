@@ -1,11 +1,12 @@
 import { matchEquipmentInputToProduct } from '../integrations/core/productMatching';
 import type { ProductModel } from '../types';
 import { DEFAULT_PRODUCT_WARRANTY_YEARS } from './productDatabaseCsv';
+import { tokenOverlapScore } from './equipmentMatchUtils';
 import { invalidateProductModelsCache } from './productDatabaseDb';
 import { buildProductPartIndex } from './productLookupIndex';
 import { supabase } from './supabase';
 
-const MAX_SUGGESTIONS = 8;
+const MAX_SUGGESTIONS = 12;
 
 export interface ScheduleProductInput {
   manufacturer?: string | null;
@@ -61,13 +62,33 @@ export function listClosestScheduleProducts(
   }
 
   const query = input.query?.trim().toLowerCase() ?? '';
-  const searched = query
-    ? products.filter(product => productSearchText(product).includes(query))
-    : [];
+  const brand = (input.manufacturer ?? '').trim().toLowerCase();
+  const context = [input.manufacturer, input.modelNumber, input.modelName, input.deviceType]
+    .filter(Boolean)
+    .join(' ');
+
+  const pool = query
+    ? products.filter(product => productSearchText(product).includes(query)).slice(0, 80)
+    : brand
+      ? products.filter(product => (product.manufacturer ?? '').toLowerCase() === brand).slice(0, 40)
+      : [];
+
+  const scored = pool
+    .map(product => {
+      const hay = productSearchText(product);
+      let score = 0;
+      if (query && (product.manufacturer ?? '').toLowerCase().startsWith(query)) score += 3;
+      if (query && (product.model_number ?? '').toLowerCase().includes(query)) score += 3;
+      if (query && (product.part_number ?? '').toLowerCase().includes(query)) score += 3;
+      if (context) score += tokenOverlapScore(context, hay) * 2;
+      return { product, score };
+    })
+    .sort((a, b) => b.score - a.score)
+    .map(entry => entry.product);
 
   const seen = new Set<number>();
   const out: ProductModel[] = [];
-  for (const product of [...ranked, ...searched]) {
+  for (const product of [...ranked, ...scored]) {
     if (!product || seen.has(product.id)) continue;
     seen.add(product.id);
     out.push(product);

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown } from 'lucide-react';
 import type { ProductModel } from '../types';
 import {
   appliedProductFromModel,
@@ -108,34 +109,41 @@ export function ScheduleProductPicker({
     setValue: (next: string) => void,
     placeholder: string,
   ) => (
-    <div className="relative" data-schedule-product>
-      <input
-        type="text"
-        value={value}
-        placeholder={placeholder}
-        disabled={disabled}
-        className={variant === 'form' ? formInputClass : inputClass}
-        onChange={event => {
-          setValue(event.target.value);
-          setOpenField(kind);
-        }}
-        onFocus={() => setOpenField(kind)}
-        onBlur={() => {
-          window.setTimeout(() => {
-            if (openField === kind) commitManual();
-          }, 120);
-        }}
-        onKeyDown={event => {
-          if (event.key === 'Enter') event.currentTarget.blur();
-          if (event.key === 'Escape') setOpenField(null);
-        }}
-      />
-      {openField === kind && !disabled && suggestions.length > 0 && (
-        <div className="absolute z-30 left-0 right-0 mt-1 max-h-56 overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+    <div className="relative min-w-[10rem]" data-schedule-product>
+      <div className="relative">
+        <input
+          type="text"
+          value={value}
+          placeholder={placeholder}
+          disabled={disabled}
+          className={`${variant === 'form' ? formInputClass : inputClass} pr-7`}
+          onChange={event => {
+            setValue(event.target.value);
+            setOpenField(kind);
+          }}
+          onFocus={() => setOpenField(kind)}
+          onBlur={() => {
+            window.setTimeout(() => {
+              if (openField === kind) commitManual();
+            }, 120);
+          }}
+          onKeyDown={event => {
+            if (event.key === 'Enter') event.currentTarget.blur();
+            if (event.key === 'Escape') setOpenField(null);
+          }}
+        />
+        <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+      </div>
+      {openField === kind && !disabled && (
+        <div className="absolute z-30 left-0 mt-1 w-[22rem] max-w-[70vw] max-h-64 overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg">
           <p className="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-            Closest Product Database matches
+            Closest ADI / Product Database matches
           </p>
-          {suggestions.map(product => (
+          {suggestions.length === 0 ? (
+            <p className="px-2.5 py-2 text-xs text-slate-500">
+              No close match yet. Keep typing to search, or enter a new manufacturer and model.
+            </p>
+          ) : suggestions.map(product => (
             <button
               key={product.id}
               type="button"
@@ -146,9 +154,14 @@ export function ScheduleProductPicker({
               {formatScheduleProductLabel(product)}
             </button>
           ))}
-          <p className="px-2.5 py-1.5 text-[10px] text-slate-400 border-t border-slate-100">
-            Or type a value and leave the box — new items are added to the Product Database.
-          </p>
+          <button
+            type="button"
+            className="w-full text-left px-2.5 py-1.5 text-xs font-medium text-cyan-700 hover:bg-cyan-50 border-t border-slate-100"
+            onMouseDown={event => event.preventDefault()}
+            onClick={() => commitManual()}
+          >
+            Use typed value{value.trim() ? ` “${value.trim()}”` : ''} — add to database if new
+          </button>
         </div>
       )}
     </div>

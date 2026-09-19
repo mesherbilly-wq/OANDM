@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import type { Project, ProductModel, Datasheet } from '../types';
 import { ArrowLeft, FolderOpen, Tag, CheckCircle2, PauseCircle, XCircle } from 'lucide-react';
 import { displayProjectJobNumber } from '../lib/projectJobNumber';
+import { fetchAllProductModels, invalidateProductModelsCache } from '../lib/productDatabaseDb';
 
 interface ProjectContextType {
   project: Project;
@@ -42,12 +43,12 @@ export function ProjectLayout() {
     const pid = parseInt(id);
     Promise.all([
       supabase.from('projects').select('*').eq('id', pid).single(),
-      supabase.from('product_models').select('*').order('manufacturer'),
+      fetchAllProductModels(),
       supabase.from('datasheets').select('*'),
-    ]).then(([{ data: proj, error }, { data: models }, { data: ds }]) => {
+    ]).then(([{ data: proj, error }, modelsResult, { data: ds }]) => {
       if (error || !proj) setNotFound(true);
       else setProject(proj);
-      setProductModels(models ?? []);
+      setProductModels(modelsResult.products);
       setDatasheets(ds ?? []);
       setLoading(false);
     });
@@ -59,8 +60,9 @@ export function ProjectLayout() {
   }, []);
 
   const refreshProductModels = useCallback(async () => {
-    const { data } = await supabase.from('product_models').select('*').order('manufacturer');
-    setProductModels(data ?? []);
+    invalidateProductModelsCache();
+    const { products } = await fetchAllProductModels();
+    setProductModels(products);
   }, []);
 
   const refreshProject = useCallback(async () => {
