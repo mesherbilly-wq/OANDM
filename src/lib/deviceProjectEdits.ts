@@ -55,6 +55,8 @@ export interface EquipmentGroupUpdates {
   system_type?: string | null;
   project_system_id?: number | null;
   system_category?: SystemCategory | null;
+  matched?: boolean;
+  datasheet_found?: boolean;
 }
 
 export async function updateEquipmentGroup(
@@ -76,6 +78,8 @@ export async function updateEquipmentGroup(
   if (updates.system_type !== undefined) fieldUpdates.system_type = updates.system_type;
   if (updates.project_system_id !== undefined) fieldUpdates.project_system_id = updates.project_system_id;
   if (updates.system_category !== undefined) fieldUpdates.system_category = updates.system_category;
+  if (updates.matched !== undefined) fieldUpdates.matched = updates.matched;
+  if (updates.datasheet_found !== undefined) fieldUpdates.datasheet_found = updates.datasheet_found;
 
   if (Object.keys(fieldUpdates).length > 0) {
     const { error } = await supabase.from('devices').update(fieldUpdates).in('id', ids);

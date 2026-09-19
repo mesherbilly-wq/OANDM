@@ -27,6 +27,12 @@ import { MAX_DEVICES_PER_LINE } from '../lib/devicePersistConstants';
 import { Device, ProjectSystemRecord } from '../types';
 import { EditEquipmentGroupModal } from '../components/EditEquipmentGroupModal';
 import { EditDeviceModal } from '../components/EditDeviceModal';
+import { ScheduleProductPicker } from '../components/ScheduleProductPicker';
+import {
+  ensureManualProductInDatabase,
+  type AppliedScheduleProduct,
+} from '../lib/scheduleProductPick';
+import { equipmentHasDatasheet } from '../lib/datasheetMatching';
 import {
   ChevronDown,
   ChevronRight,
@@ -88,7 +94,7 @@ interface DeviceRow {
 
 export default function DeviceSchedulePage() {
   const { id: projectId } = useParams<{ id: string }>();
-  const { productModels, refreshProductModels } = useProject();
+  const { productModels, refreshProductModels, datasheets } = useProject();
   const [devices, setDevices] = useState<Device[]>([]);
   const [systemRows, setSystemRows] = useState<ProjectSystemRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -532,6 +538,113 @@ export default function DeviceSchedulePage() {
     }
   };
 
+  const resolveAppliedProduct = async (
+    next: AppliedScheduleProduct,
+    fallbackName: string | null,
+    fallbackType: string | null,
+  ): Promise<AppliedScheduleProduct | null> => {
+    if (next.matched) return next;
+    const { applied, error } = await ensureManualProductInDatabase({
+      manufacturer: next.manufacturer,
+      modelNumber: next.modelNumber,
+      modelName: next.modelName ?? fallbackName,
+      deviceType: next.deviceType ?? fallbackType,
+      existingProducts: productModels,
+    });
+    if (error) {
+      setSaveError(error);
+      return null;
+    }
+    if (applied.created) await refreshProductModels();
+    return applied;
+  };
+
+  const commitGroupProduct = async (group: GroupedEquipment, next: AppliedScheduleProduct) => {
+    if (!projectIdNum) return;
+    const key = getGroupRowKey(group);
+    setSavingRowKey(key);
+    setSaveError(null);
+    const applied = await resolveAppliedProduct(next, group.description, group.description);
+    if (!applied) {
+      setSavingRowKey(null);
+      return;
+    }
+    const datasheetFound = equipmentHasDatasheet(
+      applied.manufacturer,
+      applied.modelNumber,
+      productModels,
+      datasheets,
+    );
+    const error = await updateEquipmentGroup(
+      projectIdNum,
+      group,
+      {
+        manufacturer: applied.manufacturer,
+        model_number: applied.modelNumber,
+        model_name: applied.modelName ?? group.description,
+        matched: applied.matched,
+        datasheet_found: datasheetFound,
+      },
+      { ...prefixCounters },
+    );
+    setSavingRowKey(null);
+    if (error) {
+      setSaveError(error);
+      return;
+    }
+    applyDevicePatch(group.devices.map(device => device.id), {
+      manufacturer: applied.manufacturer,
+      model_number: applied.modelNumber,
+      model_name: applied.modelName ?? group.description,
+      matched: applied.matched,
+      datasheet_found: datasheetFound,
+    });
+  };
+
+  const commitDeviceProduct = async (device: Device, next: AppliedScheduleProduct) => {
+    const key = `device:${device.id}`;
+    setSavingRowKey(key);
+    setSaveError(null);
+    const applied = await resolveAppliedProduct(
+      next,
+      getDeviceProductDescription(device),
+      device.device_type,
+    );
+    if (!applied) {
+      setSavingRowKey(null);
+      return;
+    }
+    const datasheetFound = equipmentHasDatasheet(
+      applied.manufacturer,
+      applied.modelNumber,
+      productModels,
+      datasheets,
+    );
+    const { error } = await supabase
+      .from('devices')
+      .update({
+        manufacturer: applied.manufacturer,
+        model_number: applied.modelNumber,
+        model_name: applied.modelName ?? device.model_name,
+        matched: applied.matched,
+        datasheet_found: datasheetFound,
+      })
+      .eq('id', device.id);
+    setSavingRowKey(null);
+    if (error) {
+      setSaveError(error.message);
+      return;
+    }
+    notifyProjectDevicesChanged();
+    applyDevicePatch([device.id], {
+      manufacturer: applied.manufacturer,
+      model_number: applied.modelNumber,
+      model_name: applied.modelName ?? device.model_name,
+      matched: applied.matched,
+      datasheet_found: datasheetFound,
+    });
+  };
+
   const commitDeviceSystemType = async (device: Device, nextName: string) => {
     if (!projectIdNum) return;
     if ((device.system_type ?? '') === nextName) return;
@@ -679,9 +792,16 @@ export default function DeviceSchedulePage() {
               }}
             />
           </td>
-          <td className="px-4 py-3 text-gray-700">{device.component_type || '-'}</td>
-          <td className="px-4 py-3 text-gray-700">{device.mac_address || '-'}</td>
-          <td className="px-4 py-3 text-gray-700">{device.model_number || '-'}</td>
+          <td className="px-4 py-3 text-gray-700">{device.device_type || device.component_type || '-'}</td>
+          <ScheduleProductPicker
+            manufacturer={device.manufacturer}
+            modelNumber={device.model_number}
+            modelName={getDeviceProductDescription(device)}
+            deviceType={device.device_type}
+            products={productModels}
+            disabled={savingRowKey === `device:${device.id}`}
+            onApply={next => void commitDeviceProduct(device, next)}
+          />
           <td className="px-4 py-3">
             <input
               type="number"
@@ -888,8 +1008,15 @@ export default function DeviceSchedulePage() {
                           }}
                         />
                       </td>
-                      <td className="px-4 py-3 text-gray-700">{row.manufacturer || '—'}</td>
-                      <td className="px-4 py-3 text-gray-700">{row.model_number || '—'}</td>
+                      <ScheduleProductPicker
+                        manufacturer={row.manufacturer}
+                        modelNumber={row.model_number}
+                        modelName={row.description}
+                        deviceType={row.description}
+                        products={productModels}
+                        disabled={savingRowKey === rowKey}
+                        onApply={next => void commitGroupProduct(row, next)}
+                      />
                       <td className="px-4 py-3">
                         <input
                           type="number"
@@ -980,8 +1107,9 @@ export default function DeviceSchedulePage() {
           group={editGroup}
           prefixCounters={prefixCounters}
           projectSystems={projectSystems}
+          productModels={productModels}
           onClose={() => setEditGroup(null)}
-          onSaved={() => { setEditGroup(null); void fetchDevices({ silent: true }); }}
+          onSaved={() => { setEditGroup(null); void fetchDevices({ silent: true }); void refreshProductModels(); }}
         />
       )}
       {editDevice && (

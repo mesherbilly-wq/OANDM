@@ -5,12 +5,16 @@ import { MAX_DEVICES_PER_LINE } from '../lib/devicePersistConstants';
 import { assignDevicesToNamedSystem } from '../lib/projectSystemsDb';
 import { updateEquipmentGroup, type EquipmentGroupUpdates } from '../lib/deviceProjectEdits';
 import { LEGACY_SYSTEM_TYPE_NAMES, type ProjectSystem } from '../lib/systems';
+import { ScheduleProductPicker } from './ScheduleProductPicker';
+import { ensureManualProductInDatabase, type AppliedScheduleProduct } from '../lib/scheduleProductPick';
+import type { ProductModel } from '../types';
 
 interface Props {
   projectId: number;
   group: GroupedEquipment;
   prefixCounters: Record<string, number>;
   projectSystems: Array<Pick<ProjectSystem, 'id' | 'name' | 'category'>>;
+  productModels?: ProductModel[];
   onClose: () => void;
   onSaved: () => void;
 }
@@ -20,12 +24,14 @@ export function EditEquipmentGroupModal({
   group,
   prefixCounters,
   projectSystems,
+  productModels = [],
   onClose,
   onSaved,
 }: Props) {
   const [systemType, setSystemType] = useState(group.system_type ?? '');
   const [manufacturer, setManufacturer] = useState(group.manufacturer ?? '');
   const [modelNumber, setModelNumber] = useState(group.model_number ?? '');
+  const [pickedProduct, setPickedProduct] = useState<AppliedScheduleProduct | null>(null);
   const [description, setDescription] = useState(group.description ?? '');
   const [location, setLocation] = useState(
     [...new Set(group.devices.map(device => device.location?.trim()).filter(Boolean))][0] ?? '',
@@ -64,14 +70,43 @@ export function EditEquipmentGroupModal({
       }
     }
 
+    let nextManufacturer = manufacturer.trim() || null;
+    let nextModel = modelNumber.trim() || null;
+    let nextDescription = description.trim() || null;
+    let matched = pickedProduct?.matched ?? false;
+
+    if (!pickedProduct?.matched && (nextManufacturer || nextModel)) {
+      const { applied, error: productError } = await ensureManualProductInDatabase({
+        manufacturer: nextManufacturer,
+        modelNumber: nextModel,
+        modelName: nextDescription,
+        deviceType: nextDescription,
+        existingProducts: productModels,
+      });
+      if (productError) {
+        setError(productError);
+        setSaving(false);
+        return;
+      }
+      nextManufacturer = applied.manufacturer;
+      nextModel = applied.modelNumber;
+      nextDescription = applied.modelName ?? nextDescription;
+      matched = applied.matched;
+    } else if (pickedProduct?.matched) {
+      nextManufacturer = pickedProduct.manufacturer;
+      nextModel = pickedProduct.modelNumber;
+      nextDescription = description.trim() || pickedProduct.modelName;
+    }
+
     const updates: EquipmentGroupUpdates = {
-      manufacturer: manufacturer.trim() || null,
-      model_number: modelNumber.trim() || null,
-      model_name: description.trim() || null,
+      manufacturer: nextManufacturer,
+      model_number: nextModel,
+      model_name: nextDescription,
       device_type: description.trim() || null,
       location: location.trim() || null,
       notes: notes.trim() || null,
       quantity: Number.isFinite(parsedQty) ? parsedQty : group.quantity,
+      matched,
     };
 
     const message = await updateEquipmentGroup(projectId, group, updates, { ...prefixCounters });
@@ -126,16 +161,21 @@ export function EditEquipmentGroupModal({
               <input value={description} onChange={event => setDescription(event.target.value)} className={ic} />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1.5">Manufacturer</label>
-                <input value={manufacturer} onChange={event => setManufacturer(event.target.value)} className={ic} />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1.5">Model / Part No.</label>
-                <input value={modelNumber} onChange={event => setModelNumber(event.target.value)} className={ic} />
-              </div>
-            </div>
+            <ScheduleProductPicker
+              variant="form"
+              manufacturer={manufacturer}
+              modelNumber={modelNumber}
+              modelName={description}
+              deviceType={description}
+              products={productModels}
+              disabled={saving}
+              onApply={next => {
+                setPickedProduct(next);
+                setManufacturer(next.manufacturer ?? '');
+                setModelNumber(next.modelNumber ?? '');
+                if (next.modelName && !description.trim()) setDescription(next.modelName);
+              }}
+            />
 
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1.5">Quantity</label>
