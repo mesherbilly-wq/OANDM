@@ -89,6 +89,7 @@ interface PendingDescribe {
 const TECH_DOC_TYPES = [
   'Door Schedule',
   'Camera Schedule',
+  'Zone List',
   'Password Schedule',
   'IP Address Schedule',
   'Port / Patch Schedule',
