@@ -7,6 +7,6 @@ import { createPlannedConnector } from '../createPlannedConnector';
 export const aiDocumentsConnector = createPlannedConnector({
   id: 'ai_documents',
   label: 'AI Documents',
-  description: 'Extract project and device data from quotes, proposals, and specifications.',
+  description: 'Extract project and device data from quotes, proposals, and specifications (PDF or Word).',
   supportsSearch: false,
 });

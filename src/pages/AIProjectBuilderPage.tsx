@@ -148,12 +148,50 @@ async function extractPdfText(file: File): Promise<string> {
   return parts.join('\n');
 }
 
+function isZipDocx(bytes: Uint8Array): boolean {
+  return bytes.length >= 2 && bytes[0] === 0x50 && bytes[1] === 0x4b;
+}
+
+function isLegacyDoc(bytes: Uint8Array): boolean {
+  return bytes.length >= 4 && bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0;
+}
+
+function isWordFile(file: File): boolean {
+  const name = file.name.toLowerCase();
+  const type = file.type;
+  return name.endsWith('.docx')
+    || name.endsWith('.doc')
+    || type.includes('wordprocessingml')
+    || type === 'application/msword'
+    || type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+}
+
+async function extractWordText(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  if ((file.name.toLowerCase().endsWith('.doc') || file.type === 'application/msword') && !isZipDocx(bytes) && isLegacyDoc(bytes)) {
+    throw new Error('Older Word .doc files are not supported. Save as .docx or PDF and import again.');
+  }
+  const mammothModule = await import('mammoth') as unknown as {
+    extractRawText: (input: { arrayBuffer: ArrayBuffer }) => Promise<{ value: string }>;
+    default?: { extractRawText: (input: { arrayBuffer: ArrayBuffer }) => Promise<{ value: string }> };
+  };
+  const mammoth = mammothModule.default ?? mammothModule;
+  const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+  const text = result.value?.trim() ?? '';
+  if (!text) throw new Error(`No text could be read from ${file.name}.`);
+  return text;
+}
+
 async function extractDocText(doc: UploadedDoc): Promise<{ name: string; content: string }> {
   const { file, label } = doc;
   const name = `${label}: ${file.name}`;
   if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
     try { return { name, content: await extractPdfText(file) }; }
     catch { return { name, content: `[PDF extraction failed for ${file.name}]` }; }
+  }
+  if (isWordFile(file)) {
+    return { name, content: await extractWordText(file) };
   }
   return { name, content: await file.text() };
 }
@@ -179,7 +217,10 @@ export function AIProjectBuilderPage() {
   const addFiles = useCallback((files: FileList | File[]) => {
     const arr = Array.from(files).filter(f => {
       const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
-      return ['pdf', 'txt', 'csv', 'md'].includes(ext) || f.type.startsWith('text/');
+      return ['pdf', 'txt', 'csv', 'md', 'doc', 'docx'].includes(ext)
+        || f.type.startsWith('text/')
+        || f.type.includes('wordprocessingml')
+        || f.type === 'application/msword';
     });
     setDocs(prev => [...prev, ...arr.map(f => ({ id: crypto.randomUUID(), file: f, label: 'Other' as const }))]);
   }, []);
@@ -594,12 +635,12 @@ function UploadStep({
             onClick={() => fileInputRef.current?.click()}
             className={`relative border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all
               ${isDragOver ? 'border-cyan-500 bg-cyan-50' : 'border-slate-300 bg-white hover:border-cyan-400 hover:bg-slate-50'}`}>
-            <input ref={fileInputRef} type="file" multiple accept=".pdf,.txt,.csv,.md,text/*" onChange={onFileInput} className="hidden" />
+            <input ref={fileInputRef} type="file" multiple accept=".pdf,.doc,.docx,.txt,.csv,.md,text/*,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={onFileInput} className="hidden" />
             <div className={`w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center ${isDragOver ? 'bg-cyan-100' : 'bg-slate-100'}`}>
               <Upload className={`w-8 h-8 ${isDragOver ? 'text-cyan-600' : 'text-slate-400'}`} />
             </div>
             <p className="text-lg font-semibold text-slate-700 mb-1">{isDragOver ? 'Drop files here' : 'Drag & drop documents'}</p>
-            <p className="text-sm text-slate-400">or click to browse — PDF, TXT, CSV supported</p>
+            <p className="text-sm text-slate-400">or click to browse — PDF, Word, TXT, CSV supported</p>
           </div>
 
           {docs.length > 0 && (
