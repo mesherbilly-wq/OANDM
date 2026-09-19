@@ -5,7 +5,7 @@ import { SchemaForm } from '../components/SchemaForm';
 import { FormLetterhead } from '../components/FormLetterhead';
 import { useProject } from './ProjectLayout';
 import { supabase } from '../lib/supabase';
-import { fetchPublicContractorBrand, type ContractorBrand } from '../lib/contractorBrand';
+import { fetchContractorForProject, type ContractorBrand } from '../lib/contractorBrand';
 import { getSdpSchema } from '../lib/systemDesignProposal';
 import {
   applySdpKind,
@@ -45,7 +45,7 @@ export default function SdpPage() {
         supabase.from('project_documents').select('content').eq('project_id', project.id).eq('document_type', 'scope_of_works').maybeSingle(),
         supabase.from('as_fitted_items').select('quoted_description,quoted_quantity,source_quote_line_id').eq('project_id', project.id),
         supabase.from('project_systems').select('category,name').eq('project_id', project.id),
-        fetchPublicContractorBrand(),
+        fetchContractorForProject({ projectId: project.id, contractorProfileId: project.contractor_profile_id }),
         listSdpRevisions(project.id),
       ]);
       setBrand(contractor);

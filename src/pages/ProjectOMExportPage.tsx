@@ -23,7 +23,12 @@ import { useUserAccess } from '../lib/userAccess';
 import { OmClientInvitePanel } from '../components/OmClientInvitePanel';
 import { MarkdownDocEditor, documentPreviewClassName, renderDocumentHtml, usesSimproLayout } from '../components/MarkdownDocEditor';
 import { MaintenancePlanSection, PrintMaintenancePlan } from '../components/MaintenancePlanSection';
-import { PACIFIC_INK, PACIFIC_LABEL_GREY, PACIFIC_LOGO_SRC, PACIFIC_RED } from '../components/FormLetterhead';
+import { PACIFIC_LABEL_GREY } from '../components/FormLetterhead';
+import {
+  fetchContractorForProject,
+  imageUrlToDataUrl,
+  resolveOmBrand,
+} from '../lib/contractorBrand';
 import {
   createDefaultMaintenancePlan,
   hydrateStoredMaintenancePlan,
@@ -335,27 +340,18 @@ type TechDocBundle = {
   fileName?: string | null;
 };
 
-const PACIFIC_RED_RGB: [number, number, number] = [192, 0, 0];
-const PACIFIC_INK_RGB: [number, number, number] = [64, 64, 64];
+const OmBrandContext = React.createContext(resolveOmBrand(null));
+function useOmBrand() {
+  return React.useContext(OmBrandContext);
+}
+
 const PACIFIC_MUTED_RGB: [number, number, number] = [120, 120, 120];
 const TECH_DOC_PRINT_ROWS = 18;
 const TECH_DOC_PRINT_ROWS_LANDSCAPE = 12;
 const PRINT_LANDSCAPE_COL_THRESHOLD = 6;
 
-async function loadPacificLogoDataUrl(): Promise<string | null> {
-  try {
-    const response = await fetch(PACIFIC_LOGO_SRC);
-    if (!response.ok) return null;
-    const blob = await response.blob();
-    return await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  } catch {
-    return null;
-  }
+async function loadBrandLogoDataUrl(src: string): Promise<string | null> {
+  return imageUrlToDataUrl(src);
 }
 
 function sameSystemName(a: string | null | undefined, b: string | null | undefined): boolean {
@@ -623,7 +619,7 @@ export function ProjectOMExportPage() {
       { data: handData },
       { data: uplData },
       { data: afdData },
-      { data: contrData },
+      contrData,
       { data: authData },
       { data: scHandData },
       { data: otherHandData },
@@ -640,7 +636,7 @@ export function ProjectOMExportPage() {
       supabase.from('handover_documents').select('*').eq('project_id', pid),
       supabase.from('om_pack_uploads').select('*').eq('project_id', pid),
       supabase.from('as_fitted_drawings').select('*').eq('project_id', pid).order('created_at'),
-      supabase.from('contractor_profile').select('*').limit(1).maybeSingle(),
+      fetchContractorForProject({ projectId: pid, contractorProfileId: project?.contractor_profile_id }),
       supabase.from('document_authority').select('*').eq('project_id', pid).maybeSingle(),
       supabase.from('project_handover_docs').select('id,document_type,title,status,file_url,file_name,sc_inspection_id,sc_result,system_type,project_system_id').eq('project_id', pid).in('status', ['completed', 'imported', 'uploaded']),
       supabase.from('handover_other_docs').select('*').eq('project_id', pid).order('created_at'),
@@ -883,6 +879,8 @@ export function ProjectOMExportPage() {
   }, [pid, productModels, datasheets, project, packReadOnly]);
 
   useEffect(() => { load(); }, [load]);
+
+  const omBrand = useMemo(() => resolveOmBrand(contractorProfile), [contractorProfile]);
 
   const packPdfUrls = useMemo(() => {
     const urls: string[] = [];
@@ -1315,7 +1313,7 @@ export function ProjectOMExportPage() {
         'print-section-user_manuals':     'User Manuals',
       };
 
-      const logoDataUrl = await loadPacificLogoDataUrl();
+      const logoDataUrl = await loadBrandLogoDataUrl(omBrand.logoSrc);
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
       let currentPage = 0;
       let runningTitle = 'Operations & Maintenance Manual';
@@ -1326,14 +1324,14 @@ export function ProjectOMExportPage() {
       };
 
       const drawFooter = (pageNum: number, metrics: ReturnType<typeof pageMetrics>) => {
-        pdf.setDrawColor(...PACIFIC_RED_RGB);
+        pdf.setDrawColor(...omBrand.primaryRgb);
         pdf.setLineWidth(0.35);
         pdf.line(metrics.mLeft, metrics.pageH - 12, metrics.pageW - metrics.mRight, metrics.pageH - 12);
         pdf.setFont('helvetica', 'normal');
         pdf.setFontSize(7);
         pdf.setTextColor(...PACIFIC_MUTED_RGB);
-        pdf.text('Pacific Fire & Security', metrics.mLeft, metrics.footerY);
-        pdf.setTextColor(...PACIFIC_RED_RGB);
+        pdf.text(omBrand.name, metrics.mLeft, metrics.footerY);
+        pdf.setTextColor(...omBrand.primaryRgb);
         pdf.text(`Page ${pageNum}`, metrics.pageW / 2, metrics.footerY, { align: 'center' });
         pdf.setTextColor(...PACIFIC_MUTED_RGB);
         pdf.text(
@@ -1344,20 +1342,20 @@ export function ProjectOMExportPage() {
       };
 
       const drawPageHeader = (metrics: ReturnType<typeof pageMetrics>, title: string) => {
-        pdf.setFillColor(...PACIFIC_RED_RGB);
+        pdf.setFillColor(...omBrand.primaryRgb);
         pdf.rect(0, 0, metrics.pageW, 3.2, 'F');
         if (logoDataUrl) {
           try {
-            pdf.addImage(logoDataUrl, 'PNG', metrics.mLeft, 5.2, 42, 11);
+            pdf.addImage(logoDataUrl, /image\/jpe?g/i.test(logoDataUrl) ? 'JPEG' : 'PNG', metrics.mLeft, 5.2, 42, 11);
           } catch {
             // Logo is optional if the PNG cannot be embedded.
           }
         }
         pdf.setFont('helvetica', 'bold');
         pdf.setFontSize(8);
-        pdf.setTextColor(...PACIFIC_RED_RGB);
+        pdf.setTextColor(...omBrand.primaryRgb);
         pdf.text(title.toUpperCase(), metrics.pageW - metrics.mRight, 12, { align: 'right' });
-        pdf.setDrawColor(...PACIFIC_RED_RGB);
+        pdf.setDrawColor(...omBrand.primaryRgb);
         pdf.setLineWidth(0.45);
         pdf.line(metrics.mLeft, metrics.mTop - 3, metrics.pageW - metrics.mRight, metrics.mTop - 3);
       };
@@ -1479,6 +1477,7 @@ export function ProjectOMExportPage() {
   const completeSections = SECTIONS.filter(s => sectionStatus(s.id) === 'complete').length;
 
   return (
+    <OmBrandContext.Provider value={omBrand}>
     <div className="print:p-0">
       {/* Hidden file input */}
       <input ref={fileInputRef} type="file" accept="application/pdf" className="hidden" onChange={handleFileChange} />
@@ -2163,6 +2162,7 @@ export function ProjectOMExportPage() {
         }
       `}</style>
     </div>
+    </OmBrandContext.Provider>
   );
 }
 
@@ -2179,6 +2179,7 @@ function TechnicalDocsSection({ devices, techDocState, techDocBundles, documentS
   documentSystems: ProjectSystem[];
   packReadOnly?: boolean;
 }) {
+  const brand = useOmBrand();
   const [passwordPrompt, setPasswordPrompt] = useState<{
     id: number;
     title: string;
@@ -2272,7 +2273,7 @@ function TechnicalDocsSection({ devices, techDocState, techDocBundles, documentS
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">Password Protected</p>
                   <p className="text-sm text-slate-600 leading-relaxed">
                     {bundle.hasFilePassword
-                      ? 'This document is password-protected. Enter the password issued by Pacific to view or download it. Please contact Pacific if you are unable to access the document.'
+                      ? `This document is password-protected. Enter the password issued by ${brand.name} to view or download it. Please contact ${brand.name} if you are unable to access the document.`
                       : PROTECTED_DOC_NOTICE}
                   </p>
                   {bundle.includeInOm === false && !packReadOnly && (
@@ -2765,6 +2766,7 @@ function CoverSection({ project, devices, systemGroups, contractor, authority }:
   project: any; devices: DeviceWithDatasheet[]; systemGroups: any[]; contractor: any; authority: any;
 }) {
   const { role } = useUserAccess();
+  const brand = resolveOmBrand(contractor);
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
       <div className="flex items-center gap-2">
@@ -2773,22 +2775,22 @@ function CoverSection({ project, devices, systemGroups, contractor, authority }:
         <span className="ml-auto text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full font-medium">Auto-populated</span>
       </div>
 
-      <div className="border-2 border-[#C00000] rounded-lg overflow-hidden relative">
-        <div className="absolute right-0 top-0 bottom-0 w-3 bg-[#C00000]" aria-hidden />
-        <div className="bg-white px-8 py-8 pr-10 border-b-2 border-[#C00000]">
+      <div className="border-2 rounded-lg overflow-hidden relative" style={{ borderColor: brand.primary }}>
+        <div className="absolute right-0 top-0 bottom-0 w-3" style={{ background: brand.primary }} aria-hidden />
+        <div className="bg-white px-8 py-8 pr-10 border-b-2" style={{ borderColor: brand.primary }}>
           <img
-            src={PACIFIC_LOGO_SRC}
-            alt="Pacific Fire & Security"
+            src={brand.logoSrc}
+            alt={brand.name}
             className="h-12 object-contain mb-3"
           />
-          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#C00000] mb-4">
-            Specialists in fire; experts in security
+          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] mb-4" style={{ color: brand.primary }}>
+            {brand.tagline}
           </p>
           {contractor?.company_name && (
-            <p className="text-xs font-semibold uppercase tracking-widest text-[#404040] mb-1">{contractor.company_name}</p>
+            <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: brand.ink }}>{contractor.company_name}</p>
           )}
-          <p className="text-xs font-semibold uppercase tracking-widest text-[#C00000] mb-2">Operations & Maintenance Manual</p>
-          <h1 className="text-2xl font-bold leading-tight text-[#404040]">{project.project_name || 'Untitled Project'}</h1>
+          <p className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: brand.primary }}>Operations & Maintenance Manual</p>
+          <h1 className="text-2xl font-bold leading-tight" style={{ color: brand.ink }}>{project.project_name || 'Untitled Project'}</h1>
           {project.site_name && <p className="text-[#58595B] mt-2 text-sm">{project.site_name}</p>}
           {project.site_address && <p className="text-[#737373] mt-0.5 text-xs">{project.site_address}</p>}
         </div>
@@ -2882,6 +2884,7 @@ function contractorAddressLines(contractor: any): string[] {
 
 function ContractorSection({ contractor }: { contractor: any }) {
   const { role } = useUserAccess();
+  const brand = resolveOmBrand(contractor);
   const address = contractorAddressLines(contractor);
   const filled = contractorHasInfo(contractor);
   const details: { label: string; value?: string | null }[] = [
@@ -2907,10 +2910,12 @@ function ContractorSection({ contractor }: { contractor: any }) {
 
       {filled ? (
         <div className="border border-slate-200 rounded-lg overflow-hidden">
-          <div className="bg-[#C00000] text-white px-6 py-4 flex items-center gap-4">
+          <div className="text-white px-6 py-4 flex items-center gap-4" style={{ background: brand.primary }}>
             {contractor?.logo_url ? (
               <img src={contractor.logo_url} alt="" className="h-10 object-contain bg-white rounded px-2 py-1" />
-            ) : null}
+            ) : (
+              <img src={brand.logoSrc} alt="" className="h-10 object-contain bg-white rounded px-2 py-1" />
+            )}
             <div>
               <p className="text-lg font-semibold leading-tight">{contractor?.company_name || 'Contractor'}</p>
               {contractor?.website && <p className="text-xs text-white/80 mt-0.5">{contractor.website}</p>}
@@ -2933,8 +2938,8 @@ function ContractorSection({ contractor }: { contractor: any }) {
 
       <p className="text-xs text-slate-400">
         {canAccessDocumentManagement(role)
-          ? <>This page pulls from Document Management — fill in <strong>Contractor Information</strong> to complete it. It is reused on every O&M pack.</>
-          : <>This page pulls from Document Management. Ask an admin to fill Contractor Information.</>}
+          ? <>This page pulls from Document Management — fill in <strong>Companies</strong> to complete it. Assign a company to this project.</>
+          : <>This page pulls from Document Management. Ask an admin to set the company for this project.</>}
       </p>
     </div>
   );
@@ -3487,12 +3492,13 @@ function AsFittedRecordSection({
 }
 
 function PrintAsFittedItems({ items }: { items: AsFittedItemRow[] }) {
+  const brand = useOmBrand();
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '1.25rem', fontSize: '0.78rem' }}>
       <thead>
         <tr style={{ background: PACIFIC_LABEL_GREY }}>
           {['Description', 'Quoted', 'Installed', 'Status', 'Change reason'].map(h => (
-            <th key={h} style={{ textAlign: 'left', padding: '0.45rem 0.55rem', fontSize: '0.62rem', fontWeight: 700, color: PACIFIC_INK, textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: `2px solid ${PACIFIC_RED}` }}>{h}</th>
+            <th key={h} style={{ textAlign: 'left', padding: '0.45rem 0.55rem', fontSize: '0.62rem', fontWeight: 700, color: brand.ink, textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: `2px solid ${brand.primary}` }}>{h}</th>
           ))}
         </tr>
       </thead>
@@ -3818,6 +3824,7 @@ function PrintTableOfContents({
   hasCommissioning: boolean; hasHandover: boolean; hasAsFittedDrawings: boolean;
   hasDatasheets: boolean; hasUserManuals: boolean;
 }) {
+  const brand = useOmBrand();
   const entries: TocEntry[] = [];
   let num = 1;
 
@@ -3837,18 +3844,18 @@ function PrintTableOfContents({
     <div id="print-section-toc" style={{ padding: '3.5rem 3.5rem 3rem', fontFamily: 'system-ui, -apple-system, sans-serif', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
       <div style={{ flex: '0 0 auto' }}>
-        <p style={{ fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.14em', color: PACIFIC_RED, textTransform: 'uppercase', margin: '0 0 0.75rem', textAlign: 'right' }}>
+        <p style={{ fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.14em', color: brand.primary, textTransform: 'uppercase', margin: '0 0 0.75rem', textAlign: 'right' }}>
           {[project?.client_name, project?.site_name || project?.project_name].filter(Boolean).join(' — ') || 'O&M Pack'}
         </p>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', borderBottom: `3px solid ${PACIFIC_RED}`, paddingBottom: '1rem', marginBottom: '0.25rem' }}>
-          <h1 style={{ fontSize: '2rem', fontWeight: 800, color: PACIFIC_INK, margin: 0, letterSpacing: '-0.02em' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', borderBottom: `3px solid ${brand.primary}`, paddingBottom: '1rem', marginBottom: '0.25rem' }}>
+          <h1 style={{ fontSize: '2rem', fontWeight: 800, color: brand.ink, margin: 0, letterSpacing: '-0.02em' }}>
             Table of Contents
           </h1>
           <span style={{ fontSize: '0.7rem', color: '#737373', fontWeight: 400 }}>
             {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })}
           </span>
         </div>
-        <p style={{ fontSize: '0.65rem', color: PACIFIC_RED, margin: '0 0 2.5rem', textAlign: 'right', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Operations &amp; Maintenance Manual</p>
+        <p style={{ fontSize: '0.65rem', color: brand.primary, margin: '0 0 2.5rem', textAlign: 'right', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Operations &amp; Maintenance Manual</p>
       </div>
 
       {/* Entries */}
@@ -3868,7 +3875,7 @@ function PrintTableOfContents({
             {/* Number badge */}
             <span style={{
               width: '1.75rem', height: '1.75rem', borderRadius: '50%',
-              background: PACIFIC_RED, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: brand.primary, display: 'flex', alignItems: 'center', justifyContent: 'center',
               fontSize: '0.7rem', fontWeight: 800, color: 'white', flexShrink: 0, marginRight: '0.75rem',
             }}>
               {entry.number}
@@ -3896,13 +3903,14 @@ function PrintTableOfContents({
         <p style={{ fontSize: '0.65rem', color: '#737373', margin: 0 }}>
           This document has been automatically generated. All information should be verified against site records.
         </p>
-        <p style={{ fontSize: '0.65rem', color: PACIFIC_RED, margin: 0, fontWeight: 700 }}>Pacific Fire &amp; Security</p>
+        <p style={{ fontSize: '0.65rem', color: brand.primary, margin: 0, fontWeight: 700 }}>{brand.name}</p>
       </div>
     </div>
   );
 }
 
 function PrintContractorInformation({ contractor }: { contractor: any }) {
+  const brand = resolveOmBrand(contractor);
   const address = contractorAddressLines(contractor);
   const rows: [string, string][] = [];
   if (contractor?.company_name) rows.push(['Company', contractor.company_name]);
@@ -3921,9 +3929,11 @@ function PrintContractorInformation({ contractor }: { contractor: any }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
         {contractor?.logo_url ? (
           <img src={contractor.logo_url} alt="" style={{ height: '3rem', objectFit: 'contain' }} />
-        ) : null}
+        ) : (
+          <img src={brand.logoSrc} alt="" style={{ height: '3rem', objectFit: 'contain' }} />
+        )}
         <div>
-          <p style={{ fontSize: '1.15rem', fontWeight: 800, color: PACIFIC_INK, margin: 0 }}>
+          <p style={{ fontSize: '1.15rem', fontWeight: 800, color: brand.ink, margin: 0 }}>
             {contractor?.company_name || 'Contractor'}
           </p>
           {contractor?.website ? (
@@ -3946,30 +3956,31 @@ function PrintContractorInformation({ contractor }: { contractor: any }) {
 function PrintCoverPage({ project, devices, systemGroups, contractor, authority }: {
   project: any; devices: any[]; systemGroups: any[]; contractor: any; authority: any;
 }) {
+  const brand = resolveOmBrand(contractor);
   return (
-    <div className="om-cover-page" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, -apple-system, sans-serif', position: 'relative', color: PACIFIC_INK }}>
-      <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: '14px', background: PACIFIC_RED }} aria-hidden />
-      <div style={{ padding: '2.75rem 3.5rem 1.75rem', borderBottom: `3px solid ${PACIFIC_RED}`, flex: '0 0 auto', paddingRight: '4rem' }}>
+    <div className="om-cover-page" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, -apple-system, sans-serif', position: 'relative', color: brand.ink }}>
+      <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: '14px', background: brand.primary }} aria-hidden />
+      <div style={{ padding: '2.75rem 3.5rem 1.75rem', borderBottom: `3px solid ${brand.primary}`, flex: '0 0 auto', paddingRight: '4rem' }}>
         <img
-          src={PACIFIC_LOGO_SRC}
-          alt="Pacific Fire & Security"
+          src={brand.logoSrc}
+          alt={brand.name}
           style={{ height: '3.25rem', objectFit: 'contain', marginBottom: '0.85rem' }}
         />
-        <p style={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.16em', textTransform: 'uppercase', color: PACIFIC_RED, margin: 0 }}>
-          Specialists in fire; experts in security
+        <p style={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.16em', textTransform: 'uppercase', color: brand.primary, margin: 0 }}>
+          {brand.tagline}
         </p>
         {contractor?.company_name && (
-          <p style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: PACIFIC_INK, margin: '0.85rem 0 0' }}>
+          <p style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: brand.ink, margin: '0.85rem 0 0' }}>
             {contractor.company_name}
           </p>
         )}
       </div>
 
       <div style={{ background: 'white', padding: '2rem 3.5rem', flex: '1 1 auto', paddingRight: '4rem' }}>
-        <p style={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.16em', textTransform: 'uppercase', color: PACIFIC_RED, margin: '0 0 0.6rem' }}>
+        <p style={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.16em', textTransform: 'uppercase', color: brand.primary, margin: '0 0 0.6rem' }}>
           Operations &amp; Maintenance Manual
         </p>
-        <h1 style={{ fontSize: '2.25rem', fontWeight: 800, lineHeight: 1.2, color: PACIFIC_INK, margin: '0 0 0.75rem' }}>
+        <h1 style={{ fontSize: '2.25rem', fontWeight: 800, lineHeight: 1.2, color: brand.ink, margin: '0 0 0.75rem' }}>
           {project?.project_name || 'Untitled Project'}
         </h1>
         {project?.site_name && (
@@ -4003,9 +4014,9 @@ function PrintCoverPage({ project, devices, systemGroups, contractor, authority 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
             {systemGroups.map((g: any) => (
               <span key={g.system} style={{
-                background: '#f7f7f7', border: `1px solid ${PACIFIC_RED}`,
+                background: '#f7f7f7', border: `1px solid ${brand.primary}`,
                 borderRadius: '0.375rem', padding: '0.25rem 0.75rem',
-                fontSize: '0.75rem', fontWeight: 600, color: PACIFIC_INK,
+                fontSize: '0.75rem', fontWeight: 600, color: brand.ink,
               }}>
                 {g.system}
               </span>
@@ -4039,7 +4050,7 @@ function PrintCoverPage({ project, devices, systemGroups, contractor, authority 
 
       {/* Dark contractor footer */}
       {contractor && (contractor.company_name || contractor.telephone || contractor.email) && (
-        <div style={{ background: PACIFIC_RED, padding: '0.9rem 3.5rem', display: 'flex', flexWrap: 'wrap', gap: '1.25rem', alignItems: 'center', flex: '0 0 auto', paddingRight: '4rem' }}>
+        <div style={{ background: brand.primary, padding: '0.9rem 3.5rem', display: 'flex', flexWrap: 'wrap', gap: '1.25rem', alignItems: 'center', flex: '0 0 auto', paddingRight: '4rem' }}>
           {contractor.company_name && <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'white' }}>{contractor.company_name}</span>}
           {contractor.address_line1 && <span style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.85)' }}>{[contractor.address_line1, contractor.city, contractor.postcode].filter(Boolean).join(', ')}</span>}
           {contractor.telephone && <span style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.85)' }}>Tel: {contractor.telephone}</span>}
@@ -4058,6 +4069,7 @@ function PrintTechnicalDocsTable({ columns, rows, compact }: {
   rows: TechDocPrintRow[];
   compact?: boolean;
 }) {
+  const brand = useOmBrand();
   if (columns.length === 0) {
     return <p style={{ color: '#94a3b8', fontSize: '0.85rem', fontStyle: 'italic' }}>No columns configured.</p>;
   }
@@ -4072,7 +4084,7 @@ function PrintTechnicalDocsTable({ columns, rows, compact }: {
       <thead>
         <tr style={{ background: PACIFIC_LABEL_GREY }}>
           {columns.map(col => (
-            <th key={col.key} style={{ textAlign: 'left', padding: pad, fontSize: headSize, fontWeight: 700, color: PACIFIC_INK, textTransform: 'uppercase' as const, letterSpacing: '0.04em', borderBottom: `2px solid ${PACIFIC_RED}`, borderRight: '1px solid #ececec', wordBreak: 'break-word' }}>
+            <th key={col.key} style={{ textAlign: 'left', padding: pad, fontSize: headSize, fontWeight: 700, color: brand.ink, textTransform: 'uppercase' as const, letterSpacing: '0.04em', borderBottom: `2px solid ${brand.primary}`, borderRight: '1px solid #ececec', wordBreak: 'break-word' }}>
               {col.display_name}
             </th>
           ))}
@@ -4096,6 +4108,7 @@ function PrintTechnicalDocsTable({ columns, rows, compact }: {
 function PrintTechnicalDocs({ techDocState }: {
   techDocState: Partial<Record<string, { rows: { id: number; row_index: number; data: Record<string, string> }[]; colConfig: { key: string; display_name: string; visible: boolean; order: number }[] }>>;
 }) {
+  const brand = useOmBrand();
   const systemsWithData = Object.keys(techDocState)
     .filter(name => (techDocState[name]?.rows.length ?? 0) > 0)
     .sort((a, b) => a.localeCompare(b));
@@ -4107,7 +4120,7 @@ function PrintTechnicalDocs({ techDocState }: {
         if (visibleCols.length === 0) return null;
         return (
           <div key={sys} style={{ marginBottom: '2rem' }}>
-            <div style={{ background: PACIFIC_RED, padding: '0.5rem 0.75rem', borderRadius: '0.375rem 0.375rem 0 0' }}>
+            <div style={{ background: brand.primary, padding: '0.5rem 0.75rem', borderRadius: '0.375rem 0.375rem 0 0' }}>
               <h3 style={{ fontSize: '0.7rem', fontWeight: 700, color: 'white', textTransform: 'uppercase', letterSpacing: '0.08em', margin: 0 }}>
                 {sys}
               </h3>
@@ -4178,15 +4191,16 @@ function PrintTechnicalDocsLegacy({ devices }: { devices: DeviceWithDatasheet[] 
 }
 
 function PrintProtectedTechDocNotice({ title, hasFilePassword }: { title: string; hasFilePassword?: boolean }) {
+  const brand = useOmBrand();
   return (
     <div style={{ border: `1px solid ${PACIFIC_LABEL_GREY}`, borderRadius: '0.5rem', padding: '1.1rem 1.2rem' }}>
-      <p style={{ fontSize: '1rem', fontWeight: 700, color: PACIFIC_INK, margin: '0 0 0.35rem' }}>{title}</p>
-      <p style={{ fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: PACIFIC_RED, margin: '0 0 0.85rem' }}>
+      <p style={{ fontSize: '1rem', fontWeight: 700, color: brand.ink, margin: '0 0 0.35rem' }}>{title}</p>
+      <p style={{ fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: brand.primary, margin: '0 0 0.85rem' }}>
         Password Protected
       </p>
       <p style={{ fontSize: '0.9rem', color: '#58595B', lineHeight: 1.55, margin: 0 }}>
         {hasFilePassword
-          ? 'This document is password-protected. Enter the password issued by Pacific to view or download it from the Client Portal. Please contact Pacific if you are unable to access the document.'
+          ? `This document is password-protected. Enter the password issued by ${brand.name} to view or download it from the Client Portal. Please contact ${brand.name} if you are unable to access the document.`
           : PROTECTED_DOC_NOTICE}
       </p>
     </div>
@@ -4201,6 +4215,7 @@ function PrintSection({ title, subtitle, anchorId, forcePageBreak, landscape, ch
   landscape?: boolean;
   children: React.ReactNode;
 }) {
+  const brand = useOmBrand();
   const breakBefore = (anchorId || forcePageBreak) ? 'always' : 'auto';
   return (
     <div
@@ -4212,19 +4227,19 @@ function PrintSection({ title, subtitle, anchorId, forcePageBreak, landscape, ch
         fontFamily: 'system-ui, -apple-system, sans-serif',
         pageBreakBefore: breakBefore,
         breakBefore,
-        color: PACIFIC_INK,
+        color: brand.ink,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '1rem', marginBottom: '0.35rem' }}>
-        <span style={{ fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: PACIFIC_RED }}>
-          Pacific Fire &amp; Security
+        <span style={{ fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: brand.primary }}>
+          {brand.name}
         </span>
         <span style={{ fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#737373', textAlign: 'right' }}>
           Operations &amp; Maintenance Manual
         </span>
       </div>
-      <div style={{ borderBottom: `3px solid ${PACIFIC_RED}`, marginBottom: landscape ? '0.9rem' : '1.35rem', paddingBottom: '0.55rem' }}>
-        <h2 style={{ fontSize: landscape ? '1.15rem' : '1.45rem', fontWeight: 800, color: PACIFIC_INK, margin: 0, letterSpacing: '-0.01em' }}>{title}</h2>
+      <div style={{ borderBottom: `3px solid ${brand.primary}`, marginBottom: landscape ? '0.9rem' : '1.35rem', paddingBottom: '0.55rem' }}>
+        <h2 style={{ fontSize: landscape ? '1.15rem' : '1.45rem', fontWeight: 800, color: brand.ink, margin: 0, letterSpacing: '-0.01em' }}>{title}</h2>
         {subtitle && <p style={{ fontSize: '0.8rem', color: '#58595B', margin: '0.3rem 0 0' }}>{subtitle}</p>}
       </div>
       {children}
@@ -4234,9 +4249,10 @@ function PrintSection({ title, subtitle, anchorId, forcePageBreak, landscape, ch
 
 function PrintDeviceTable({ system, devices }: { system: SystemType; devices: DeviceWithDatasheet[] }) {
   const equipmentGroups = groupDevices(devices);
+  const brand = useOmBrand();
   return (
     <div style={{ marginBottom: '2rem' }}>
-      <div style={{ background: PACIFIC_RED, padding: '0.5rem 0.75rem', borderRadius: '0.375rem 0.375rem 0 0', marginBottom: 0 }}>
+      <div style={{ background: brand.primary, padding: '0.5rem 0.75rem', borderRadius: '0.375rem 0.375rem 0 0', marginBottom: 0 }}>
         <h3 style={{ fontSize: '0.75rem', fontWeight: 700, color: 'white', textTransform: 'uppercase', letterSpacing: '0.08em', margin: 0 }}>
           {system} <span style={{ color: 'rgba(255,255,255,0.75)', fontWeight: 400 }}>— {devices.length} device{devices.length !== 1 ? 's' : ''}</span>
         </h3>
@@ -4245,7 +4261,7 @@ function PrintDeviceTable({ system, devices }: { system: SystemType; devices: De
         <thead>
           <tr style={{ background: PACIFIC_LABEL_GREY }}>
             {['Description', 'Manufacturer', 'Model', 'Qty', 'Location', 'Warranty'].map(h => (
-              <th key={h} style={{ textAlign: 'left', padding: '0.5rem 0.6rem', fontSize: '0.6rem', fontWeight: 700, color: PACIFIC_INK, textTransform: 'uppercase', letterSpacing: '0.06em', borderBottom: `2px solid ${PACIFIC_RED}`, borderRight: '1px solid #f1f5f9' }}>{h}</th>
+              <th key={h} style={{ textAlign: 'left', padding: '0.5rem 0.6rem', fontSize: '0.6rem', fontWeight: 700, color: brand.ink, textTransform: 'uppercase', letterSpacing: '0.06em', borderBottom: `2px solid ${brand.primary}`, borderRight: '1px solid #f1f5f9' }}>{h}</th>
             ))}
           </tr>
         </thead>

@@ -7,9 +7,15 @@ import { canAccessDocumentManagement, defaultProjectPath } from '../lib/appRoles
 import { useUserAccess } from '../lib/userAccess';
 import {
   Building2, FileCheck, User, ClipboardList, RotateCcw,
-  Save, Plus, Trash2, Upload, X, CheckCircle, Pencil,
+  Save, Plus, Trash2, Upload, X, CheckCircle,
   Phone, Mail, Globe, Hash, Award, Calendar,
 } from 'lucide-react';
+import {
+  DEFAULT_BRAND_INK,
+  DEFAULT_BRAND_PRIMARY,
+  DEFAULT_BRAND_TAGLINE,
+  normalizeBrandHex,
+} from '../lib/contractorBrand';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -29,6 +35,10 @@ interface ContractorProfile {
   ssaib_number: string;
   other_certifications: string;
   logo_url: string;
+  brand_primary: string;
+  brand_ink: string;
+  tagline: string;
+  is_default: boolean;
 }
 
 interface DocumentAuthority {
@@ -49,6 +59,8 @@ const BLANK_CONTRACTOR: ContractorProfile = {
   company_name: '', address_line1: '', address_line2: '', city: '', postcode: '',
   telephone: '', email: '', website: '', company_reg_number: '', vat_number: '',
   nsi_number: '', ssaib_number: '', other_certifications: '', logo_url: '',
+  brand_primary: DEFAULT_BRAND_PRIMARY, brand_ink: DEFAULT_BRAND_INK,
+  tagline: DEFAULT_BRAND_TAGLINE, is_default: false,
 };
 
 const BLANK_AUTHORITY: DocumentAuthority = {
@@ -61,7 +73,7 @@ type Tab = 'authority' | 'contractor' | 'project' | 'revisions';
 
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: 'authority',  label: 'Document Authority',   icon: FileCheck },
-  { id: 'contractor', label: 'Contractor Information', icon: Building2 },
+  { id: 'contractor', label: 'Companies', icon: Building2 },
   { id: 'project',    label: 'Project Information',   icon: ClipboardList },
   { id: 'revisions',  label: 'Revision Control',      icon: RotateCcw },
 ];
@@ -102,7 +114,11 @@ export default function DocumentManagementPage() {
 
   // Contractor state
   const [contractor, setContractor] = useState<ContractorProfile>(BLANK_CONTRACTOR);
+  const [companies, setCompanies] = useState<ContractorProfile[]>([]);
+  const [projectCompanyId, setProjectCompanyId] = useState<number | null>(null);
   const [contractorSaving, setContractorSaving] = useState(false);
+  const [logoUploading, setLogoUploading] = useState(false);
+  const logoInputRef = useRef<HTMLInputElement>(null);
 
   // Project state
   const [projectForm, setProjectForm] = useState<Partial<Project & { main_contractor: string; project_number: string; engineer: string }>>({});
@@ -124,13 +140,27 @@ export default function DocumentManagementPage() {
       { data: authData },
       { data: contrData },
       { data: revData },
+      { data: projectRow },
     ] = await Promise.all([
       supabase.from('document_authority').select('*').eq('project_id', pid).maybeSingle(),
-      supabase.from('contractor_profile').select('*').limit(1).maybeSingle(),
+      supabase.from('contractor_profile').select('*').order('company_name'),
       supabase.from('project_revisions').select('*').eq('project_id', pid).order('revised_at', { ascending: false }),
+      supabase.from('projects').select('contractor_profile_id').eq('id', pid).maybeSingle(),
     ]);
     if (authData) setAuthority({ ...BLANK_AUTHORITY, ...authData });
-    if (contrData) setContractor({ ...BLANK_CONTRACTOR, ...contrData });
+    const rows = ((contrData ?? []) as ContractorProfile[]).map(row => ({
+      ...BLANK_CONTRACTOR,
+      ...row,
+      brand_primary: normalizeBrandHex(row.brand_primary, DEFAULT_BRAND_PRIMARY),
+      brand_ink: normalizeBrandHex(row.brand_ink, DEFAULT_BRAND_INK),
+      tagline: row.tagline || DEFAULT_BRAND_TAGLINE,
+      is_default: Boolean(row.is_default),
+    })).sort((a, b) => Number(b.is_default) - Number(a.is_default) || a.company_name.localeCompare(b.company_name));
+    setCompanies(rows);
+    const assignedId = projectRow?.contractor_profile_id ?? rows.find(row => row.is_default)?.id ?? rows[0]?.id ?? null;
+    setProjectCompanyId(assignedId);
+    const selected = rows.find(row => row.id === assignedId) ?? rows[0];
+    setContractor(selected ? { ...BLANK_CONTRACTOR, ...selected } : BLANK_CONTRACTOR);
     setRevisions(revData ?? []);
     setLoading(false);
   }, [pid, role]);
@@ -182,14 +212,96 @@ export default function DocumentManagementPage() {
 
   const saveContractor = async () => {
     setContractorSaving(true);
-    if (contractor.id) {
-      await supabase.from('contractor_profile').update({ ...contractor }).eq('id', contractor.id);
+    const { id: contractorId, ...payload } = {
+      ...contractor,
+      brand_primary: normalizeBrandHex(contractor.brand_primary, DEFAULT_BRAND_PRIMARY),
+      brand_ink: normalizeBrandHex(contractor.brand_ink, DEFAULT_BRAND_INK),
+    };
+    if (contractor.is_default) {
+      await supabase.from('contractor_profile').update({ is_default: false }).neq('id', contractorId ?? 0);
+    }
+    if (contractorId) {
+      const { error } = await supabase.from('contractor_profile').update(payload).eq('id', contractorId);
+      if (error) { setContractorSaving(false); alert(error.message); return; }
     } else {
-      const { data } = await supabase.from('contractor_profile').insert({ ...contractor }).select().maybeSingle();
+      const { data, error } = await supabase.from('contractor_profile').insert(payload).select().maybeSingle();
+      if (error) { setContractorSaving(false); alert(error.message); return; }
       if (data) setContractor(c => ({ ...c, id: data.id }));
     }
     setContractorSaving(false);
-    setToast('Contractor profile saved');
+    setToast('Company details saved — O&M packs will use these on the next open');
+    await load();
+  };
+
+  const addCompany = async () => {
+    const { data, error } = await supabase.from('contractor_profile').insert({
+      company_name: 'New company',
+      brand_primary: DEFAULT_BRAND_PRIMARY,
+      brand_ink: DEFAULT_BRAND_INK,
+      tagline: DEFAULT_BRAND_TAGLINE,
+      is_default: companies.length === 0,
+    }).select().maybeSingle();
+    if (error || !data) {
+      alert(error?.message ?? 'Could not add company');
+      return;
+    }
+    await load();
+    setContractor({ ...BLANK_CONTRACTOR, ...data });
+    setToast('Company added');
+  };
+
+  const selectCompany = (id: number) => {
+    const next = companies.find(row => row.id === id);
+    if (next) setContractor({ ...BLANK_CONTRACTOR, ...next });
+  };
+
+  const assignCompanyToProject = async (id: number | undefined) => {
+    if (!pid || !id) return;
+    const { error } = await supabase.from('projects').update({ contractor_profile_id: id }).eq('id', pid);
+    if (error) { alert(error.message); return; }
+    setProjectCompanyId(id);
+    refreshProject();
+    setToast('This project now uses this company on O&M packs');
+  };
+
+  const deleteCompany = async (id: number | undefined) => {
+    if (!id) return;
+    if (companies.length < 2) {
+      alert('Keep at least one company.');
+      return;
+    }
+    if (!confirm('Delete this company? Projects using it will fall back to the default company.')) return;
+    const { error } = await supabase.from('contractor_profile').delete().eq('id', id);
+    if (error) { alert(error.message); return; }
+    await load();
+    setToast('Company deleted');
+  };
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!contractor.id) {
+      alert('Save the company first, then upload a logo.');
+      e.target.value = '';
+      return;
+    }
+    setLogoUploading(true);
+    const ext = file.name.split('.').pop() || 'png';
+    const path = `${contractor.id}/logo_${Date.now()}.${ext}`;
+    const { error } = await supabase.storage.from('company-logos').upload(path, file, { upsert: true });
+    if (error) {
+      alert('Logo upload failed: ' + error.message);
+      setLogoUploading(false);
+      e.target.value = '';
+      return;
+    }
+    const { data: { publicUrl } } = supabase.storage.from('company-logos').getPublicUrl(path);
+    const next = { ...contractor, logo_url: publicUrl };
+    setContractor(next);
+    await supabase.from('contractor_profile').update({ logo_url: publicUrl }).eq('id', contractor.id);
+    setLogoUploading(false);
+    e.target.value = '';
+    setToast('Logo saved');
   };
 
   // ── Project save ──────────────────────────────────────────────────────────────
@@ -240,6 +352,7 @@ export default function DocumentManagementPage() {
     <div className="space-y-4">
       {toast && <Toast message={toast} onDone={() => setToast('')} />}
       <input ref={sigInputRef} type="file" accept="image/*" className="hidden" onChange={handleSigUpload} />
+      <input ref={logoInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" className="hidden" onChange={handleLogoUpload} />
 
       {/* Header */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm px-5 py-4">
@@ -275,8 +388,16 @@ export default function DocumentManagementPage() {
           {tab === 'contractor' && (
             <ContractorTab
               contractor={contractor}
+              companies={companies}
+              projectCompanyId={projectCompanyId}
               onChange={setContractor}
+              onSelect={selectCompany}
               onSave={saveContractor}
+              onAdd={addCompany}
+              onDelete={() => void deleteCompany(contractor.id)}
+              onAssign={() => void assignCompanyToProject(contractor.id)}
+              onUploadLogo={() => logoInputRef.current?.click()}
+              logoUploading={logoUploading}
               saving={contractorSaving}
             />
           )}
@@ -384,33 +505,88 @@ function AuthorityTab({ authority, onChange, onSave, saving, onUploadSig, upload
 
 // ─── Contractor Information tab ───────────────────────────────────────────────
 
-function ContractorTab({ contractor, onChange, onSave, saving }: {
+function ContractorTab({
+  contractor, companies, projectCompanyId, onChange, onSelect, onSave, onAdd, onDelete, onAssign, onUploadLogo, logoUploading, saving,
+}: {
   contractor: ContractorProfile;
+  companies: ContractorProfile[];
+  projectCompanyId: number | null;
   onChange: (c: ContractorProfile) => void;
+  onSelect: (id: number) => void;
   onSave: () => void;
+  onAdd: () => void;
+  onDelete: () => void;
+  onAssign: () => void;
+  onUploadLogo: () => void;
+  logoUploading: boolean;
   saving: boolean;
 }) {
   const f = (field: keyof ContractorProfile) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     onChange({ ...contractor, [field]: e.target.value });
+  const isProjectCompany = Boolean(contractor.id && contractor.id === projectCompanyId);
+  const primary = normalizeBrandHex(contractor.brand_primary, DEFAULT_BRAND_PRIMARY);
+  const ink = normalizeBrandHex(contractor.brand_ink, DEFAULT_BRAND_INK);
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h3 className="font-semibold text-slate-800">Contractor Information</h3>
-          <p className="text-sm text-slate-500 mt-0.5">Your company details — saved globally and reused across all projects</p>
+          <h3 className="font-semibold text-slate-800">Companies</h3>
+          <p className="text-sm text-slate-500 mt-0.5">Each company has its own details, logo and O&amp;M colours. Assign one to this project.</p>
         </div>
-        <button onClick={onSave} disabled={saving}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 font-medium text-sm transition-colors disabled:opacity-50">
-          <Save className="w-4 h-4" />{saving ? 'Saving…' : 'Save'}
+        <div className="flex items-center gap-2">
+          <button onClick={onAdd} type="button"
+            className="inline-flex items-center gap-2 px-3 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 font-medium text-sm text-slate-700">
+            <Plus className="w-4 h-4" />Add company
+          </button>
+          <button onClick={onSave} disabled={saving}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 font-medium text-sm transition-colors disabled:opacity-50">
+            <Save className="w-4 h-4" />{saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+
+      {companies.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {companies.map(company => {
+            const active = company.id === contractor.id;
+            return (
+              <button
+                key={company.id}
+                type="button"
+                onClick={() => company.id && onSelect(company.id)}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+                  active ? 'bg-cyan-50 text-cyan-800 border-cyan-300' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                {company.company_name || 'Untitled company'}
+                {company.is_default ? <span className="ml-1.5 text-[10px] uppercase tracking-wide text-slate-400">Default</span> : null}
+                {company.id === projectCompanyId ? <span className="ml-1.5 text-[10px] uppercase tracking-wide text-emerald-600">This project</span> : null}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={onAssign} disabled={!contractor.id || isProjectCompany}
+          className="inline-flex items-center gap-2 px-3 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 text-sm font-medium disabled:opacity-40">
+          Use this company on this project&apos;s O&amp;M
+        </button>
+        <button type="button" onClick={onDelete} disabled={!contractor.id || companies.length < 2}
+          className="inline-flex items-center gap-2 px-3 py-2 text-red-600 hover:bg-red-50 rounded-lg text-sm font-medium disabled:opacity-40">
+          <Trash2 className="w-4 h-4" />Delete company
         </button>
       </div>
 
-      {/* Company details */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <div className="md:col-span-2">
           <label className={label}><Building2 className="inline w-3.5 h-3.5 mr-1" />Company Name</label>
           <input type="text" value={contractor.company_name} onChange={f('company_name')} className={ic} placeholder="Your company name" />
+        </div>
+        <div className="md:col-span-2">
+          <label className={label}>O&amp;M tagline</label>
+          <input type="text" value={contractor.tagline} onChange={f('tagline')} className={ic} placeholder={DEFAULT_BRAND_TAGLINE} />
         </div>
         <div>
           <label className={label}>Address Line 1</label>
@@ -442,7 +618,66 @@ function ContractorTab({ contractor, onChange, onSave, saving }: {
         </div>
       </div>
 
-      {/* Registration & certification numbers */}
+      <div className="border-t border-slate-100 pt-5 space-y-4">
+        <h4 className="text-sm font-semibold text-slate-700">O&amp;M branding</h4>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div>
+            <label className={label}>Logo</label>
+            {contractor.logo_url ? (
+              <div className="flex items-center gap-3">
+                <img src={contractor.logo_url} alt="" className="h-12 max-w-[10rem] object-contain border border-slate-200 rounded bg-white px-2 py-1" />
+                <div className="space-y-1">
+                  <button type="button" onClick={onUploadLogo} disabled={logoUploading} className="text-sm text-cyan-700 hover:underline">
+                    {logoUploading ? 'Uploading…' : 'Replace logo'}
+                  </button>
+                  <button type="button" onClick={() => {
+                    onChange({ ...contractor, logo_url: '' });
+                  }} className="block text-sm text-slate-500 hover:text-red-600">Remove</button>
+                </div>
+              </div>
+            ) : (
+              <button type="button" onClick={onUploadLogo} disabled={logoUploading}
+                className="w-full flex items-center justify-center gap-2 py-6 border-2 border-dashed border-slate-300 rounded-lg text-slate-400 hover:border-cyan-400 hover:text-cyan-600 text-sm">
+                <Upload className="w-4 h-4" />{logoUploading ? 'Uploading…' : 'Upload company logo'}
+              </button>
+            )}
+          </div>
+          <div className="space-y-4">
+            <div>
+              <label className={label}>Primary colour</label>
+              <div className="flex items-center gap-2">
+                <input type="color" value={primary} onChange={e => onChange({ ...contractor, brand_primary: e.target.value })} className="h-10 w-12 border border-slate-200 rounded cursor-pointer" />
+                <input type="text" value={contractor.brand_primary} onChange={f('brand_primary')} className={ic} placeholder="#C00000" />
+              </div>
+            </div>
+            <div>
+              <label className={label}>Text colour</label>
+              <div className="flex items-center gap-2">
+                <input type="color" value={ink} onChange={e => onChange({ ...contractor, brand_ink: e.target.value })} className="h-10 w-12 border border-slate-200 rounded cursor-pointer" />
+                <input type="text" value={contractor.brand_ink} onChange={f('brand_ink')} className={ic} placeholder="#404040" />
+              </div>
+            </div>
+          </div>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={contractor.is_default}
+            onChange={e => onChange({ ...contractor, is_default: e.target.checked })}
+            className="rounded border-slate-300"
+          />
+          Default company for new projects
+        </label>
+        <div className="rounded-lg border overflow-hidden" style={{ borderColor: primary }}>
+          <div className="px-4 py-3 text-white text-sm font-semibold" style={{ background: primary }}>
+            {contractor.company_name || 'Company preview'}
+          </div>
+          <div className="px-4 py-3 text-xs" style={{ color: ink }}>
+            {contractor.tagline || DEFAULT_BRAND_TAGLINE}
+          </div>
+        </div>
+      </div>
+
       <div className="border-t border-slate-100 pt-5">
         <h4 className="text-sm font-semibold text-slate-700 mb-4 flex items-center gap-2">
           <Hash className="w-4 h-4 text-slate-400" />Registration & Certification Numbers

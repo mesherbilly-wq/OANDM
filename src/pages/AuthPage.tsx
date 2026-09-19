@@ -8,6 +8,11 @@ import {
 } from '../lib/projectEndUserAccess';
 import { confirmUserFromInvite, registerUserFromInvite } from '../lib/appUserInvites';
 import {
+  DEFAULT_BRAND_INK,
+  DEFAULT_BRAND_PRIMARY,
+  DEFAULT_BRAND_TAGLINE,
+} from '../lib/contractorBrand';
+import {
   Shield, Building2, Mail, Lock, Eye, EyeOff, ArrowRight,
   ArrowLeft, Phone, Globe, Hash, Award, MapPin, Check,
   AlertCircle,
@@ -294,6 +299,10 @@ function RegisterForm({ onSwitch }: { onSwitch: () => void }) {
       nsi_number: form.nsi_number,
       ssaib_number: form.ssaib_number,
       other_certifications: form.other_certifications,
+      brand_primary: DEFAULT_BRAND_PRIMARY,
+      brand_ink: DEFAULT_BRAND_INK,
+      tagline: DEFAULT_BRAND_TAGLINE,
+      is_default: true,
     };
 
     const { data: existing } = await supabase.from('contractor_profile').select('id').limit(1).maybeSingle();

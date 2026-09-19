@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from './lib/supabase';
+import { fetchPublicContractorBrand } from './lib/contractorBrand';
 import { Layout } from './components/Layout';
 import { AuthPage } from './pages/AuthPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -58,8 +59,8 @@ function App() {
   }, []);
 
   const loadCompany = async () => {
-    const { data } = await supabase.from('contractor_profile').select('company_name').limit(1).maybeSingle();
-    if (data?.company_name) setCompanyName(data.company_name);
+    const brand = await fetchPublicContractorBrand();
+    if (brand?.company_name) setCompanyName(brand.company_name);
   };
 
   const handleSignOut = async () => {

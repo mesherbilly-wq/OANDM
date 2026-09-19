@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
 import { Plus, Search, FolderOpen, MoreVertical, Trash2, Edit3, X, Calendar, Building, User, ChevronRight } from 'lucide-react';
 import { canEditOperations, defaultProjectPath } from '../lib/appRoles';
+import { fetchDefaultContractorProfileId } from '../lib/contractorBrand';
 import { useUserAccess } from '../lib/userAccess';
 
 export function ProjectsPage() {
@@ -67,9 +68,10 @@ export function ProjectsPage() {
   };
 
   const handleCreate = async (project: Partial<Project>) => {
+    const contractorProfileId = await fetchDefaultContractorProfileId();
     const { data, error } = await supabase
       .from('projects')
-      .insert(project)
+      .insert({ ...project, contractor_profile_id: contractorProfileId ?? project.contractor_profile_id ?? null })
       .select()
       .single();
 

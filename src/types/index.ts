@@ -71,6 +71,7 @@ export interface Project {
   project_number: string | null;
   engineer: string | null;
   handover_project_wide_type_key?: string | null;
+  contractor_profile_id?: number | null;
 }
 
 export interface SCTemplateItem {
@@ -139,6 +140,10 @@ export interface ContractorProfile {
   ssaib_number: string | null;
   other_certifications: string | null;
   logo_url: string | null;
+  brand_primary: string | null;
+  brand_ink: string | null;
+  tagline: string | null;
+  is_default: boolean;
 }
 
 export interface DocumentAuthority {

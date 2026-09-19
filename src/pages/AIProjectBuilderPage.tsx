@@ -7,6 +7,7 @@ import {
   ClipboardList, Tag, ImageIcon,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { fetchDefaultContractorProfileId } from '../lib/contractorBrand';
 import type { SystemType } from '../types';
 import { getDevicePrefix } from '../lib/deviceLabel';
 import { ensureProjectSystem } from '../lib/projectSystemsDb';
@@ -342,6 +343,7 @@ export function AIProjectBuilderPage() {
     setStep('creating');
     try {
       // Create project record
+      const contractorProfileId = await fetchDefaultContractorProfileId();
       const { data: proj, error: projErr } = await supabase
         .from('projects')
         .insert({
@@ -349,6 +351,7 @@ export function AIProjectBuilderPage() {
           client_name: project.client_name || null,
           site_name: project.site_name || null,
           project_manager: project.project_manager || null,
+          contractor_profile_id: contractorProfileId,
         })
         .select().single();
       if (projErr || !proj) throw new Error(projErr?.message ?? 'Failed to create project');

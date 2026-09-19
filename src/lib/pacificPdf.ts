@@ -1,6 +1,5 @@
 import { jsPDF } from 'jspdf';
-import { PACIFIC_LOGO_SRC } from '../components/FormLetterhead';
-import { formatContractorAddress, formatContractorContact, imageUrlToDataUrl, type ContractorBrand } from './contractorBrand';
+import { formatContractorAddress, formatContractorContact, imageUrlToDataUrl, resolveOmBrand, type ContractorBrand } from './contractorBrand';
 import { flattenAnswersForPdf, type FormAnswers, type SchemaCatalogue } from './schemaForm';
 import { supabase } from './supabase';
 
@@ -21,8 +20,11 @@ function drawLetterhead(
   const pageWidth = doc.internal.pageSize.getWidth();
   const address = formatContractorAddress(brand);
   const contact = formatContractorContact(brand);
+  const theme = resolveOmBrand(brand);
+  const [pr, pg, pb] = theme.primaryRgb;
+  const [ir, ig, ib] = theme.inkRgb;
 
-  doc.setFillColor(192, 0, 0);
+  doc.setFillColor(pr, pg, pb);
   doc.rect(pageWidth - 18, 0, 18, 42, 'F');
   doc.circle(pageWidth - 24, 12, 1.4, 'F');
   doc.circle(pageWidth - 24, 17, 1.4, 'F');
@@ -40,12 +42,12 @@ function drawLetterhead(
   let infoY = logoDataUrl ? 30 : 16;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
-  doc.setTextColor(192, 0, 0);
-  doc.text('SPECIALISTS IN FIRE; EXPERTS IN SECURITY.', textX, infoY);
+  doc.setTextColor(pr, pg, pb);
+  doc.text(theme.tagline.toUpperCase(), textX, infoY);
   infoY += 4;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
-  doc.setTextColor(64, 64, 64);
+  doc.setTextColor(ir, ig, ib);
   if (address) {
     const lines = doc.splitTextToSize(address, 120);
     doc.text(lines, textX, infoY);
@@ -59,11 +61,11 @@ function drawLetterhead(
   if (jobRef) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7);
-    doc.setTextColor(192, 0, 0);
+    doc.setTextColor(pr, pg, pb);
     doc.text('JOB / SITE REF', pageWidth - 22, 12, { align: 'right' });
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
-    doc.setTextColor(64, 64, 64);
+    doc.setTextColor(ir, ig, ib);
     const jobLines = doc.splitTextToSize(jobRef, 40);
     doc.text(jobLines, pageWidth - 22, 17, { align: 'right' });
   }
@@ -71,10 +73,10 @@ function drawLetterhead(
   infoY = Math.max(infoY, 36);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
-  doc.setTextColor(192, 0, 0);
+  doc.setTextColor(pr, pg, pb);
   const titleLines = doc.splitTextToSize(title.toUpperCase(), pageWidth - 40);
   doc.text(titleLines, 14, infoY + 4);
-  doc.setTextColor(64, 64, 64);
+  doc.setTextColor(ir, ig, ib);
   return infoY + 4 + titleLines.length * 6 + 4;
 }
 
@@ -139,7 +141,9 @@ export async function buildPacificPdf(opts: {
 }): Promise<{ fileName: string; pdfBase64: string; dataUri: string }> {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  const logoDataUrl = origin ? await imageUrlToDataUrl(`${origin}${PACIFIC_LOGO_SRC}`) : null;
+  const theme = resolveOmBrand(opts.brand);
+  const logoUrl = theme.logoSrc.startsWith('http') ? theme.logoSrc : origin ? `${origin}${theme.logoSrc}` : theme.logoSrc;
+  const logoDataUrl = await imageUrlToDataUrl(logoUrl);
   let y = drawLetterhead(doc, opts.brand, logoDataUrl, opts.title, opts.jobRef ?? '');
 
   doc.setFont('helvetica', 'italic');

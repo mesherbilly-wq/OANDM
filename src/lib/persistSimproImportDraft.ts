@@ -9,6 +9,7 @@ import {
 import { clampLineQuantity } from './devicePersistConstants';
 import { IMPORT_LINE_NOTE_TAG } from './deviceGrouping';
 import { displayProjectJobNumber } from './projectJobNumber';
+import { fetchDefaultContractorProfileId } from './contractorBrand';
 import { appendProductFieldNotes } from './deviceProductFields';
 import { buildPrefixCounters } from './deviceProjectEdits';
 import { equipmentHasDatasheet } from './datasheetMatching';
@@ -165,6 +166,7 @@ function buildDeviceRows(
 export async function persistSimproImportReviewDraft(
   draft: ImportReviewDraft,
 ): Promise<{ projectId: number }> {
+  const contractorProfileId = await fetchDefaultContractorProfileId();
   const { data: project, error: projectError } = await supabase
     .from('projects')
     .insert({
@@ -179,6 +181,7 @@ export async function persistSimproImportReviewDraft(
       engineer: nullIfEmpty(draft.project.engineer),
       project_notes: nullIfEmpty(draft.project.projectNotes),
       project_status: 'active',
+      contractor_profile_id: contractorProfileId,
     })
     .select()
     .single();
