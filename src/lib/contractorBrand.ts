@@ -103,6 +103,18 @@ export async function fetchDefaultContractorProfileId(): Promise<number | null> 
   return brand?.id ?? null;
 }
 
+export async function listCompanyOptions(): Promise<{ id: number; company_name: string; is_default: boolean }[]> {
+  const { data } = await supabase
+    .from('contractor_profile')
+    .select('id,company_name,is_default')
+    .order('company_name');
+  return ((data ?? []) as { id: number; company_name: string | null; is_default: boolean }[]).map(row => ({
+    id: row.id,
+    company_name: row.company_name?.trim() || 'Untitled company',
+    is_default: Boolean(row.is_default),
+  }));
+}
+
 export async function fetchContractorForProject(opts: {
   projectId: number;
   contractorProfileId?: number | null;

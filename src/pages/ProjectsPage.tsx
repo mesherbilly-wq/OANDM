@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import type { Project } from '../types';
 import { Plus, Search, FolderOpen, MoreVertical, Trash2, Edit3, X, Calendar, Building, User, ChevronRight } from 'lucide-react';
 import { canEditOperations, defaultProjectPath } from '../lib/appRoles';
-import { fetchDefaultContractorProfileId } from '../lib/contractorBrand';
+import { fetchDefaultContractorProfileId, listCompanyOptions } from '../lib/contractorBrand';
 import { useUserAccess } from '../lib/userAccess';
 
 export function ProjectsPage() {
@@ -68,10 +68,14 @@ export function ProjectsPage() {
   };
 
   const handleCreate = async (project: Partial<Project>) => {
-    const contractorProfileId = await fetchDefaultContractorProfileId();
+    const contractorProfileId = project.contractor_profile_id ?? await fetchDefaultContractorProfileId();
+    if (!contractorProfileId) {
+      window.alert('Add a company on the Companies page before creating a project.');
+      return;
+    }
     const { data, error } = await supabase
       .from('projects')
-      .insert({ ...project, contractor_profile_id: contractorProfileId ?? project.contractor_profile_id ?? null })
+      .insert({ ...project, contractor_profile_id: contractorProfileId })
       .select()
       .single();
 
@@ -293,9 +297,26 @@ function ProjectModal({
   const [projectManager, setProjectManager] = useState(project?.project_manager || '');
   const [startDate, setStartDate] = useState(project?.start_date || '');
   const [completionDate, setCompletionDate] = useState(project?.completion_date || '');
+  const [companies, setCompanies] = useState<{ id: number; company_name: string; is_default: boolean }[]>([]);
+  const [companyId, setCompanyId] = useState<string>(project?.contractor_profile_id ? String(project.contractor_profile_id) : '');
+
+  useEffect(() => {
+    void listCompanyOptions().then(rows => {
+      setCompanies(rows);
+      setCompanyId(current => {
+        if (current) return current;
+        const preferred = rows.find(row => row.is_default) ?? rows[0];
+        return preferred ? String(preferred.id) : '';
+      });
+    });
+  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!project && !companyId) {
+      window.alert('Add a company on the Companies page before creating a project.');
+      return;
+    }
     onSave({
       project_name: projectName || null,
       client_name: clientName || null,
@@ -303,6 +324,7 @@ function ProjectModal({
       project_manager: projectManager || null,
       start_date: startDate || null,
       completion_date: completionDate || null,
+      contractor_profile_id: companyId ? parseInt(companyId, 10) : project?.contractor_profile_id ?? null,
     });
   };
 
@@ -322,6 +344,27 @@ function ProjectModal({
         </div>
         <form onSubmit={handleSubmit}>
           <div className="p-6 space-y-5">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Company</label>
+              {companies.length === 0 ? (
+                <p className="text-sm text-slate-500">
+                  No companies yet.{' '}
+                  <Link to="/companies" className="text-cyan-700 hover:underline">Add a company first</Link>
+                </p>
+              ) : (
+                <select
+                  value={companyId}
+                  onChange={e => setCompanyId(e.target.value)}
+                  className="w-full border border-slate-300 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-cyan-500 bg-white"
+                >
+                  {companies.map(company => (
+                    <option key={company.id} value={company.id}>
+                      {company.company_name}{company.is_default ? ' (default)' : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-2">Project Name</label>
               <input

@@ -30,6 +30,7 @@ import ScopeOfWorksPage from './pages/ScopeOfWorksPage';
 import PublicHandoverFormPage from './pages/PublicHandoverFormPage';
 import SafetyCulturePage from './pages/SafetyCulturePage';
 import { UsersPage } from './pages/UsersPage';
+import { CompaniesPage } from './pages/CompaniesPage';
 import { ProjectInvitePage } from './pages/ProjectInvitePage';
 import { UserInvitePage } from './pages/UserInvitePage';
 import SdpPage from './pages/SdpPage';
@@ -162,6 +163,7 @@ function AuthedApp({
         <Route path="/" element={<Layout companyName={companyName} userEmail={userEmail} onSignOut={onSignOut} />}>
           <Route index element={<Navigate to={defaultHomePath(role)} replace />} />
           <Route path="dashboard" element={<RequireAccess><DashboardPage /></RequireAccess>} />
+          <Route path="companies" element={<RequireAccess><CompaniesPage /></RequireAccess>} />
           <Route path="projects" element={<RequireAccess><ProjectsPage /></RequireAccess>} />
           <Route path="create-project" element={<RequireAccess><AIProjectBuilderPage /></RequireAccess>} />
           <Route path="ai-builder" element={<Navigate to="/create-project" replace />} />

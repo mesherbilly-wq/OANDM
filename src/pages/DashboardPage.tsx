@@ -246,6 +246,22 @@ export function DashboardPage() {
         </div>
       </div>
 
+      <Link
+        to="/companies"
+        className="flex items-center justify-between gap-4 bg-white rounded-2xl border border-slate-200 px-5 py-4 hover:border-cyan-300 hover:shadow-sm transition-all"
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center flex-shrink-0">
+            <Building2 className="w-5 h-5 text-slate-500" />
+          </div>
+          <div className="min-w-0">
+            <p className="font-semibold text-slate-900">Companies</p>
+            <p className="text-sm text-slate-500">Add logos, O&amp;M colours and companies before you start a project.</p>
+          </div>
+        </div>
+        <ChevronRight className="w-5 h-5 text-slate-300 flex-shrink-0" />
+      </Link>
+
       {/* ── Stats ──────────────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[

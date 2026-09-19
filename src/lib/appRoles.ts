@@ -50,6 +50,7 @@ export function canAccessPath(pathname: string, role: AppRole): boolean {
   if (pathname.startsWith('/f/') || pathname.startsWith('/i/') || pathname.startsWith('/u/')) return true;
   if (role === 'admin') return true;
 
+  if (pathname.startsWith('/companies')) return canEditOperations(role);
   if (pathname.startsWith('/integrations') || pathname.startsWith('/users')) return false;
   if (/^\/projects\/[^/]+\/documents(?:\/|$)/.test(pathname)) return false;
 

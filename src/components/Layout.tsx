@@ -111,6 +111,11 @@ export function Layout({ companyName, userEmail, onSignOut }: {
               active={isActive('/dashboard')} onClick={() => setSidebarOpen(false)} />
           )}
 
+          {showOperations && (
+            <NavLink href="/companies" icon={Building2} label="Companies"
+              active={isActive('/companies')} onClick={() => setSidebarOpen(false)} />
+          )}
+
           <NavLink href="/projects" icon={FolderOpen} label="Projects"
             active={isProjectsActive} onClick={() => setSidebarOpen(false)} />
 
@@ -220,6 +225,7 @@ export function Layout({ companyName, userEmail, onSignOut }: {
         <div className="px-3 py-3 border-t border-slate-800 flex-shrink-0 space-y-1">
           {/* Company / user info */}
           <div className="flex items-center gap-2.5 px-2 py-2 rounded-lg">
+            <Link to={showOperations ? '/companies' : (endUser ? '/projects' : '/dashboard')} className="flex items-center gap-2.5 min-w-0 flex-1">
             <div className="w-8 h-8 bg-slate-800 rounded-lg flex items-center justify-center flex-shrink-0">
               {companyName
                 ? <Building2 className="w-4 h-4 text-slate-400" />
@@ -235,6 +241,7 @@ export function Layout({ companyName, userEmail, onSignOut }: {
               )}
               <p className="text-[10px] text-slate-500 truncate leading-tight">{roleLabel(role)}</p>
             </div>
+            </Link>
           </div>
           {/* Sign out */}
           {onSignOut && (

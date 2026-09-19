@@ -2938,8 +2938,8 @@ function ContractorSection({ contractor }: { contractor: any }) {
 
       <p className="text-xs text-slate-400">
         {canAccessDocumentManagement(role)
-          ? <>This page pulls from Document Management — fill in <strong>Companies</strong> to complete it. Assign a company to this project.</>
-          : <>This page pulls from Document Management. Ask an admin to set the company for this project.</>}
+          ? <>This page pulls from the company assigned to the project. Manage logos and colours on <strong>Companies</strong>, or pick another company in Document Management.</>
+          : <>This page pulls from the company assigned to the project. Ask an admin to set the company.</>}
       </p>
     </div>
   );

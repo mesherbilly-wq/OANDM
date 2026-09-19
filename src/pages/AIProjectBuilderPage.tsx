@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import {
   Sparkles, Upload, FileText, X, CheckCircle, AlertCircle, Plus, Trash2,
   ChevronRight, Building, MapPin, User, FileSearch, ArrowLeft, Loader2,
@@ -7,7 +7,7 @@ import {
   ClipboardList, Tag, ImageIcon,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { fetchDefaultContractorProfileId } from '../lib/contractorBrand';
+import { fetchDefaultContractorProfileId, listCompanyOptions } from '../lib/contractorBrand';
 import type { SystemType } from '../types';
 import { getDevicePrefix } from '../lib/deviceLabel';
 import { ensureProjectSystem } from '../lib/projectSystemsDb';
@@ -172,6 +172,7 @@ export function AIProjectBuilderPage() {
   const [project, setProject] = useState<ReviewProject | null>(null);
   const [createdId, setCreatedId] = useState<number | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [selectedCompanyId, setSelectedCompanyId] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const drawingInputRef = useRef<HTMLInputElement>(null);
 
@@ -343,7 +344,8 @@ export function AIProjectBuilderPage() {
     setStep('creating');
     try {
       // Create project record
-      const contractorProfileId = await fetchDefaultContractorProfileId();
+      const contractorProfileId = selectedCompanyId ?? await fetchDefaultContractorProfileId();
+      if (!contractorProfileId) throw new Error('Add a company on the Companies page before creating a project.');
       const { data: proj, error: projErr } = await supabase
         .from('projects')
         .insert({
@@ -489,6 +491,7 @@ export function AIProjectBuilderPage() {
         {step === 'analyzing' && <AnalyzingStep phase={analyzePhase} />}
         {step === 'review' && project && (
           <ReviewStep project={project} onChange={setProject} createError={createError}
+            companyId={selectedCompanyId} onCompanyId={setSelectedCompanyId}
             onBack={() => setStep('upload')} onCreate={createProject} />
         )}
         {step === 'creating' && <CreatingStep />}
@@ -751,13 +754,25 @@ function AnalyzingStep({ phase }: { phase: AnalyzePhase }) {
 
 // ── Review step ────────────────────────────────────────────────────────────────
 
-function ReviewStep({ project, onChange, createError, onBack, onCreate }: {
+function ReviewStep({ project, onChange, createError, onBack, onCreate, companyId, onCompanyId }: {
   project: ReviewProject; onChange: (p: ReviewProject) => void;
   createError: string | null; onBack: () => void; onCreate: () => void;
+  companyId: number | null; onCompanyId: (id: number | null) => void;
 }) {
   const [tab, setTab] = useState<ReviewTab>('devices');
+  const [companies, setCompanies] = useState<{ id: number; company_name: string; is_default: boolean }[]>([]);
   const setField = (key: keyof Omit<ReviewProject, 'devices' | 'documents'>, val: string) =>
     onChange({ ...project, [key]: val });
+
+  useEffect(() => {
+    void listCompanyOptions().then(rows => {
+      setCompanies(rows);
+      if (!companyId) {
+        const preferred = rows.find(row => row.is_default) ?? rows[0];
+        if (preferred) onCompanyId(preferred.id);
+      }
+    });
+  }, []);
 
   const totalExpanded = useMemo(() =>
     project.devices.filter(d => d.selected).reduce((s, d) => s + d.quantity, 0), [project.devices]);
@@ -775,6 +790,24 @@ function ReviewStep({ project, onChange, createError, onBack, onCreate }: {
           <h2 className="text-base font-semibold text-slate-800">Project Details</h2>
         </div>
         <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="md:col-span-2">
+            <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Company</label>
+            {companies.length === 0 ? (
+              <p className="text-sm text-slate-500">No companies yet. <Link to="/companies" className="text-cyan-700 hover:underline">Add a company first</Link></p>
+            ) : (
+              <select
+                value={companyId ?? ''}
+                onChange={e => onCompanyId(e.target.value ? parseInt(e.target.value, 10) : null)}
+                className="w-full border border-slate-200 rounded-xl px-4 py-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              >
+                {companies.map(company => (
+                  <option key={company.id} value={company.id}>
+                    {company.company_name}{company.is_default ? ' (default)' : ''}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
           <div className="md:col-span-2">
             <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Project Name *</label>
             <input value={project.project_name} onChange={e => setField('project_name', e.target.value)}
