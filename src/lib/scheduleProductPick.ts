@@ -147,9 +147,9 @@ export async function ensureManualProductInDatabase(args: {
     return {
       applied: {
         ...appliedProductFromModel(sameManufacturer as ProductModel),
-        manufacturer: manufacturer ?? sameManufacturer.manufacturer?.trim() || null,
+        manufacturer: manufacturer ?? (sameManufacturer.manufacturer?.trim() || null),
         modelNumber,
-        modelName: modelName ?? sameManufacturer.model_name?.trim() || null,
+        modelName: modelName ?? (sameManufacturer.model_name?.trim() || null),
         created: false,
       },
       error: null,
