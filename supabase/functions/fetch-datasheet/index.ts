@@ -198,6 +198,7 @@ function uniqueStrings(values: string[]): string[] {
 function adiFetchIdentityKeys(product: any): string[] {
   return uniqueStrings([
     product?.modelNumber,
+    product?.properties?.updated_Model_Number,
     product?.manufacturerItem,
     product?.manufacturerItemNumber,
     product?.erpNumber,
@@ -207,14 +208,14 @@ function adiFetchIdentityKeys(product: any): string[] {
 }
 
 function adiFetchProductMatches(product: any, modelKey: string): boolean {
-  if (!modelKey) return false;
+  if (!modelKey || modelKey.length < 3) return false;
   const keys = adiFetchIdentityKeys(product);
-  if (keys.some((key) => key === modelKey || (modelKey.length >= 5 && key.includes(modelKey)) || (key.length >= 5 && modelKey.includes(key)))) {
-    return true;
-  }
-  const name = product?.name || product?.productTitle || "";
-  if (/\b(bracket|mount|shield|casing|spare|injector|armature|housing)\b/i.test(name)) return false;
-  return compact(name).includes(modelKey);
+  if (keys.some((key) => key === modelKey)) return true;
+  const mfr = compact(String(product?.manufacturerName || product?.manufacturer || product?.brand || ""));
+  const needle = mfr && modelKey.startsWith(mfr) && modelKey.length > mfr.length + 2
+    ? modelKey.slice(mfr.length)
+    : modelKey;
+  return needle.length >= 4 && keys.some((key) => key === needle);
 }
 
 async function adiFetchProductDetail(origin: string, product: any): Promise<any | null> {

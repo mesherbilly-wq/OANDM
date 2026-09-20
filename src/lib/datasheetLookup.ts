@@ -36,6 +36,7 @@ export interface DatasheetCandidate {
 }
 
 export const AI_AUTO_PLACE_SCORE = 90;
+export const ADI_AUTO_PLACE_SCORE = 95;
 
 export function aiPlacementFromDatasheet(
   datasheet: Pick<Datasheet, 'file_name'> & { source?: string | null; ai_confidence?: number | null },
@@ -110,7 +111,7 @@ export async function findAndSaveDatasheet(
   const candidates = await searchDatasheetCandidates(manufacturer, model);
   const autoPlace = [...candidates]
     .filter(candidate => {
-      if (candidateIsAdi(candidate) && (candidate.score ?? 0) >= 90) return true;
+      if (candidateIsAdi(candidate) && (candidate.score ?? 0) >= ADI_AUTO_PLACE_SCORE) return true;
       return candidate.verified && (candidate.score ?? 0) >= AI_AUTO_PLACE_SCORE;
     })
     .sort((a, b) => {
@@ -137,4 +138,48 @@ export async function findAndSaveDatasheet(
 
 function candidateIsAdi(candidate: DatasheetCandidate): boolean {
   return candidate.source === 'adi' || /adiglobaldistribution/i.test(candidate.domain) || /adiglobaldistribution|product-data-sheet/i.test(candidate.url);
+}
+
+function userDatasheetStoragePath(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const marker = '/object/public/user-datasheets/';
+  const idx = url.indexOf(marker);
+  if (idx === -1) return null;
+  try {
+    return decodeURIComponent(url.slice(idx + marker.length).split('?')[0]);
+  } catch {
+    return url.slice(idx + marker.length).split('?')[0];
+  }
+}
+
+export async function forgetDatasheet(
+  datasheet: Pick<Datasheet, 'id' | 'datasheet_url' | 'manufacturer' | 'model_number'>,
+  alsoUnlink?: { manufacturer: string; modelNumber: string },
+): Promise<void> {
+  const path = userDatasheetStoragePath(datasheet.datasheet_url);
+  if (path) {
+    await supabase.storage.from('user-datasheets').remove([path]);
+  }
+
+  const { error } = await supabase.from('datasheets').delete().eq('id', datasheet.id);
+  if (error) throw new Error(error.message || 'Could not remove that datasheet');
+
+  const pairs = [
+    { manufacturer: datasheet.manufacturer, modelNumber: datasheet.model_number },
+    alsoUnlink,
+  ].filter((pair): pair is { manufacturer: string; modelNumber: string } =>
+    Boolean(pair?.manufacturer?.trim() && pair?.modelNumber?.trim()),
+  );
+
+  const seen = new Set<string>();
+  for (const pair of pairs) {
+    const key = `${pair.manufacturer.trim().toLowerCase()}::${pair.modelNumber.trim().toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    await supabase
+      .from('devices')
+      .update({ datasheet_found: false })
+      .ilike('manufacturer', pair.manufacturer.trim())
+      .ilike('model_number', pair.modelNumber.trim());
+  }
 }

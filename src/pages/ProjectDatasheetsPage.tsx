@@ -10,14 +10,16 @@ import {
 } from '../lib/datasheetMatching';
 import {
   approveDatasheetMatchOverride,
+  clearDatasheetMatchOverride,
   dismissDatasheetMatchSuggestions,
   loadDatasheetMatchOverrides,
   type DatasheetMatchOverrideState,
 } from '../lib/datasheetMatchOverrides';
 import {
-  AI_AUTO_PLACE_SCORE,
+  ADI_AUTO_PLACE_SCORE,
   aiPlacementFromDatasheet,
   findAndSaveDatasheet,
+  forgetDatasheet,
   googleDatasheetSearchUrl,
   adiDatasheetSearchUrl,
   saveDatasheetFromUrl,
@@ -25,7 +27,7 @@ import {
 } from '../lib/datasheetLookup';
 import type { Datasheet } from '../types';
 import {
-  BookOpen, Eye, Upload, AlertCircle, CheckCircle, Search, Sparkles, Check, X, Loader2,
+  BookOpen, Eye, Upload, AlertCircle, CheckCircle, Search, Sparkles, Check, X, Loader2, Trash2,
 } from 'lucide-react';
 
 interface DatasheetRow {
@@ -75,6 +77,8 @@ export function ProjectDatasheetsPage() {
   const [aiByRow, setAiByRow] = useState<Record<string, AiLookupState>>({});
   const [findingAll, setFindingAll] = useState(false);
   const [findingProgress, setFindingProgress] = useState<{ current: number; total: number } | null>(null);
+  const [confirmForgetKey, setConfirmForgetKey] = useState<string | null>(null);
+  const [forgetErrorByRow, setForgetErrorByRow] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (projectId) {
@@ -173,6 +177,40 @@ export function ProjectDatasheetsPage() {
     setUpdatingRowKey(null);
   };
 
+  const handleForgetDatasheet = async (row: DatasheetRow) => {
+    const datasheet = row.match.datasheet;
+    if (!datasheet || !projectId) return;
+    const key = row.match.rowKey;
+    if (confirmForgetKey !== key) {
+      setConfirmForgetKey(key);
+      return;
+    }
+
+    setUpdatingRowKey(key);
+    setForgetErrorByRow(prev => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    try {
+      await forgetDatasheet(datasheet, {
+        manufacturer: row.manufacturer,
+        modelNumber: row.model_number,
+      });
+      setOverrides(clearDatasheetMatchOverride(projectId, key));
+      setAiByRow(prev => ({ ...prev, [key]: { status: 'idle' } }));
+      setConfirmForgetKey(null);
+      await refreshDatasheets();
+    } catch (error: any) {
+      setForgetErrorByRow(prev => ({
+        ...prev,
+        [key]: error?.message ?? 'Could not remove that datasheet',
+      }));
+    } finally {
+      setUpdatingRowKey(null);
+    }
+  };
+
   const handleUploaded = async (_datasheet: Datasheet) => {
     await refreshDatasheets();
     if (uploadFor && projectId) {
@@ -257,7 +295,7 @@ export function ProjectDatasheetsPage() {
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Datasheets</h2>
             <p className="text-sm text-slate-500">
-              Library first, then ADI, then AI. Hits of {AI_AUTO_PLACE_SCORE}% or more are saved automatically. If that fails, search the web or upload a PDF.
+              Library first, then ADI, then AI. Only an exact model or part match of {ADI_AUTO_PLACE_SCORE}%+ is saved automatically. Close ADI hits stay as choices so the wrong product is not attached.
             </p>
           </div>
         </div>
@@ -473,7 +511,30 @@ export function ProjectDatasheetsPage() {
                             <Upload className="w-3.5 h-3.5" />
                             {match.datasheet ? 'Replace' : 'Upload'}
                           </button>
+                          {match.datasheet && (
+                            <button
+                              type="button"
+                              onClick={() => void handleForgetDatasheet(row)}
+                              disabled={isUpdating}
+                              title="Remove this datasheet from the library"
+                              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors disabled:opacity-50 ${
+                                confirmForgetKey === match.rowKey
+                                  ? 'bg-red-600 text-white hover:bg-red-700'
+                                  : 'bg-red-50 text-red-700 hover:bg-red-100'
+                              }`}
+                            >
+                              {isUpdating && confirmForgetKey === match.rowKey ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="w-3.5 h-3.5" />
+                              )}
+                              {confirmForgetKey === match.rowKey ? 'Confirm forget' : 'Forget'}
+                            </button>
+                          )}
                         </div>
+                        {forgetErrorByRow[match.rowKey] && (
+                          <p className="text-xs text-red-600 mt-1.5">{forgetErrorByRow[match.rowKey]}</p>
+                        )}
                         {aiLookup?.status === 'failed' && (
                           <p className="text-xs text-amber-700 mt-1.5">
                             {aiLookup.error ?? 'No datasheet found. Search ADI / the web or upload a PDF.'}
@@ -544,7 +605,7 @@ export function ProjectDatasheetsPage() {
                           <div className="space-y-3">
                             <p className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
                               <Sparkles className="w-4 h-4 text-cyan-600" />
-                              Found possible datasheets — {AI_AUTO_PLACE_SCORE}%+ verified PDFs are saved automatically
+                              Found possible datasheets — pick the PDF for this exact product. Only an exact ADI model match is saved automatically.
                             </p>
                             {aiLookup.error && <p className="text-xs text-red-600">{aiLookup.error}</p>}
                             <div className="grid gap-2">

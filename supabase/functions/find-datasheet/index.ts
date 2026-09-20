@@ -91,16 +91,15 @@ Deno.serve(async (req: Request) => {
 
     const adiHits = await searchAdiDatasheets(manufacturer, model);
     const adiChecked = await verifyCandidates(adiHits, manufacturer, model);
-    const adiDatasheets = adiChecked
-      .filter((c) => c.source === "adi" && isAdiDatasheetHit(c))
+    const adiExact = adiChecked
+      .filter((c) => c.source === "adi" && isAdiDatasheetHit(c) && c.score >= 90)
       .map((c) => ({
         ...c,
-        verified: c.verified || isAdiDatasheetHit(c),
-        score: Math.max(c.score, 93),
+        verified: c.verified || isAdiDatasheetUrl(c.url),
       }));
-    if (adiDatasheets.length > 0) {
-      adiDatasheets.sort((a, b) => (b.score - a.score) || (b.verified ? 1 : 0) - (a.verified ? 1 : 0));
-      return new Response(JSON.stringify({ candidates: adiDatasheets, source: "adi" }), {
+    if (adiExact.length > 0) {
+      adiExact.sort((a, b) => (b.score - a.score) || (b.verified ? 1 : 0) - (a.verified ? 1 : 0));
+      return new Response(JSON.stringify({ candidates: adiExact, source: "adi" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -133,14 +132,14 @@ Deno.serve(async (req: Request) => {
 
     const adiPages = uniqueStrings(aiHits.map((hit) => hit.url).filter((url) => adiProductSegment(url))).slice(0, 4);
     for (const page of adiPages) {
-      discovered.push(...await adiDocumentsFromProductUrl(page, model));
+      discovered.push(...await adiDocumentsFromProductUrl(page, model, manufacturer));
     }
 
     const webHits = await webSearchPdfs(manufacturer, model);
     discovered.push(...webHits.map((hit) => ({ ...hit, score: null as number | null, source: "web" })));
     for (const hit of webHits) {
       if (adiProductSegment(hit.url)) {
-        discovered.push(...await adiDocumentsFromProductUrl(hit.url, model));
+        discovered.push(...await adiDocumentsFromProductUrl(hit.url, model, manufacturer));
       }
     }
 
@@ -336,7 +335,10 @@ function hitScore(
   claudeScore: number | null,
 ): number {
   if (candidate.source === "adi" && claudeScore != null) {
-    return Math.max(verified ? claudeScore : 93, 93);
+    if (claudeScore >= 90) {
+      return verified || isAdiDatasheetUrl(candidate.url ?? "") ? claudeScore : Math.min(claudeScore, 88);
+    }
+    return claudeScore;
   }
   if (claudeScore != null) {
     return verified ? claudeScore : Math.min(claudeScore, 89);
@@ -417,33 +419,38 @@ async function searchAdiDatasheets(manufacturer: string, model: string): Promise
   const hits: AdiHit[] = [];
   for (const origin of ADI_ORIGINS) {
     hits.push(...await searchAdiOrigin(origin, manufacturer, model));
-    if (hits.some((hit) => isAdiDatasheetHit(hit))) break;
+    if (hits.some((hit) => (hit.score ?? 0) >= 90 && isAdiDatasheetHit(hit))) break;
   }
   return uniqueByUrl(hits);
 }
 
 async function searchAdiOrigin(origin: string, manufacturer: string, model: string): Promise<AdiHit[]> {
   const products = await adiFindProducts(origin, manufacturer, model);
-  const matched = products
-    .filter((product) => adiProductMatches(product, model))
-    .sort((a, b) => adiMatchRank(b, model) - adiMatchRank(a, model))
-    .slice(0, 4);
+  const ranked = products
+    .map((product) => ({ product, rank: adiMatchRank(product, model, manufacturer) }))
+    .filter((entry) => entry.rank > 0)
+    .sort((a, b) => b.rank - a.rank);
+  const exact = ranked.filter((entry) => entry.rank >= 3);
+  const chosen = (exact.length > 0 ? exact : ranked.filter((entry) => entry.rank === 2)).slice(0, 3);
   const hits: AdiHit[] = [];
-  for (const product of matched) {
-    hits.push(...await adiDocumentsForProduct(origin, product, model));
+  for (const { product, rank } of chosen) {
+    hits.push(...await adiDocumentsForProduct(origin, product, model, rank));
   }
   return hits;
 }
 
-async function adiDocumentsFromProductUrl(pageUrl: string, model: string): Promise<AdiHit[]> {
+async function adiDocumentsFromProductUrl(pageUrl: string, model: string, manufacturer = ""): Promise<AdiHit[]> {
   const origin = adiOriginFromUrl(pageUrl);
   const segment = adiProductSegment(pageUrl);
   if (!origin || !segment) return [];
   const products = (await adiSearchProducts(origin, segment))
-    .filter((product) => adiProductMatches(product, model) || compact(adiPartNumber(product)) === compact(segment));
+    .map((product) => ({ product, rank: adiMatchRank(product, model, manufacturer) }))
+    .filter((entry) =>
+      entry.rank >= 3 || compact(adiPartNumber(entry.product)) === compact(segment)
+    );
   const hits: AdiHit[] = [];
-  for (const product of products.slice(0, 2)) {
-    hits.push(...await adiDocumentsForProduct(origin, product, model));
+  for (const { product, rank } of products.slice(0, 2)) {
+    hits.push(...await adiDocumentsForProduct(origin, product, model, rank >= 3 ? rank : 2));
   }
   return hits;
 }
@@ -453,7 +460,7 @@ async function adiFindProducts(origin: string, manufacturer: string, model: stri
   for (const query of adiQueryVariants(manufacturer, model)) {
     products.push(...await adiSearchProducts(origin, query));
     products.push(...await adiAutocompleteProducts(origin, query));
-    if (products.some((product) => adiProductMatches(product, model))) break;
+    if (products.some((product) => adiMatchRank(product, model, manufacturer) >= 3)) break;
   }
   return uniqueById(products);
 }
@@ -477,7 +484,12 @@ async function adiAutocompleteProducts(origin: string, query: string): Promise<A
   return Array.isArray(json?.products) ? json.products.map(normalizeAdiProduct) : [];
 }
 
-async function adiDocumentsForProduct(origin: string, product: AdiProduct, model: string): Promise<AdiHit[]> {
+async function adiDocumentsForProduct(
+  origin: string,
+  product: AdiProduct,
+  model: string,
+  rank = 0,
+): Promise<AdiHit[]> {
   const detail = await adiProductDetail(origin, product);
   const docs = Array.isArray(detail?.documents) ? detail.documents : [];
   const hits: AdiHit[] = [];
@@ -485,15 +497,23 @@ async function adiDocumentsForProduct(origin: string, product: AdiProduct, model
     const url = adiAbsolutePdfUrl(doc?.fileUrl || doc?.filePath, origin);
     if (!url) continue;
     if (!isAdiDatasheetDoc(doc, url) && /assembly|install|brochure|user manual|msds|instruction/i.test(`${doc?.name ?? ""} ${doc?.documentType ?? ""} ${url}`)) continue;
+    const isDatasheet = isAdiDatasheetDoc(doc, url);
     hits.push({
       url,
       title: `${detail?.name || product.name || model} — ${doc?.name || "Datasheet"}`,
       domain: safeDomain(url) || safeDomain(origin),
-      score: isAdiDatasheetDoc(doc, url) ? 93 : 82,
+      score: adiDocumentScore(rank, isDatasheet),
       source: "adi",
     });
   }
   return hits;
+}
+
+function adiDocumentScore(rank: number, isDatasheet: boolean): number {
+  if (rank >= 3) return isDatasheet ? 96 : 84;
+  if (rank === 2) return isDatasheet ? 78 : 68;
+  if (rank === 1) return isDatasheet ? 64 : 50;
+  return 40;
 }
 
 async function adiProductDetail(origin: string, product: AdiProduct): Promise<AdiProduct | null> {
@@ -596,6 +616,7 @@ function isJsonResponse(res: Response): boolean {
 type AdiProduct = {
   id?: string;
   name?: string;
+  manufacturer?: string;
   modelNumber?: string;
   manufacturerItem?: string;
   erpNumber?: string;
@@ -609,6 +630,8 @@ function normalizeAdiProduct(raw: any): AdiProduct {
   return {
     id: raw?.id,
     name: raw?.name || raw?.productTitle || raw?.shortDescription || "",
+    manufacturer: raw?.manufacturerName || raw?.manufacturer || raw?.brand
+      || raw?.properties?.Manufacturer || raw?.properties?.manufacturer || "",
     modelNumber: raw?.modelNumber || raw?.properties?.updated_Model_Number || "",
     manufacturerItem: raw?.manufacturerItem || raw?.manufacturerItemNumber || "",
     erpNumber: raw?.erpNumber || "",
@@ -644,25 +667,63 @@ function adiIdentityKeys(product: AdiProduct): string[] {
   ].map((value) => compact(value || "")).filter((value) => value.length >= 4));
 }
 
-function adiProductMatches(product: AdiProduct, model: string): boolean {
-  const modelKey = compact(model);
-  if (!modelKey || !(product?.id || adiPartNumber(product))) return false;
-  const keys = adiIdentityKeys(product);
-  if (keys.some((key) => key === modelKey || (modelKey.length >= 5 && key.includes(modelKey)) || (key.length >= 5 && modelKey.includes(key)))) {
-    return true;
+function stripKnownPrefix(value: string, prefix: string): string {
+  if (prefix && value.startsWith(prefix) && value.length > prefix.length + 2) {
+    return value.slice(prefix.length);
   }
-  const name = product.name || "";
-  if (isAccessoryName(name)) return false;
-  return compact(name).includes(modelKey);
+  return value;
 }
 
-function adiMatchRank(product: AdiProduct, model: string): number {
+function adiMatchRank(product: AdiProduct, model: string, manufacturer = ""): number {
   const modelKey = compact(model);
-  const keys = adiIdentityKeys(product);
-  if (keys.includes(modelKey)) return 3;
-  if (keys.some((key) => key.includes(modelKey) || modelKey.includes(key))) return 2;
+  if (!modelKey || modelKey.length < 3 || !(product?.id || adiPartNumber(product))) return 0;
+
+  const requestedMfr = compact(manufacturer);
+  const productMfr = compact(product.manufacturer || "");
+  const needle = stripKnownPrefix(modelKey, requestedMfr);
+  const keys = adiIdentityKeys(product).map((key) => stripKnownPrefix(key, productMfr || requestedMfr));
+  const nameKey = compact(product.name || "");
+
+  if (keys.some((key) => key === modelKey || key === needle)) return 3;
+  if (nameLooksLikeExactModel(nameKey, needle, requestedMfr) || nameLooksLikeExactModel(nameKey, modelKey, requestedMfr)) {
+    return 3;
+  }
+
   if (isAccessoryName(product.name || "")) return 0;
-  return 1;
+
+  if (needle.length >= 6 && keys.some((key) => key.startsWith(needle) && key.length - needle.length <= 3)) {
+    return 2;
+  }
+
+  if (
+    needle.length >= 6 &&
+    nameKey.includes(needle) &&
+    manufacturersAgree(requestedMfr, productMfr, nameKey)
+  ) {
+    return 1;
+  }
+
+  return 0;
+}
+
+function nameLooksLikeExactModel(nameKey: string, needle: string, manufacturerKey: string): boolean {
+  if (!nameKey || !needle || needle.length < 5) return false;
+  let rest = nameKey;
+  if (manufacturerKey && rest.startsWith(manufacturerKey)) rest = rest.slice(manufacturerKey.length);
+  if (rest === needle || rest === manufacturerKey + needle) return true;
+  if (!rest.includes(needle)) return false;
+  const leftover = rest.replace(needle, "").replace(
+    /network|camera|video|dome|bullet|turret|fixed|indoor|outdoor|series|system|kit|ip|ir|poe/g,
+    "",
+  );
+  return leftover.length === 0;
+}
+
+function manufacturersAgree(requested: string, productMfr: string, productName: string): boolean {
+  if (!requested) return true;
+  if (!productMfr) return true;
+  if (requested === productMfr || requested.includes(productMfr) || productMfr.includes(requested)) return true;
+  return productName.startsWith(requested) || productName.includes(requested);
 }
 
 function escapeRegExp(value: string): string {

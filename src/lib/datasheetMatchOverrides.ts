@@ -65,3 +65,14 @@ export function dismissDatasheetMatchSuggestions(
   saveDatasheetMatchOverrides(projectId, state);
   return state;
 }
+
+export function clearDatasheetMatchOverride(
+  projectId: number,
+  rowKey: string,
+): DatasheetMatchOverrideState {
+  const state = loadDatasheetMatchOverrides(projectId);
+  delete state.approved[rowKey];
+  state.dismissed = state.dismissed.filter(key => key !== rowKey);
+  saveDatasheetMatchOverrides(projectId, state);
+  return state;
+}
