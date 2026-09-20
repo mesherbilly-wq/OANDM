@@ -516,7 +516,7 @@ export function ProjectDatasheetsPage() {
                               type="button"
                               onClick={() => void handleForgetDatasheet(row)}
                               disabled={isUpdating}
-                              title="Remove this datasheet from the library"
+                              title="Remove this datasheet from the O&M and the library"
                               className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors disabled:opacity-50 ${
                                 confirmForgetKey === match.rowKey
                                   ? 'bg-red-600 text-white hover:bg-red-700'
@@ -528,7 +528,7 @@ export function ProjectDatasheetsPage() {
                               ) : (
                                 <Trash2 className="w-3.5 h-3.5" />
                               )}
-                              {confirmForgetKey === match.rowKey ? 'Confirm forget' : 'Forget'}
+                              {confirmForgetKey === match.rowKey ? 'Confirm remove' : 'Remove'}
                             </button>
                           )}
                         </div>

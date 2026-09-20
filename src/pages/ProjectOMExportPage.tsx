@@ -9,6 +9,7 @@ import {
 } from '../lib/documentProjectSystems';
 import { fetchProjectSystems } from '../lib/projectSystemsDb';
 import { findDatasheetForDeviceFields } from '../lib/datasheetMatching';
+import { forgetDatasheet } from '../lib/datasheetLookup';
 import { FALLBACK_DOCUMENT_DEFINITIONS, titleForLegacyDocumentId } from '../lib/handoverDocumentConfig';
 import { matchEquipmentInputToProduct } from '../integrations/core/productMatching';
 import {
@@ -560,7 +561,7 @@ async function capturePrintElement(
 
 export function ProjectOMExportPage() {
   const { id } = useParams<{ id: string }>();
-  const { project, productModels, datasheets } = useProject();
+  const { project, productModels, datasheets, refreshDatasheets } = useProject();
   const { role } = useUserAccess();
   const packReadOnly = isEndUser(role);
   const [selectedSections, setSelectedSections] = useState<Section[]>(() => SECTIONS.map(s => s.id));
@@ -582,6 +583,8 @@ export function ProjectOMExportPage() {
   const [contractorProfile, setContractorProfile] = useState<any>(null);
   const [docAuthority, setDocAuthority] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [confirmRemoveDatasheetKey, setConfirmRemoveDatasheetKey] = useState<string | null>(null);
+  const [removingDatasheet, setRemovingDatasheet] = useState(false);
 
   // Tech doc imported data: { rows, colConfig } per system
   const [techDocState, setTechDocState] = useState<Partial<Record<string, { rows: { id: number; row_index: number; data: Record<string, string> }[]; colConfig: { key: string; display_name: string; visible: boolean; order: number }[] }>>>({});
@@ -1103,6 +1106,28 @@ export function ProjectOMExportPage() {
     if (!confirm(`Remove "${upload.file_name}"?`)) return;
     await supabase.from('om_pack_uploads').delete().eq('id', upload.id);
     load();
+  };
+
+  const handleRemoveDatasheet = async (device: DeviceWithDatasheet) => {
+    if (!device.datasheet || packReadOnly) return;
+    const key = datasheetRemoveKey(device);
+    if (confirmRemoveDatasheetKey !== key) {
+      setConfirmRemoveDatasheetKey(key);
+      return;
+    }
+    setRemovingDatasheet(true);
+    try {
+      await forgetDatasheet(device.datasheet, {
+        manufacturer: device.manufacturer ?? '',
+        modelNumber: device.model_number ?? '',
+      });
+      setConfirmRemoveDatasheetKey(null);
+      await refreshDatasheets();
+    } catch (error: any) {
+      alert(error?.message ?? 'Could not remove that datasheet');
+    } finally {
+      setRemovingDatasheet(false);
+    }
   };
 
   // ── Print ─────────────────────────────────────────────────────────────────────
@@ -1767,7 +1792,15 @@ export function ProjectOMExportPage() {
               documentSystems={documentSystems}
             />
           )}
-          {activeSection === 'datasheets' && <DatasheetsSection systemGroups={systemGroups} />}
+          {activeSection === 'datasheets' && (
+            <DatasheetsSection
+              systemGroups={systemGroups}
+              readOnly={packReadOnly}
+              onRemoveDatasheet={handleRemoveDatasheet}
+              confirmRemoveKey={confirmRemoveDatasheetKey}
+              removing={removingDatasheet}
+            />
+          )}
           {activeSection === 'user_manuals' && (
             <UserManualsSection
               pid={pid!}
@@ -3659,7 +3692,23 @@ function PrintAsFittedDrawings({ drawings, pageImages, documentSystems, skipAnch
   );
 }
 
-function DatasheetsSection({ systemGroups }: { systemGroups: { system: SystemType; devices: DeviceWithDatasheet[] }[] }) {
+function datasheetRemoveKey(device: DeviceWithDatasheet): string {
+  return `${device.datasheet?.id ?? 'none'}|${device.manufacturer?.trim().toLowerCase() ?? ''}|${device.model_number?.trim().toLowerCase() ?? ''}`;
+}
+
+function DatasheetsSection({
+  systemGroups,
+  readOnly,
+  onRemoveDatasheet,
+  confirmRemoveKey,
+  removing,
+}: {
+  systemGroups: { system: SystemType; devices: DeviceWithDatasheet[] }[];
+  readOnly: boolean;
+  onRemoveDatasheet: (device: DeviceWithDatasheet) => void;
+  confirmRemoveKey: string | null;
+  removing: boolean;
+}) {
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const withDS = systemGroups.map(g => {
     const seen = new Set<string>();
@@ -3678,6 +3727,11 @@ function DatasheetsSection({ systemGroups }: { systemGroups: { system: SystemTyp
   }
   return (
     <div className="space-y-4">
+      {!readOnly && (
+        <p className="text-sm text-slate-500">
+          Remove takes the datasheet out of this O&amp;M and deletes it from the library.
+        </p>
+      )}
       {withDS.map(g => (
         <div key={g.system} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
           <SystemHeader system={g.system} count={g.devices.length} />
@@ -3685,7 +3739,9 @@ function DatasheetsSection({ systemGroups }: { systemGroups: { system: SystemTyp
             {g.devices.map(d => {
               const url = d.datasheet?.datasheet_url;
               const key = `${g.system}-${d.id}`;
+              const removeKey = datasheetRemoveKey(d);
               const isExpanded = expandedKey === key;
+              const confirmRemove = confirmRemoveKey === removeKey;
               return (
                 <div key={d.id}>
                   <div className="flex items-center gap-4 px-5 py-3">
@@ -3701,6 +3757,21 @@ function DatasheetsSection({ systemGroups }: { systemGroups: { system: SystemTyp
                           {isExpanded ? <X className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                           {isExpanded ? 'Close' : 'View PDF'}
                         </button>
+                        {!readOnly && (
+                          <button
+                            type="button"
+                            disabled={removing}
+                            onClick={() => onRemoveDatasheet(d)}
+                            className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded-lg border transition-colors disabled:opacity-50 ${
+                              confirmRemove
+                                ? 'bg-red-600 border-red-600 text-white hover:bg-red-700'
+                                : 'border-red-200 text-red-700 hover:bg-red-50'
+                            }`}
+                          >
+                            {removing && confirmRemove ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                            {confirmRemove ? 'Confirm remove' : 'Remove'}
+                          </button>
+                        )}
                       </>
                     )}
                   </div>
