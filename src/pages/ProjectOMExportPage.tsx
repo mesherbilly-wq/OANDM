@@ -8,13 +8,13 @@ import {
   groupRecordsByProjectSystems,
 } from '../lib/documentProjectSystems';
 import { fetchProjectSystems } from '../lib/projectSystemsDb';
-import { findDatasheetForDeviceFields } from '../lib/datasheetMatching';
+import { findLibraryDatasheetForDevice } from '../lib/datasheetMatching';
+import { selectProductPageIndexes } from '../lib/datasheetLookup';
 import { forgetDatasheet } from '../lib/datasheetLookup';
 import { FALLBACK_DOCUMENT_DEFINITIONS, titleForLegacyDocumentId } from '../lib/handoverDocumentConfig';
-import { matchEquipmentInputToProduct } from '../integrations/core/productMatching';
 import {
   DEFAULT_PRODUCT_WARRANTY_YEARS,
-  resolveWarrantyYearsForDevice,
+  resolveWarrantyYearsForPartNumber,
 } from '../lib/productWarranty';
 import { useProject } from './ProjectLayout';
 import type { Device, CommissioningRecord, HandoverDocument, Datasheet, ProjectSystemRecord } from '../types';
@@ -207,7 +207,15 @@ async function addOmPdfNavigation(
   }
 }
 
-async function renderPdfToImages(url: string): Promise<string[] | null> {
+async function pageTextFromPdf(page: { getTextContent: () => Promise<{ items: Array<{ str?: string }> }> }): Promise<string> {
+  const content = await page.getTextContent();
+  return content.items.map(item => item.str ?? '').join(' ');
+}
+
+async function renderPdfToImages(
+  url: string,
+  product?: { manufacturer: string; model: string },
+): Promise<string[] | null> {
   try {
     const pdfjsLib = await import('pdfjs-dist');
     pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -226,10 +234,21 @@ async function renderPdfToImages(url: string): Promise<string[] | null> {
     const pdf = data
       ? await pdfjsLib.getDocument({ data }).promise
       : await pdfjsLib.getDocument({ url, withCredentials: false }).promise;
+    let pageNumbers = Array.from({ length: pdf.numPages }, (_, index) => index + 1);
+    if (product?.manufacturer && product.model) {
+      const texts: string[] = [];
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        texts.push(await pageTextFromPdf(page));
+        if (pageNum < pdf.numPages) await new Promise(resolve => window.setTimeout(resolve, 0));
+      }
+      pageNumbers = selectProductPageIndexes(texts, product.manufacturer, product.model).map(index => index + 1);
+    }
     const pages: string[] = [];
-    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-      const page = await pdf.getPage(pageNum);
-      const viewport = page.getViewport({ scale: 1.8 });
+    const renderPages = pageNumbers.slice(0, 12);
+    for (let i = 0; i < renderPages.length; i++) {
+      const page = await pdf.getPage(renderPages[i]);
+      const viewport = page.getViewport({ scale: 1.35 });
       const canvas = document.createElement('canvas');
       canvas.width = viewport.width;
       canvas.height = viewport.height;
@@ -240,7 +259,8 @@ async function renderPdfToImages(url: string): Promise<string[] | null> {
         canvasContext: ctx,
         viewport,
       }).promise;
-      pages.push(canvas.toDataURL('image/jpeg', 0.92));
+      pages.push(canvas.toDataURL('image/jpeg', 0.88));
+      if (i < renderPages.length - 1) await new Promise(resolve => window.setTimeout(resolve, 0));
     }
     return pages;
   } catch {
@@ -592,6 +612,9 @@ export function ProjectOMExportPage() {
 
   const [pdfPageImages, setPdfPageImages] = useState<Record<string, PdfRenderState>>({});
   const pdfRenderStarted = useRef(new Set<string>());
+  const pdfQueue = useRef<string[]>([]);
+  const pdfQueueRunning = useRef(false);
+  const pdfProductFilter = useRef(new Map<string, { manufacturer: string; model: string }>());
 
   // Scope of works edit state
   const [scopeContent, setScopeContent] = useState('');
@@ -657,22 +680,12 @@ export function ProjectOMExportPage() {
     }
 
     const enriched: DeviceWithDatasheet[] = (devData ?? []).map(d => {
-      const productMatch = matchEquipmentInputToProduct(
-        {
-          manufacturer: d.manufacturer,
-          modelNumber: d.model_number,
-          modelName: d.model_name,
-          deviceType: d.device_type,
-        },
-        productModels,
-      );
-      const pm = productMatch.matchedProduct;
-      const ds = findDatasheetForDeviceFields(d.manufacturer, d.model_number, productModels, datasheets);
+      const ds = findLibraryDatasheetForDevice(d.manufacturer, d.model_number, datasheets);
       return {
         ...d,
         datasheet: ds ?? null,
-        warrantyYears: resolveWarrantyYearsForDevice(d, productModels),
-        maintenanceNotes: pm?.maintenance_notes ?? null,
+        warrantyYears: resolveWarrantyYearsForPartNumber(d.model_number, productModels),
+        maintenanceNotes: null,
       };
     });
 
@@ -899,19 +912,67 @@ export function ProjectOMExportPage() {
     return urls;
   }, [omUploads, scHandoverDocs, otherHandoverDocs, asFittedDrawings, devices, projectManuals]);
 
+  const eagerPdfUrls = useMemo(() => {
+    const urls: string[] = [];
+    const add = (url?: string | null) => {
+      if (url && !urls.includes(url)) urls.push(url);
+    };
+    for (const upload of omUploads) add(upload.file_url);
+    for (const doc of scHandoverDocs) add(doc.file_url);
+    for (const doc of otherHandoverDocs) add(doc.file_url);
+    for (const drawing of asFittedDrawings) add(drawing.file_url);
+    return urls;
+  }, [omUploads, scHandoverDocs, otherHandoverDocs, asFittedDrawings]);
+
+  const lazyPdfUrls = useMemo(() => {
+    const eager = new Set(eagerPdfUrls);
+    return packPdfUrls.filter(url => !eager.has(url));
+  }, [packPdfUrls, eagerPdfUrls]);
+
   useEffect(() => {
-    for (const url of packPdfUrls) {
-      if (pdfRenderStarted.current.has(url)) continue;
+    const next = new Map<string, { manufacturer: string; model: string }>();
+    for (const device of devices) {
+      const url = device.datasheet?.datasheet_url;
+      if (!url || !device.manufacturer?.trim() || !device.model_number?.trim() || next.has(url)) continue;
+      next.set(url, { manufacturer: device.manufacturer.trim(), model: device.model_number.trim() });
+    }
+    pdfProductFilter.current = next;
+  }, [devices]);
+
+  const pumpPdfQueue = useCallback(async () => {
+    if (pdfQueueRunning.current) return;
+    pdfQueueRunning.current = true;
+    while (pdfQueue.current.length > 0) {
+      const url = pdfQueue.current.shift();
+      if (!url || pdfRenderStarted.current.has(url)) continue;
       pdfRenderStarted.current.add(url);
       setPdfPageImages(prev => ({ ...prev, [url]: { pages: [], loading: true, failed: false } }));
-      void renderPdfToImages(url).then(pages => {
-        setPdfPageImages(prev => ({
-          ...prev,
-          [url]: { pages: pages ?? [], loading: false, failed: pages === null },
-        }));
-      });
+      const pages = await renderPdfToImages(url, pdfProductFilter.current.get(url));
+      setPdfPageImages(prev => ({
+        ...prev,
+        [url]: { pages: pages ?? [], loading: false, failed: pages === null },
+      }));
+      await new Promise(resolve => window.setTimeout(resolve, 0));
     }
-  }, [packPdfUrls]);
+    pdfQueueRunning.current = false;
+  }, []);
+
+  const enqueuePdfRender = useCallback((urls: string[]) => {
+    for (const url of urls) {
+      if (!url || pdfRenderStarted.current.has(url) || pdfQueue.current.includes(url)) continue;
+      pdfQueue.current.push(url);
+    }
+    void pumpPdfQueue();
+  }, [pumpPdfQueue]);
+
+  useEffect(() => {
+    enqueuePdfRender(eagerPdfUrls);
+  }, [eagerPdfUrls, enqueuePdfRender]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => enqueuePdfRender(lazyPdfUrls), 1600);
+    return () => window.clearTimeout(timer);
+  }, [lazyPdfUrls, enqueuePdfRender]);
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 

@@ -295,7 +295,7 @@ export function ProjectDatasheetsPage() {
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Datasheets</h2>
             <p className="text-sm text-slate-500">
-              Library first, then ADI, then AI. Only an exact model or part match of {ADI_AUTO_PLACE_SCORE}%+ is saved automatically. Close ADI hits stay as choices so the wrong product is not attached.
+              Library first, then ADI, then AI. A {ADI_AUTO_PLACE_SCORE}% hit is saved only when the manufacturer and exact part number are on the datasheet. Variants, options and add-ons stay as choices.
             </p>
           </div>
         </div>

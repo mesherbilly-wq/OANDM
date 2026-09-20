@@ -86,6 +86,17 @@ function mapProductMethod(method: ProductMatchMethod): DatasheetMatchMethod {
   }
 }
 
+export function findLibraryDatasheetForDevice(
+  manufacturer: string | null | undefined,
+  modelNumber: string | null | undefined,
+  datasheets: DatasheetLike[],
+): DatasheetLike | null {
+  return findDirectDatasheet(
+    { manufacturer: manufacturer ?? null, modelNumber: modelNumber ?? null },
+    datasheets,
+  )?.datasheet ?? null;
+}
+
 export function findDatasheetForProduct(
   product: ProductModelLike,
   datasheets: DatasheetLike[],
@@ -126,18 +137,6 @@ function findDirectDatasheet(
       normalizeToken(item.manufacturer) === normalizeToken(datasheet.manufacturer)
     ) {
       return { datasheet, method: 'normalized_model', confidence: 0.98 };
-    }
-  }
-
-  for (const datasheet of withUrl) {
-    if (normalizedModelMatch(item.modelNumber, datasheet.model_number)) {
-      return { datasheet, method: 'normalized_model', confidence: 0.9 };
-    }
-  }
-
-  for (const datasheet of withUrl) {
-    if (exactModelMatch(item.modelNumber, datasheet.model_number)) {
-      return { datasheet, method: 'exact_model_number', confidence: 0.88 };
     }
   }
 

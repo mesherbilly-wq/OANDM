@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import type { Datasheet } from '../types';
+import { findLibraryDatasheetForDevice } from './datasheetMatching';
 
 async function readFunctionError(error: unknown, data: unknown): Promise<string> {
   const payload = data as { error?: unknown } | null;
@@ -35,8 +36,8 @@ export interface DatasheetCandidate {
   source?: string;
 }
 
-export const AI_AUTO_PLACE_SCORE = 90;
-export const ADI_AUTO_PLACE_SCORE = 95;
+export const AI_AUTO_PLACE_SCORE = 93;
+export const ADI_AUTO_PLACE_SCORE = 93;
 
 export function aiPlacementFromDatasheet(
   datasheet: Pick<Datasheet, 'file_name'> & { source?: string | null; ai_confidence?: number | null },
@@ -87,7 +88,7 @@ export async function saveDatasheetFromUrl(
   url: string,
   manufacturer: string,
   model: string,
-  options?: { source?: 'ai' | 'adi' | 'upload'; score?: number },
+  options?: { source?: 'ai' | 'adi' | 'upload'; score?: number; requireExactPart?: boolean },
 ): Promise<Datasheet> {
   const { data, error } = await supabase.functions.invoke('fetch-datasheet', {
     body: {
@@ -96,6 +97,7 @@ export async function saveDatasheetFromUrl(
       model: model.trim(),
       source: options?.source ?? 'upload',
       score: options?.score ?? null,
+      requireExactPart: options?.requireExactPart ?? false,
     },
   });
   if (error) throw new Error(await readFunctionError(error, data));
@@ -108,13 +110,21 @@ export async function findAndSaveDatasheet(
   manufacturer: string,
   model: string,
 ): Promise<{ datasheet: Datasheet | null; candidates: DatasheetCandidate[]; placedScore: number | null; placedSource: 'adi' | 'ai' | null }> {
+  const library = await findLibraryDatasheet(manufacturer, model);
+  if (library) {
+    return { datasheet: library, candidates: [], placedScore: 100, placedSource: null };
+  }
+
   const candidates = await searchDatasheetCandidates(manufacturer, model);
   const autoPlace = [...candidates]
     .filter(candidate => {
-      if ((candidate.score ?? 0) === 93) return false;
-      if (!candidateHasDistinctiveModel(candidate, manufacturer, model)) return false;
-      if (candidateIsAdi(candidate) && (candidate.score ?? 0) >= ADI_AUTO_PLACE_SCORE) return true;
-      return candidate.verified && (candidate.score ?? 0) >= AI_AUTO_PLACE_SCORE;
+      if ((candidate.score ?? 0) < ADI_AUTO_PLACE_SCORE) return false;
+      if (!candidateNamesManufacturer(candidate, manufacturer)) return false;
+      const exactPart = candidateHasExactPartNumber(candidate, manufacturer, model);
+      const adiExact = candidateIsAdi(candidate) && (candidate.score ?? 0) >= 96;
+      if (!exactPart && !adiExact) return false;
+      if (candidateIsAdi(candidate)) return true;
+      return Boolean(candidate.verified);
     })
     .sort((a, b) => {
       const aAdi = candidateIsAdi(a) ? 1 : 0;
@@ -128,6 +138,7 @@ export async function findAndSaveDatasheet(
       const datasheet = await saveDatasheetFromUrl(candidate.url, manufacturer, model, {
         source,
         score: candidate.score,
+        requireExactPart: true,
       });
       return { datasheet, candidates, placedScore: candidate.score ?? AI_AUTO_PLACE_SCORE, placedSource: source };
     } catch {
@@ -146,6 +157,24 @@ function compactToken(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
+function candidateNamesManufacturer(candidate: DatasheetCandidate, manufacturer: string): boolean {
+  return hayContainsManufacturer(`${candidate.title} ${candidate.url} ${candidate.domain}`, manufacturer);
+}
+
+export function hayContainsManufacturer(hay: string, manufacturer: string): boolean {
+  const mfr = manufacturer.trim();
+  if (!mfr) return false;
+  const compactHay = compactToken(hay);
+  const compactMfr = compactToken(mfr);
+  if (compactMfr.length >= 3 && compactHay.includes(compactMfr)) return true;
+  const generic = /^(ltd|limited|inc|uk|plc|the|and|group|international|global|distribution|security)$/;
+  const words = mfr
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(word => word.length >= 3 && !generic.test(word));
+  return words.some(word => compactHay.includes(compactToken(word)));
+}
+
 function distinctiveModelTokens(model: string, manufacturer: string): string[] {
   const generic = /^(premier|elite|series|keypad|wired|wireless|alarm|kit|zone|with|white|black|display|programmable|character)$/;
   const mfr = compactToken(manufacturer);
@@ -159,20 +188,58 @@ function distinctiveModelTokens(model: string, manufacturer: string): string[] {
   )];
 }
 
-function candidateHasDistinctiveModel(
+function candidateHasExactPartNumber(
   candidate: DatasheetCandidate,
   manufacturer: string,
   model: string,
 ): boolean {
+  return hayContainsExactPart(`${candidate.title} ${candidate.url}`, model, manufacturer);
+}
+
+export async function findLibraryDatasheet(
+  manufacturer: string,
+  model: string,
+): Promise<Datasheet | null> {
+  const mfr = manufacturer.trim();
+  const mdl = model.trim();
+  if (!mfr || !mdl) return null;
+  const { data } = await supabase
+    .from('datasheets')
+    .select('*')
+    .not('datasheet_url', 'is', null)
+    .ilike('manufacturer', `%${mfr.replace(/[%_]/g, '')}%`);
+  if (!data?.length) return null;
+  return findLibraryDatasheetForDevice(mfr, mdl, data) as Datasheet | null;
+}
+
+export function hayContainsExactPart(hay: string, model: string, manufacturer: string): boolean {
   const tokens = distinctiveModelTokens(model, manufacturer);
-  if (tokens.length === 0) return true;
-  if (candidateIsAdi(candidate) && (candidate.score ?? 0) >= ADI_AUTO_PLACE_SCORE) return true;
-  const parts = `${candidate.title} ${candidate.url}`
+  const parts = hay
     .toLowerCase()
-    .split(/[\s,;/_-]+/)
+    .split(/[\s,;:/\\|()]+/)
     .map(part => compactToken(part))
     .filter(Boolean);
-  return tokens.every(token => parts.includes(token));
+  if (tokens.length > 0) return tokens.every(token => parts.includes(token));
+  const compactModel = compactToken(model);
+  return compactModel.length >= 3 && parts.includes(compactModel);
+}
+
+export function selectProductPageIndexes(
+  pageTexts: string[],
+  manufacturer: string,
+  model: string,
+): number[] {
+  const hits: number[] = [];
+  for (let index = 0; index < pageTexts.length; index += 1) {
+    if (hayContainsExactPart(pageTexts[index] ?? '', model, manufacturer)) hits.push(index);
+  }
+  if (hits.length === 0) return pageTexts.map((_, index) => index);
+  const keep = new Set(hits);
+  for (const index of hits) {
+    const next = pageTexts[index + 1];
+    if (next && hayContainsManufacturer(next, manufacturer)) keep.add(index + 1);
+  }
+  return [...keep].sort((left, right) => left - right);
 }
 
 function userDatasheetStoragePath(url: string | null | undefined): string | null {

@@ -327,6 +327,20 @@ function compact(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
+function hayContainsManufacturer(hay: string, manufacturer: string): boolean {
+  const mfr = manufacturer.trim();
+  if (!mfr) return false;
+  const compactHay = compact(hay);
+  const compactMfr = compact(mfr);
+  if (compactMfr.length >= 3 && compactHay.includes(compactMfr)) return true;
+  const generic = /^(ltd|limited|inc|uk|plc|the|and|group|international|global|distribution|security)$/;
+  return mfr
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length >= 3 && !generic.test(word))
+    .some((word) => compactHay.includes(compact(word)));
+}
+
 function hitScore(
   candidate: { url?: string; title?: string; source?: string },
   manufacturer: string,
@@ -334,6 +348,9 @@ function hitScore(
   verified: boolean,
   claudeScore: number | null,
 ): number {
+  if (!hayContainsManufacturer(`${candidate.url ?? ""} ${candidate.title ?? ""}`, manufacturer)) {
+    return Math.min(claudeScore ?? 70, 79);
+  }
   if (candidate.source === "adi" && claudeScore != null) {
     if (claudeScore >= 90) {
       return verified || isAdiDatasheetUrl(candidate.url ?? "") ? claudeScore : Math.min(claudeScore, 88);
@@ -724,6 +741,9 @@ function adiMatchRank(product: AdiProduct, model: string, manufacturer = ""): nu
   const tokens = distinctiveModelTokens(model, manufacturer);
   const tokenLevel = distinctiveTokenLevel(product, model, manufacturer);
 
+  if (requestedMfr && !hayContainsManufacturer(`${product.manufacturer || ""} ${product.name || ""}`, manufacturer)) {
+    return 0;
+  }
   if (tokens.length > 0 && tokenLevel === 0) return 0;
 
   if (keys.some((key) => key === modelKey || key === needle) || tokenLevel >= 3) return 3;

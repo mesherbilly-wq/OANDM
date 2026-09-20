@@ -109,6 +109,89 @@ function compact(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
+function hayContainsManufacturer(hay: string, manufacturer: string): boolean {
+  const mfr = manufacturer.trim();
+  if (!mfr) return false;
+  const compactHay = compact(hay);
+  const compactMfr = compact(mfr);
+  if (compactMfr.length >= 3 && compactHay.includes(compactMfr)) return true;
+  const generic = /^(ltd|limited|inc|uk|plc|the|and|group|international|global|distribution|security)$/;
+  return mfr
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length >= 3 && !generic.test(word))
+    .some((word) => compactHay.includes(compact(word)));
+}
+
+function pdfNamesManufacturer(bytes: Uint8Array, manufacturer: string): boolean {
+  const sample = new TextDecoder("latin1").decode(bytes.slice(0, 500_000));
+  return hayContainsManufacturer(sample, manufacturer);
+}
+
+async function keepProductPages(
+  bytes: Uint8Array,
+  manufacturer: string,
+  model: string,
+): Promise<Uint8Array> {
+  try {
+    const { extractText, getDocumentProxy } = await import("npm:unpdf@1.3.2");
+    const { PDFDocument } = await import("npm:pdf-lib@1.17.1");
+    const proxy = await getDocumentProxy(bytes);
+    const extracted = await extractText(proxy, { mergePages: false });
+    const pageTexts = Array.isArray(extracted.text) ? extracted.text : [String(extracted.text ?? "")];
+    const keep = selectProductPageIndexes(pageTexts, manufacturer, model);
+    if (keep.length === 0 || keep.length === pageTexts.length) return bytes;
+    const source = await PDFDocument.load(bytes, { ignoreEncryption: true });
+    const trimmed = await PDFDocument.create();
+    const copied = await trimmed.copyPages(source, keep);
+    for (const page of copied) trimmed.addPage(page);
+    return await trimmed.save();
+  } catch {
+    return bytes;
+  }
+}
+
+function selectProductPageIndexes(pageTexts: string[], manufacturer: string, model: string): number[] {
+  const hits: number[] = [];
+  for (let index = 0; index < pageTexts.length; index += 1) {
+    if (pdfPageHasExactPart(pageTexts[index] ?? "", model, manufacturer)) hits.push(index);
+  }
+  if (hits.length === 0) return pageTexts.map((_, index) => index);
+  const keep = new Set(hits);
+  for (const index of hits) {
+    const next = pageTexts[index + 1];
+    if (next && hayContainsManufacturer(next, manufacturer)) keep.add(index + 1);
+  }
+  return [...keep].sort((left, right) => left - right);
+}
+
+function pdfPageHasExactPart(text: string, model: string, manufacturer: string): boolean {
+  const sample = new TextEncoder().encode(text);
+  return pdfNamesExactPart(sample, model, manufacturer);
+}
+
+function pdfNamesExactPart(bytes: Uint8Array, model: string, manufacturer = ""): boolean {
+  const sample = new TextDecoder("latin1").decode(bytes.slice(0, 500_000));
+  const generic = /^(premier|elite|series|keypad|wired|wireless|alarm|kit|zone|with|white|black|display|programmable|character)$/;
+  const mfr = compact(manufacturer);
+  const tokens = uniqueStrings(
+    model
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((word) => word.length >= 4 && !generic.test(word))
+      .map((word) => compact(word))
+      .filter((word) => word && word !== mfr && !mfr.includes(word)),
+  );
+  const parts = sample
+    .toLowerCase()
+    .split(/[\s,;:/\\|()]+/)
+    .map((part) => compact(part))
+    .filter(Boolean);
+  if (tokens.length > 0) return tokens.every((token) => parts.includes(token));
+  const compactModel = compact(model);
+  return compactModel.length >= 3 && parts.includes(compactModel);
+}
+
 function modelSlug(model: string): string {
   return model.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9.-]+/g, "");
 }
@@ -222,6 +305,15 @@ function distinctiveModelTokens(model: string, manufacturer = ""): string[] {
 
 function adiFetchProductMatches(product: any, modelKey: string, model = "", manufacturer = ""): boolean {
   if (!modelKey || modelKey.length < 3) return false;
+  if (
+    manufacturer.trim() &&
+    !hayContainsManufacturer(
+      `${product?.manufacturerName || product?.manufacturer || product?.brand || ""} ${product?.name || product?.productTitle || ""}`,
+      manufacturer,
+    )
+  ) {
+    return false;
+  }
   const keys = adiFetchIdentityKeys(product);
   if (keys.some((key) => key === modelKey)) return true;
   const mfr = compact(String(product?.manufacturerName || product?.manufacturer || product?.brand || manufacturer || ""));
@@ -326,7 +418,7 @@ Deno.serve(async (req: Request) => {
       return json(503, { error: "Supabase credentials not configured" });
     }
 
-    const { url, manufacturer, model, source, score } = await req.json();
+    const { url, manufacturer, model, source, score, requireExactPart } = await req.json();
     if (!url || !manufacturer || !model) {
       return json(400, { error: "url, manufacturer and model are required" });
     }
@@ -340,6 +432,13 @@ Deno.serve(async (req: Request) => {
 
     const manufacturerName = String(manufacturer).trim();
     const modelNumber = String(model).trim();
+    if (!pdfNamesManufacturer(pdfBytes, manufacturerName)) {
+      return json(200, { error: "That PDF does not name this manufacturer, so it was not saved." });
+    }
+    if (requireExactPart !== false && !pdfNamesExactPart(pdfBytes, modelNumber, manufacturerName)) {
+      return json(200, { error: "That PDF does not contain this exact part number, so it was not saved automatically." });
+    }
+    pdfBytes = await keepProductPages(pdfBytes, manufacturerName, modelNumber);
     const safeMfr = manufacturerName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     const safeMdl = modelNumber.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-|-$/g, "");
     const hitScore = Number(score);
