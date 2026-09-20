@@ -111,6 +111,8 @@ export async function findAndSaveDatasheet(
   const candidates = await searchDatasheetCandidates(manufacturer, model);
   const autoPlace = [...candidates]
     .filter(candidate => {
+      if ((candidate.score ?? 0) === 93) return false;
+      if (!candidateHasDistinctiveModel(candidate, manufacturer, model)) return false;
       if (candidateIsAdi(candidate) && (candidate.score ?? 0) >= ADI_AUTO_PLACE_SCORE) return true;
       return candidate.verified && (candidate.score ?? 0) >= AI_AUTO_PLACE_SCORE;
     })
@@ -138,6 +140,39 @@ export async function findAndSaveDatasheet(
 
 function candidateIsAdi(candidate: DatasheetCandidate): boolean {
   return candidate.source === 'adi' || /adiglobaldistribution/i.test(candidate.domain) || /adiglobaldistribution|product-data-sheet/i.test(candidate.url);
+}
+
+function compactToken(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function distinctiveModelTokens(model: string, manufacturer: string): string[] {
+  const generic = /^(premier|elite|series|keypad|wired|wireless|alarm|kit|zone|with|white|black|display|programmable|character)$/;
+  const mfr = compactToken(manufacturer);
+  return [...new Set(
+    model
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(word => word.length >= 4 && !generic.test(word))
+      .map(word => compactToken(word))
+      .filter(word => word && word !== mfr && !mfr.includes(word)),
+  )];
+}
+
+function candidateHasDistinctiveModel(
+  candidate: DatasheetCandidate,
+  manufacturer: string,
+  model: string,
+): boolean {
+  const tokens = distinctiveModelTokens(model, manufacturer);
+  if (tokens.length === 0) return true;
+  if (candidateIsAdi(candidate) && (candidate.score ?? 0) >= ADI_AUTO_PLACE_SCORE) return true;
+  const parts = `${candidate.title} ${candidate.url}`
+    .toLowerCase()
+    .split(/[\s,;/_-]+/)
+    .map(part => compactToken(part))
+    .filter(Boolean);
+  return tokens.every(token => parts.includes(token));
 }
 
 function userDatasheetStoragePath(url: string | null | undefined): string | null {

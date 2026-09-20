@@ -674,6 +674,44 @@ function stripKnownPrefix(value: string, prefix: string): string {
   return value;
 }
 
+function distinctiveModelTokens(model: string, manufacturer = ""): string[] {
+  const generic = /^(premier|elite|series|keypad|wired|wireless|alarm|kit|zone|with|white|black|display|programmable|character)$/;
+  const mfr = compact(manufacturer);
+  return uniqueStrings(
+    model
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((word) => word.length >= 4 && !generic.test(word))
+      .map((word) => compact(word))
+      .filter((word) => word && word !== mfr && !mfr.includes(word)),
+  );
+}
+
+function productNameParts(name: string): string[] {
+  return name
+    .toLowerCase()
+    .split(/[\s,;/]+/)
+    .map((part) => compact(part))
+    .filter((part) => part.length >= 3);
+}
+
+function distinctiveTokenLevel(product: AdiProduct, model: string, manufacturer = ""): 3 | 2 | 0 {
+  const tokens = distinctiveModelTokens(model, manufacturer);
+  if (tokens.length === 0) return 0;
+  const keys = adiIdentityKeys(product);
+  const parts = productNameParts(product.name || "");
+  const hay = [...keys, ...parts];
+  if (tokens.every((token) => hay.includes(token))) return 3;
+  if (
+    tokens.every((token) =>
+      hay.some((value) => value === token || (value.startsWith(token) && value.length - token.length <= 3))
+    )
+  ) {
+    return 2;
+  }
+  return 0;
+}
+
 function adiMatchRank(product: AdiProduct, model: string, manufacturer = ""): number {
   const modelKey = compact(model);
   if (!modelKey || modelKey.length < 3 || !(product?.id || adiPartNumber(product))) return 0;
@@ -683,13 +721,19 @@ function adiMatchRank(product: AdiProduct, model: string, manufacturer = ""): nu
   const needle = stripKnownPrefix(modelKey, requestedMfr);
   const keys = adiIdentityKeys(product).map((key) => stripKnownPrefix(key, productMfr || requestedMfr));
   const nameKey = compact(product.name || "");
+  const tokens = distinctiveModelTokens(model, manufacturer);
+  const tokenLevel = distinctiveTokenLevel(product, model, manufacturer);
 
-  if (keys.some((key) => key === modelKey || key === needle)) return 3;
+  if (tokens.length > 0 && tokenLevel === 0) return 0;
+
+  if (keys.some((key) => key === modelKey || key === needle) || tokenLevel >= 3) return 3;
   if (nameLooksLikeExactModel(nameKey, needle, requestedMfr) || nameLooksLikeExactModel(nameKey, modelKey, requestedMfr)) {
     return 3;
   }
 
   if (isAccessoryName(product.name || "")) return 0;
+
+  if (tokenLevel === 2) return 2;
 
   if (needle.length >= 6 && keys.some((key) => key.startsWith(needle) && key.length - needle.length <= 3)) {
     return 2;
@@ -731,7 +775,7 @@ function escapeRegExp(value: string): string {
 }
 
 function isAccessoryName(name: string): boolean {
-  return /\b(bracket|mount|shield|casing|spare|injector|armature|housing|weathershield|junction box|for selected)\b/i.test(name);
+  return /\b(bracket|mount|shield|casing|spare|injector|armature|housing|weathershield|junction box|for selected|kit)\b/i.test(name);
 }
 
 function isAdiDatasheetDoc(doc: { name?: string; documentType?: string; fileTypeString?: string }, url: string): boolean {

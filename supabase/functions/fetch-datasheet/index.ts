@@ -161,7 +161,7 @@ async function adiDatasheetUrls(manufacturer: string, model: string): Promise<st
           if (Array.isArray(acJson?.products)) products.push(...acJson.products);
         }
       }
-      const matched = products.filter((product) => adiFetchProductMatches(product, modelKey)).slice(0, 4);
+      const matched = products.filter((product) => adiFetchProductMatches(product, modelKey, model, manufacturer)).slice(0, 4);
       for (const product of matched) {
         const detail = await adiFetchProductDetail(origin, product);
         const docs = Array.isArray(detail?.documents) ? detail.documents : [];
@@ -207,15 +207,30 @@ function adiFetchIdentityKeys(product: any): string[] {
   ].map((value) => compact(String(value || ""))).filter((value) => value.length >= 4));
 }
 
-function adiFetchProductMatches(product: any, modelKey: string): boolean {
+function distinctiveModelTokens(model: string, manufacturer = ""): string[] {
+  const generic = /^(premier|elite|series|keypad|wired|wireless|alarm|kit|zone|with|white|black|display|programmable|character)$/;
+  const mfr = compact(manufacturer);
+  return uniqueStrings(
+    model
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((word) => word.length >= 4 && !generic.test(word))
+      .map((word) => compact(word))
+      .filter((word) => word && word !== mfr && !mfr.includes(word)),
+  );
+}
+
+function adiFetchProductMatches(product: any, modelKey: string, model = "", manufacturer = ""): boolean {
   if (!modelKey || modelKey.length < 3) return false;
   const keys = adiFetchIdentityKeys(product);
   if (keys.some((key) => key === modelKey)) return true;
-  const mfr = compact(String(product?.manufacturerName || product?.manufacturer || product?.brand || ""));
+  const mfr = compact(String(product?.manufacturerName || product?.manufacturer || product?.brand || manufacturer || ""));
   const needle = mfr && modelKey.startsWith(mfr) && modelKey.length > mfr.length + 2
     ? modelKey.slice(mfr.length)
     : modelKey;
-  return needle.length >= 4 && keys.some((key) => key === needle);
+  if (needle.length >= 4 && keys.some((key) => key === needle)) return true;
+  const tokens = distinctiveModelTokens(model || modelKey, manufacturer);
+  return tokens.length > 0 && tokens.every((token) => keys.includes(token));
 }
 
 async function adiFetchProductDetail(origin: string, product: any): Promise<any | null> {
