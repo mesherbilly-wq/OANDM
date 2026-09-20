@@ -105,7 +105,23 @@ type TocHotspot = {
 // Renders all pages of a PDF URL into base64 image data URLs using pdfjs-dist.
 // Returns an array of data URL strings (one per page), or null on error.
 
-type PdfRenderState = { pages: string[]; loading: boolean; failed: boolean };
+type PdfRenderState = { pages: string[]; pageIndexes?: number[]; loading: boolean; failed: boolean };
+
+function parseSourcePageIndexes(value: string | null): number[] | undefined {
+  if (!value?.trim()) return undefined;
+  const nums = value.split(',').map(part => Number.parseInt(part.trim(), 10)).filter(n => Number.isInteger(n) && n >= 0);
+  return nums.length > 0 ? nums : undefined;
+}
+
+function collectPageStartRatios(el: HTMLElement): number[] {
+  const elBox = el.getBoundingClientRect();
+  const height = elBox.height || 1;
+  const starts = Array.from(el.querySelectorAll<HTMLElement>('.om-print-doc-page')).map(node => {
+    const box = node.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (box.top - elBox.top) / height));
+  });
+  return [0, ...starts].filter((ratio, index, all) => index === 0 || ratio - all[index - 1] > 0.004);
+}
 
 async function fetchPdfBytes(url: string): Promise<Uint8Array | null> {
   try {
@@ -125,7 +141,7 @@ async function pdfPageCount(bytes: Uint8Array): Promise<number> {
 
 async function mergeNativePdfPages(
   jsPdfBytes: ArrayBuffer | null,
-  nativeInserts: { index: number; bytes: Uint8Array }[],
+  nativeInserts: { index: number; bytes: Uint8Array; pageIndexes?: number[] }[],
 ) {
   const { PDFDocument } = await import('pdf-lib');
   const out = jsPdfBytes
@@ -134,7 +150,10 @@ async function mergeNativePdfPages(
   let offset = 0;
   for (const insert of nativeInserts) {
     const src = await PDFDocument.load(insert.bytes, { ignoreEncryption: true });
-    const copied = await out.copyPages(src, src.getPageIndices());
+    const allowed = src.getPageCount();
+    const indices = (insert.pageIndexes ?? src.getPageIndices()).filter(index => index >= 0 && index < allowed);
+    if (indices.length === 0) continue;
+    const copied = await out.copyPages(src, indices);
     let at = Math.min(insert.index + offset, out.getPageCount());
     for (const page of copied) {
       out.insertPage(at, page);
@@ -215,7 +234,7 @@ async function pageTextFromPdf(page: { getTextContent: () => Promise<{ items: Ar
 async function renderPdfToImages(
   url: string,
   product?: { manufacturer: string; model: string },
-): Promise<string[] | null> {
+): Promise<{ pages: string[]; pageIndexes: number[] } | null> {
   try {
     const pdfjsLib = await import('pdfjs-dist');
     pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -245,6 +264,7 @@ async function renderPdfToImages(
       pageNumbers = selectProductPageIndexes(texts, product.manufacturer, product.model).map(index => index + 1);
     }
     const pages: string[] = [];
+    const pageIndexes: number[] = [];
     const renderPages = pageNumbers.slice(0, 12);
     for (let i = 0; i < renderPages.length; i++) {
       const page = await pdf.getPage(renderPages[i]);
@@ -260,9 +280,10 @@ async function renderPdfToImages(
         viewport,
       }).promise;
       pages.push(canvas.toDataURL('image/jpeg', 0.88));
+      pageIndexes.push(renderPages[i] - 1);
       if (i < renderPages.length - 1) await new Promise(resolve => window.setTimeout(resolve, 0));
     }
-    return pages;
+    return { pages, pageIndexes };
   } catch {
     return null;
   }
@@ -947,10 +968,15 @@ export function ProjectOMExportPage() {
       if (!url || pdfRenderStarted.current.has(url)) continue;
       pdfRenderStarted.current.add(url);
       setPdfPageImages(prev => ({ ...prev, [url]: { pages: [], loading: true, failed: false } }));
-      const pages = await renderPdfToImages(url, pdfProductFilter.current.get(url));
+      const rendered = await renderPdfToImages(url, pdfProductFilter.current.get(url));
       setPdfPageImages(prev => ({
         ...prev,
-        [url]: { pages: pages ?? [], loading: false, failed: pages === null },
+        [url]: {
+          pages: rendered?.pages ?? [],
+          pageIndexes: rendered?.pageIndexes,
+          loading: false,
+          failed: rendered === null,
+        },
       }));
       await new Promise(resolve => window.setTimeout(resolve, 0));
     }
@@ -1292,6 +1318,8 @@ export function ProjectOMExportPage() {
         canvas?: HTMLCanvasElement;
         nativePdf?: Uint8Array;
         nativePageCount?: number;
+        nativePageIndexes?: number[];
+        pageStartRatios?: number[];
         anchorId: string | null;
         isCover: boolean;
         landscape: boolean;
@@ -1309,10 +1337,12 @@ export function ProjectOMExportPage() {
         if (sourcePdf) {
           const bytes = await fetchPdfBytes(sourcePdf);
           if (bytes && bytes.length > 0) {
+            const pageIndexes = parseSourcePageIndexes(el.getAttribute('data-om-source-pages'));
             renderedSections.push({
               kind: 'native-pdf',
               nativePdf: bytes,
-              nativePageCount: await pdfPageCount(bytes),
+              nativePageCount: pageIndexes?.length ?? await pdfPageCount(bytes),
+              nativePageIndexes: pageIndexes,
               anchorId,
               isCover: false,
               landscape: false,
@@ -1323,10 +1353,12 @@ export function ProjectOMExportPage() {
 
         applyPrintRootWidth(renderW);
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const pageStartRatios = collectPageStartRatios(el);
         const canvas = await capturePrintElement(el, html2canvas as (element: HTMLElement, options?: Record<string, unknown>) => Promise<HTMLCanvasElement>, renderW);
         renderedSections.push({
           kind: 'canvas',
           canvas,
+          pageStartRatios: pageStartRatios.length > 1 ? pageStartRatios : undefined,
           anchorId,
           isCover: i === 0,
           landscape,
@@ -1454,15 +1486,19 @@ export function ProjectOMExportPage() {
         else if (anchorId?.startsWith('print-section-technical_docs')) runningTitle = 'Technical Documentation';
 
         if (section.kind === 'native-pdf' && section.nativePdf) {
-          nativeInserts.push({ index: currentPage, bytes: section.nativePdf });
+          nativeInserts.push({
+            index: currentPage,
+            bytes: section.nativePdf,
+            pageIndexes: section.nativePageIndexes,
+          });
           continue;
         }
 
         const canvas = section.canvas;
         if (!canvas) continue;
         const metrics = pageMetrics(landscape);
-        const contentH_mm = (canvas.height / canvas.width) * metrics.contentW;
         const pxPerMm = canvas.width / metrics.contentW;
+        const maxSlicePx = Math.max(1, Math.round(metrics.contentH * pxPerMm));
 
         if (isCover) {
           newPage(false);
@@ -1472,37 +1508,50 @@ export function ProjectOMExportPage() {
           continue;
         }
 
-        let srcY_px = 0;
-        let remainingH_mm = contentH_mm;
-
-        while (remainingH_mm > 0.5) {
+        const emitCanvasSlice = (srcY_px: number, sliceH_px: number) => {
+          const clampedH = Math.min(sliceH_px, canvas.height - srcY_px);
+          if (clampedH <= 1) return;
           newPage(landscape);
           drawPageHeader(metrics, runningTitle);
-
-          const sliceH_mm = Math.min(remainingH_mm, metrics.contentH);
-          const sliceH_px = Math.round(sliceH_mm * pxPerMm);
-
           const sliceCanvas = document.createElement('canvas');
           sliceCanvas.width = canvas.width;
-          sliceCanvas.height = Math.min(sliceH_px, canvas.height - srcY_px);
+          sliceCanvas.height = clampedH;
           const ctx = sliceCanvas.getContext('2d')!;
           ctx.fillStyle = '#ffffff';
           ctx.fillRect(0, 0, sliceCanvas.width, sliceCanvas.height);
           ctx.drawImage(
             canvas,
             0, srcY_px,
-            canvas.width, sliceCanvas.height,
+            canvas.width, clampedH,
             0, 0,
-            canvas.width, sliceCanvas.height
+            canvas.width, clampedH,
           );
-
-          const actualSliceH_mm = (sliceCanvas.height / sliceCanvas.width) * metrics.contentW;
-          const imgData = sliceCanvas.toDataURL('image/jpeg', 0.94);
-          pdf.addImage(imgData, 'JPEG', metrics.mLeft, metrics.mTop, metrics.contentW, actualSliceH_mm);
+          let destH = (sliceCanvas.height / sliceCanvas.width) * metrics.contentW;
+          if (destH > metrics.contentH) destH = metrics.contentH;
+          pdf.addImage(sliceCanvas.toDataURL('image/jpeg', 0.94), 'JPEG', metrics.mLeft, metrics.mTop, metrics.contentW, destH);
           drawFooter(currentPage, metrics);
+        };
 
-          srcY_px += sliceH_px;
-          remainingH_mm -= sliceH_mm;
+        const emitSlicedRange = (startPx: number, endPx: number) => {
+          let y = Math.max(0, startPx);
+          const stop = Math.min(canvas.height, endPx);
+          while (y < stop - 1) {
+            const sliceH = Math.min(maxSlicePx, stop - y);
+            emitCanvasSlice(y, sliceH);
+            y += sliceH;
+          }
+        };
+
+        if (section.pageStartRatios && section.pageStartRatios.length > 0) {
+          const bounds = [...section.pageStartRatios, 1];
+          for (let i = 0; i < bounds.length - 1; i++) {
+            emitSlicedRange(
+              Math.round(bounds[i] * canvas.height),
+              Math.round(bounds[i + 1] * canvas.height),
+            );
+          }
+        } else {
+          emitSlicedRange(0, canvas.height);
         }
       }
 
@@ -2054,14 +2103,14 @@ export function ProjectOMExportPage() {
 
         {getUpload('commissioning') ? (
           <>
-            <PrintSection title="Commissioning Pack" anchorId="print-section-commissioning">
-              <PrintPdfPages
-                title="Commissioning Pack"
-                fileName={getUpload('commissioning')!.file_name}
-                url={getUpload('commissioning')!.file_url}
-                pageImages={pdfPageImages}
-              />
-            </PrintSection>
+            <PrintEmbeddedPdf
+              title="Commissioning Pack"
+              fileName={getUpload('commissioning')!.file_name}
+              url={getUpload('commissioning')!.file_url}
+              pageImages={pdfPageImages}
+              anchorId="print-section-commissioning"
+              sectionKey="commissioning"
+            />
             <div className="page-break" />
           </>
         ) : includedCommRecords.length > 0 && (
@@ -2076,17 +2125,19 @@ export function ProjectOMExportPage() {
         {(() => {
           if (handoverPackPdfs.length > 0) return (
             <>
-              <PrintSection title="Handover Documents" anchorId="print-section-handover">
-                {handoverPackPdfs.map(doc => (
-                  <PrintPdfPages
-                    key={doc.key}
+              {handoverPackPdfs.map((doc, index) => (
+                <React.Fragment key={doc.key}>
+                  {index > 0 && <div className="page-break" />}
+                  <PrintEmbeddedPdf
                     title={doc.title}
                     fileName={doc.file_name}
                     url={doc.file_url}
                     pageImages={pdfPageImages}
+                    anchorId={index === 0 ? 'print-section-handover' : undefined}
+                    sectionKey="handover"
                   />
-                ))}
-              </PrintSection>
+                </React.Fragment>
+              ))}
               <div className="page-break" />
             </>
           );
@@ -2109,39 +2160,41 @@ export function ProjectOMExportPage() {
         )}
 
         {devices.some(d => d.datasheet) && (
-          <>
-            <PrintSection title="Datasheets" anchorId="print-section-datasheets">
-              <PrintDatasheets groups={systemGroups} pageImages={pdfPageImages} />
-            </PrintSection>
-            <div className="page-break" />
-          </>
+          <PrintDatasheets groups={systemGroups} pageImages={pdfPageImages} />
         )}
 
         {projectManuals.length > 0 && (
           <>
-            <PrintSection title="User Manuals" anchorId="print-section-user_manuals">
-              <div className="space-y-8">
-                {projectManuals.map(pm => (
-                  pm.manual.file_url ? (
-                    <PrintPdfPages
-                      key={pm.id}
-                      title={pm.manual.title}
-                      fileName={pm.manual.file_name}
-                      url={pm.manual.file_url}
-                      pageImages={pdfPageImages}
-                    />
-                  ) : (
-                    <div key={pm.id} className="border border-slate-200 rounded p-4">
+            {projectManuals.map((pm, index) => (
+              <React.Fragment key={pm.id}>
+                {index > 0 && <div className="page-break" />}
+                {pm.manual.file_url ? (
+                  <PrintEmbeddedPdf
+                    title={pm.manual.title}
+                    fileName={pm.manual.file_name}
+                    url={pm.manual.file_url}
+                    pageImages={pdfPageImages}
+                    anchorId={index === 0 ? 'print-section-user_manuals' : undefined}
+                    sectionKey="user_manuals"
+                  />
+                ) : (
+                  <PrintSection
+                    title={index === 0 ? 'User Manuals' : pm.manual.title}
+                    subtitle={index === 0 ? pm.manual.title : undefined}
+                    anchorId={index === 0 ? 'print-section-user_manuals' : undefined}
+                    forcePageBreak={index > 0}
+                  >
+                    <div className="border border-slate-200 rounded p-4">
                       <p className="text-sm font-semibold text-slate-800">{pm.manual.title}</p>
                       {pm.manual.description && <p className="text-xs text-slate-500 mt-0.5">{pm.manual.description}</p>}
                       {pm.manual.link_url && (
                         <p className="text-xs text-slate-400 mt-1 break-all">Linked document: {pm.manual.link_url}</p>
                       )}
                     </div>
-                  )
-                ))}
-              </div>
-            </PrintSection>
+                  </PrintSection>
+                )}
+              </React.Fragment>
+            ))}
           </>
         )}
       </div>
@@ -2242,6 +2295,8 @@ export function ProjectOMExportPage() {
           }
 
           img { page-break-inside: avoid; break-inside: avoid; }
+          .om-print-doc-page { page-break-inside: avoid; break-inside: avoid; }
+          .om-print-doc-page + .om-print-doc-page { page-break-before: always; break-before: page; }
 
           .simpro-html {
             font-family: Calibri, 'Segoe UI', Arial, sans-serif !important;
@@ -3415,39 +3470,63 @@ function HandoverPackSection({ uploads, onRemove, handoverDocs, scHandoverDocs, 
   );
 }
 
-function PrintPdfPages({ title, fileName, url, pageImages }: {
+function PrintEmbeddedPdf({
+  title,
+  fileName,
+  url,
+  pageImages,
+  anchorId,
+  sectionKey,
+  subtitle,
+  keepRenderedPages,
+}: {
   title: string;
   fileName?: string | null;
   url: string;
   pageImages: Record<string, PdfRenderState>;
+  anchorId?: string;
+  sectionKey: string;
+  subtitle?: string;
+  keepRenderedPages?: boolean;
 }) {
   const rendered = pageImages[url];
+  const pageAttr = keepRenderedPages && rendered?.pageIndexes?.length
+    ? rendered.pageIndexes.join(',')
+    : undefined;
   return (
-    <div className="mb-8">
-      <h3 className="text-base font-bold text-slate-800 mb-4 pb-2 border-b border-slate-300">{title}</h3>
-      {rendered?.failed ? (
-        <div className="border border-slate-200 rounded p-6 text-center text-slate-500 text-sm">
-          <p className="font-medium mb-1">Could not render PDF for print</p>
-          <p className="text-xs text-slate-400">{fileName ?? url}</p>
-        </div>
-      ) : rendered?.pages.length ? (
-        <div className="space-y-2">
-          {rendered.pages.map((src, pageIdx) => (
-            <img
-              key={pageIdx}
-              src={src}
-              alt={`${title} — page ${pageIdx + 1}`}
-              className="w-full"
-              style={{ pageBreakInside: 'avoid' }}
-            />
-          ))}
-        </div>
-      ) : (
-        <div className="border border-slate-200 rounded p-6 text-center text-slate-500 text-sm">
-          <p>PDF not yet rendered — wait for “Preparing PDFs for print” to finish</p>
-          <p className="text-xs mt-1 text-slate-400">{fileName ?? url}</p>
-        </div>
-      )}
+    <div
+      id={anchorId}
+      className="om-print-doc"
+      data-om-source-pdf={url}
+      data-om-source-title={title}
+      data-om-source-pages={pageAttr}
+      data-print-section={sectionKey}
+    >
+      <PrintSection title={title} subtitle={subtitle}>
+        {rendered?.failed ? (
+          <div className="border border-slate-200 rounded p-6 text-center text-slate-500 text-sm">
+            <p className="font-medium mb-1">Could not render PDF for print</p>
+            <p className="text-xs text-slate-400">{fileName ?? url}</p>
+          </div>
+        ) : rendered?.pages.length ? (
+          <div>
+            {rendered.pages.map((src, pageIdx) => (
+              <img
+                key={pageIdx}
+                src={src}
+                alt={`${title} — page ${pageIdx + 1}`}
+                className="om-print-doc-page w-full"
+                style={{ display: 'block', pageBreakInside: 'avoid', breakInside: 'avoid' }}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="border border-slate-200 rounded p-6 text-center text-slate-500 text-sm">
+            <p>PDF not yet rendered — wait for “Preparing PDFs for print” to finish</p>
+            <p className="text-xs mt-1 text-slate-400">{fileName ?? url}</p>
+          </div>
+        )}
+      </PrintSection>
     </div>
   );
 }
@@ -3732,9 +3811,15 @@ function PrintAsFittedDrawings({ drawings, pageImages, documentSystems, skipAnch
                   <p className="text-xs text-slate-400">{d.file_name}</p>
                 </div>
               ) : rendered?.pages.length ? (
-                <div className="space-y-1">
+                <div>
                   {rendered.pages.map((src, i) => (
-                    <img key={i} src={src} alt={`${d.title} page ${i + 1}`} className="w-full" style={{ pageBreakInside: 'avoid' }} />
+                    <img
+                      key={i}
+                      src={src}
+                      alt={`${d.title} page ${i + 1}`}
+                      className="om-print-doc-page w-full"
+                      style={{ display: 'block', pageBreakInside: 'avoid', breakInside: 'avoid' }}
+                    />
                   ))}
                 </div>
               ) : (
@@ -4431,38 +4516,27 @@ function PrintDatasheets({ groups, pageImages }: {
   }
 
   return (
-    <div>
-      {unique.map(({ system, d }) => {
+    <>
+      {unique.map(({ system, d }, index) => {
         const url = d.datasheet!.datasheet_url;
-        const rendered = pageImages[url];
         const label = [d.manufacturer, d.model_number].filter(Boolean).join(' ');
         return (
-          <div key={`${system}-${url}`} style={{ marginBottom: '2rem' }}>
-            <div style={{ background: '#0f172a', padding: '0.4rem 0.75rem', borderRadius: '0.375rem 0.375rem 0 0', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <p style={{ fontWeight: 700, color: 'white', margin: 0, fontSize: '0.75rem' }}>{label || d.file_name}</p>
-              <span style={{ fontSize: '0.65rem', color: '#94a3b8', fontWeight: 400 }}>{system}</span>
-            </div>
-            <div style={{ border: '1px solid #e2e8f0', borderTop: 'none', padding: '0.5rem' }}>
-              {rendered?.failed ? (
-                <div style={{ border: '1px solid #e2e8f0', borderRadius: '0.375rem', padding: '1rem', textAlign: 'center' as const, color: '#64748b', fontSize: '0.8rem' }}>
-                  <p style={{ fontWeight: 600, marginBottom: '0.25rem' }}>Could not render datasheet PDF</p>
-                  <p style={{ fontSize: '0.7rem', color: '#94a3b8', wordBreak: 'break-all' as const }}>{url}</p>
-                </div>
-              ) : rendered?.pages.length ? (
-                <div>
-                  {rendered.pages.map((src, i) => (
-                    <img key={i} src={src} alt={`${label} page ${i + 1}`} style={{ width: '100%', display: 'block', pageBreakInside: 'avoid' }} />
-                  ))}
-                </div>
-              ) : (
-                <div style={{ border: '1px solid #e2e8f0', borderRadius: '0.375rem', padding: '1rem', textAlign: 'center' as const, color: '#64748b', fontSize: '0.8rem' }}>
-                  <p>Datasheet not yet rendered — wait for “Preparing PDFs for print” to finish</p>
-                </div>
-              )}
-            </div>
-          </div>
+          <React.Fragment key={`${system}-${url}`}>
+            {index > 0 && <div className="page-break" />}
+            <PrintEmbeddedPdf
+              title={label || d.datasheet?.file_name || 'Datasheet'}
+              subtitle={system}
+              fileName={d.datasheet?.file_name}
+              url={url}
+              pageImages={pageImages}
+              anchorId={index === 0 ? 'print-section-datasheets' : undefined}
+              sectionKey="datasheets"
+              keepRenderedPages
+            />
+          </React.Fragment>
         );
       })}
-    </div>
+      {unique.length > 0 && <div className="page-break" />}
+    </>
   );
 }
