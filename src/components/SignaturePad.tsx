@@ -80,6 +80,7 @@ export function SignaturePad({
     <div className="space-y-2">
       <canvas
         ref={canvasRef}
+        aria-label="Signature"
         className="w-full h-40 border border-slate-800 bg-white touch-none cursor-crosshair"
         onPointerDown={start}
         onPointerMove={move}
@@ -87,7 +88,7 @@ export function SignaturePad({
         onPointerLeave={end}
       />
       <button type="button" onClick={clear} className="text-xs text-slate-500 hover:text-slate-800">
-        Clear signature
+        Clear and redraw
       </button>
     </div>
   );

@@ -28,6 +28,7 @@ import AsBuiltDrawingsPage from './pages/AsBuiltDrawingsPage';
 import AsFittedPage from './pages/AsFittedPage';
 import ScopeOfWorksPage from './pages/ScopeOfWorksPage';
 import PublicHandoverFormPage from './pages/PublicHandoverFormPage';
+import PublicCompletionFormPage from './pages/PublicCompletionFormPage';
 import SafetyCulturePage from './pages/SafetyCulturePage';
 import { UsersPage } from './pages/UsersPage';
 import { CompaniesPage } from './pages/CompaniesPage';
@@ -79,7 +80,7 @@ function App() {
     setCompanyName('');
   };
 
-  const isPublicFormPath = typeof window !== 'undefined' && window.location.pathname.startsWith('/f/');
+  const isPublicFormPath = typeof window !== 'undefined' && (window.location.pathname.startsWith('/f/') || window.location.pathname.startsWith('/c/'));
   const isInvitePath = typeof window !== 'undefined' && (window.location.pathname.startsWith('/i/') || window.location.pathname.startsWith('/u/'));
   const isReturnPath = typeof window !== 'undefined' && window.location.pathname.startsWith('/r/');
 
@@ -88,6 +89,7 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/f/:token" element={<PublicHandoverFormPage />} />
+          <Route path="/c/:token" element={<PublicCompletionFormPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
@@ -164,6 +166,7 @@ function AuthedApp({
       ) : (
       <Routes>
         <Route path="/f/:token" element={<PublicHandoverFormPage />} />
+        <Route path="/c/:token" element={<PublicCompletionFormPage />} />
         <Route path="/r/:token" element={<DocumentReturnPage />} />
         <Route path="/i/:token" element={<ProjectInvitePage />} />
         <Route path="/u/:token" element={<UserInvitePage />} />

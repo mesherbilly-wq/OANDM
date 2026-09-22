@@ -47,7 +47,7 @@ export function defaultProjectPath(projectId: number | string, role: AppRole): s
 }
 
 export function canAccessPath(pathname: string, role: AppRole): boolean {
-  if (pathname.startsWith('/f/') || pathname.startsWith('/i/') || pathname.startsWith('/u/')) return true;
+  if (pathname.startsWith('/f/') || pathname.startsWith('/c/') || pathname.startsWith('/i/') || pathname.startsWith('/u/')) return true;
   if (role === 'admin') return true;
 
   if (pathname.startsWith('/companies')) return canEditOperations(role);
