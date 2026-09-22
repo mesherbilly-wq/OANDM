@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { useProject } from './ProjectLayout';
+import { SimproTechDocAttachments } from '../components/SimproTechDocAttachments';
 import {
   loadDocumentProjectSystems,
   systemAssignmentFields,
@@ -429,6 +431,7 @@ async function refillDocumentFromFile(pid: number, doc: TechDocDocument): Promis
 export default function TechnicalDocsPage() {
   const { id } = useParams<{ id: string }>();
   const pid = id ? parseInt(id) : null;
+  const { project } = useProject();
 
   const [projectSystems, setProjectSystems] = useState<ProjectSystem[]>([]);
   const [activeSystem, setActiveSystem] = useState<string>('');
@@ -835,6 +838,46 @@ export default function TechnicalDocsPage() {
     if (error) return { file_name: file.name, file_url: '', file_size: file.size };
     const { data: { publicUrl } } = supabase.storage.from('om-uploads').getPublicUrl(path);
     return { file_name: file.name, file_url: publicUrl, file_size: file.size };
+  };
+
+  const savePlainFileDocuments = async (files: File[], meta: { systemName: string; jobId: string }) => {
+    if (!pid) return;
+    const selectedSystem = projectSystems.find(s => s.name === meta.systemName) ?? null;
+    for (const file of files) {
+      const stored = await uploadOriginalFile(file);
+      const payload = {
+        project_id: pid,
+        title: file.name.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' '),
+        document_type: 'Other',
+        notes: `Imported from Simpro job ${meta.jobId}`,
+        file_name: stored?.file_name ?? file.name,
+        file_url: stored?.file_url || null,
+        file_size: stored?.file_size ?? file.size,
+        is_protected: false,
+        visible_in_portal: true,
+        include_in_om: true,
+        ...systemAssignmentFields(selectedSystem ?? { name: meta.systemName, id: undefined }),
+      };
+      let { error } = await supabase.from('tech_doc_documents').insert(payload);
+      if (error && missingProtectedColumns(error)) {
+        const {
+          is_protected: _protected,
+          visible_in_portal: _visible,
+          include_in_om: _include,
+          ...legacy
+        } = payload;
+        const retry = await supabase.from('tech_doc_documents').insert(legacy);
+        error = retry.error;
+      }
+      if (error) {
+        if (missingTable(error)) {
+          setNeedsMigration(true);
+          throw new Error('Paste 039 SQL in Supabase, then import again so each file can be kept.');
+        }
+        throw new Error(error.message);
+      }
+    }
+    await load();
   };
 
   // ── Import confirm ───────────────────────────────────────────────────────────
@@ -1287,6 +1330,17 @@ export default function TechnicalDocsPage() {
           </div>
         </div>
       </div>
+
+      <SimproTechDocAttachments
+        project={project}
+        systems={projectSystems}
+        defaultSystem={activeSystem || projectSystems[0]?.name || ''}
+        existingFileNames={documents.map(doc => doc.file_name).filter((name): name is string => Boolean(name))}
+        disabled={pdfParsing || importing}
+        onImportFiles={async (files, systemName, jobId) => {
+          await savePlainFileDocuments(files, { systemName, jobId });
+        }}
+      />
 
       {needsMigration && (
         <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 space-y-2">

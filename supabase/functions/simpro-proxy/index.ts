@@ -560,5 +560,84 @@ Deno.serve(async (req: Request) => {
     });
   }
 
+  // ── list_job_attachments ────────────────────────────────────────────────────
+  if (action === "list_job_attachments") {
+    const config = resolveConfigFromBody(body, storedConfig);
+    const configError = assertSimproConfig(config);
+    if (configError) return json({ error: configError });
+
+    const jobId = String(body.job_id ?? body.jobId ?? body.id ?? "").trim();
+    if (!jobId) return json({ error: "job_id required" });
+
+    const url = buildApiUrl(config.baseUrl, config.companyId, `/jobs/${jobId}/attachments/files/`);
+    log("list_job_attachments", url);
+
+    const r = await simproFetch(url, config.apiToken).catch(() => null);
+    if (!r) {
+      return json({
+        error: `Network error connecting to Simpro\nEndpoint: ${url}`,
+        status: 0,
+        endpoint: url,
+        simpro_body: null,
+      });
+    }
+
+    const parsed = await readSimproJson(r, url, config.apiToken);
+    if (!parsed.ok) {
+      logSimproFailure("list_job_attachments", parsed.status, parsed.endpoint, parsed.simpro_body, config.apiToken);
+      return simproFailureJson(parsed);
+    }
+
+    return json({
+      ok: true,
+      job_id: jobId,
+      attachments: extractJobList(parsed.raw),
+    });
+  }
+
+  // ── get_job_attachment ──────────────────────────────────────────────────────
+  if (action === "get_job_attachment") {
+    const config = resolveConfigFromBody(body, storedConfig);
+    const configError = assertSimproConfig(config);
+    if (configError) return json({ error: configError });
+
+    const jobId = String(body.job_id ?? body.jobId ?? body.id ?? "").trim();
+    const fileId = String(body.file_id ?? body.fileId ?? body.attachment_id ?? "").trim();
+    if (!jobId) return json({ error: "job_id required" });
+    if (!fileId) return json({ error: "file_id required" });
+
+    const params = new URLSearchParams({ display: "Base64" });
+    const url = buildApiUrl(
+      config.baseUrl,
+      config.companyId,
+      `/jobs/${jobId}/attachments/files/${encodeURIComponent(fileId)}`,
+      params,
+    );
+    log("get_job_attachment", url);
+
+    const r = await simproFetch(url, config.apiToken).catch(() => null);
+    if (!r) {
+      return json({
+        error: `Network error connecting to Simpro\nEndpoint: ${url}`,
+        status: 0,
+        endpoint: url,
+        simpro_body: null,
+      });
+    }
+
+    const parsed = await readSimproJson(r, url, config.apiToken);
+    if (!parsed.ok) {
+      logSimproFailure("get_job_attachment", parsed.status, parsed.endpoint, parsed.simpro_body, config.apiToken);
+      return simproFailureJson(parsed);
+    }
+
+    return json({
+      ok: true,
+      job_id: jobId,
+      file_id: fileId,
+      file: parsed.raw,
+    });
+  }
+
   return json({ error: `Unknown action: ${action}` });
 });
