@@ -11,7 +11,7 @@ import type { ConnectorId } from '../integrations';
 import { normalizeAiExtract } from '../integrations/connectors/aiDocuments/normalizeAiExtract';
 import { setSimproImportSession } from '../lib/simproImportSession';
 import { fetchAllProductModels } from '../lib/productDatabaseDb';
-import { enrichImportReviewDraftFromProductDatabase } from '../lib/importEquipmentValidation';
+import { enrichImportReviewDraftWithMemory } from '../lib/importEquipmentValidation';
 import { htmlFromScopeImportFile } from '../lib/scopeOfWorksImport';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
@@ -201,7 +201,7 @@ export function AIProjectBuilderPage() {
 
       const draft = normalizeAiExtract(extracted, { connectorId, displayReference, scopeHtmlFallback });
       const { products, error: productError } = await fetchAllProductModels();
-      const enrichedDraft = enrichImportReviewDraftFromProductDatabase(draft, products);
+      const enrichedDraft = await enrichImportReviewDraftWithMemory(draft, products);
       if (productError) {
         enrichedDraft.issues = [
           ...enrichedDraft.issues,

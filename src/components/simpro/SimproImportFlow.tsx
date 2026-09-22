@@ -13,7 +13,7 @@ import { useUserAccess } from '../../lib/userAccess';
 import { normalizeSimproJob } from '../../integrations/connectors/simpro/normalizeSimproJob';
 import { setSimproImportSession } from '../../lib/simproImportSession';
 import { fetchAllProductModels } from '../../lib/productDatabaseDb';
-import { enrichImportReviewDraftFromProductDatabase } from '../../lib/importEquipmentValidation';
+import { enrichImportReviewDraftWithMemory } from '../../lib/importEquipmentValidation';
 import { parseSearchJobResults, toJobSearchRow, type SimproJobSearchRow } from './simproJobHelpers';
 
 const inputClass =
@@ -200,7 +200,7 @@ export function SimproImportFlow({ onBack }: { onBack: () => void }) {
         setReviewError(`Product Database could not be loaded (${error}). Import Review will open without autofill.`);
       }
 
-      const enrichedDraft = enrichImportReviewDraftFromProductDatabase(draft, products);
+      const enrichedDraft = await enrichImportReviewDraftWithMemory(draft, products);
 
       setSimproImportSession({ draft: enrichedDraft, rawJob: rawJobDetail });
       navigate('/import-review');

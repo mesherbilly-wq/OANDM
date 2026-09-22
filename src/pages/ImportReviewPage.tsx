@@ -21,13 +21,12 @@ import { MAX_DEVICES_PER_LINE } from '../lib/devicePersistConstants';
 import { persistSimproImportReviewDraft } from '../lib/persistSimproImportDraft';
 import { fetchAllProductModels } from '../lib/productDatabaseDb';
 import {
-  applyInferredCategoriesToImportDraft,
   applyProductDatabaseSelection,
   countProductDatabaseAutofillFields,
   createProductEnrichmentContext,
   dismissProductDatabaseSuggestion,
   enrichEquipmentFromProductDatabase,
-  enrichImportReviewDraftFromProductDatabase,
+  enrichImportReviewDraftWithMemory,
   formatProductLookupLabel,
   getEquipmentMissingRequiredFields,
   getProductDatabaseLookupStatus,
@@ -43,6 +42,7 @@ import {
 import type { ImportEquipmentDraft } from '../integrations';
 import type { ProductLookupRecord } from '../lib/productLookupIndex';
 import { INSTALL_SYSTEM_TYPE_NAMES, categoryForSystemName } from '../lib/inferSystemType';
+import { applyManualSystemTypeToMatchingParts, getSystemTypeSource } from '../lib/partSystemTypeMemory';
 
 type ReviewTab = 'project' | 'systems' | 'debug';
 
@@ -287,9 +287,7 @@ export function ImportReviewPage() {
       return;
     }
 
-    const nextDraft = products.length > 0
-      ? enrichImportReviewDraftFromProductDatabase(current.draft, products)
-      : applyInferredCategoriesToImportDraft(current.draft);
+    const nextDraft = await enrichImportReviewDraftWithMemory(current.draft, products);
 
     updateSimproImportSession(currentSession => ({
       ...currentSession,
@@ -391,44 +389,41 @@ export function ImportReviewPage() {
     field: EditableEquipmentField,
     value: string,
   ) => {
-    updateDraft(current => ({
-      ...current,
-      systems: current.systems.map(system => {
-        if (system.draftId !== systemDraftId) return system;
-        return {
-          ...system,
-          equipment: system.equipment.map(item => {
-            if (item.draftId !== equipmentDraftId) return item;
-            if (field === 'quantity') {
-              return { ...item, quantity: normalizeQuantity(value) };
-            }
-            if (field === 'systemType' || field === 'category') {
-              const systemType = value.trim() || null;
-              return {
-                ...item,
-                systemType,
-                category: systemType ? categoryForSystemName(systemType) : null,
-              };
-            }
-            if (field === 'warrantyYears') {
-              const parsed = parseInt(value, 10);
-              return {
-                ...item,
-                warrantyYears: Number.isFinite(parsed) && parsed >= 0 ? parsed : null,
-              };
-            }
-            const updated = { ...item, [field]: value || null };
-            if (
-              (field === 'modelNumber' || field === 'manufacturer') &&
-              enrichmentContextRef.current
-            ) {
-              return enrichEquipmentFromProductDatabase(updated, enrichmentContextRef.current);
-            }
-            return updated;
-          }),
-        };
-      }),
-    }));
+    updateDraft(current => {
+      if (field === 'systemType' || field === 'category') {
+        return applyManualSystemTypeToMatchingParts(current, equipmentDraftId, value.trim() || null);
+      }
+      return {
+        ...current,
+        systems: current.systems.map(system => {
+          if (system.draftId !== systemDraftId) return system;
+          return {
+            ...system,
+            equipment: system.equipment.map(item => {
+              if (item.draftId !== equipmentDraftId) return item;
+              if (field === 'quantity') {
+                return { ...item, quantity: normalizeQuantity(value) };
+              }
+              if (field === 'warrantyYears') {
+                const parsed = parseInt(value, 10);
+                return {
+                  ...item,
+                  warrantyYears: Number.isFinite(parsed) && parsed >= 0 ? parsed : null,
+                };
+              }
+              const updated = { ...item, [field]: value || null };
+              if (
+                (field === 'modelNumber' || field === 'manufacturer') &&
+                enrichmentContextRef.current
+              ) {
+                return enrichEquipmentFromProductDatabase(updated, enrichmentContextRef.current);
+              }
+              return updated;
+            }),
+          };
+        }),
+      };
+    });
   };
 
   const applyProductDatabaseMatch = (
@@ -808,6 +803,8 @@ export function ImportReviewPage() {
                                   />
                                   {!item.systemType && lineSystemType ? (
                                     <p className="mt-1 text-[11px] text-slate-400">Default: {lineSystemType}</p>
+                                  ) : getSystemTypeSource(item) === 'remembered' ? (
+                                    <p className="mt-1 text-[11px] text-slate-400">Remembered for this part</p>
                                   ) : null}
                                 </td>
                                 <td className="px-3 py-2">

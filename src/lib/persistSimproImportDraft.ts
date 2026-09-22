@@ -26,6 +26,7 @@ import {
   enrichDeviceRowsWithAutoManufacturer,
   type DeviceRowForManufacturerLookup,
 } from './autoManufacturerLookup';
+import { rememberManualSystemTypesFromDraft } from './partSystemTypeMemory';
 import { buildSdpAnswers, buildSdpSnapshot } from './sdpAnswers';
 
 const DEVICE_INSERT_BATCH = 100;
@@ -248,6 +249,10 @@ export async function persistSimproImportReviewDraft(
     productModels ?? [],
     { context: `simpro-import:project-${project.id}` },
   );
+
+  await rememberManualSystemTypesFromDraft(draft).catch(error => {
+    console.warn('[part-system-type] Could not remember import system types:', error);
+  });
 
   const quantityAudit = buildPersistQuantityAudit(draft, deviceRows, persistSystemNames);
   if (import.meta.env.DEV) {

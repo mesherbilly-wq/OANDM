@@ -4,6 +4,10 @@ import type { ProductModel } from '../types';
 import { categoryForSystemName, inferSystemTypeName } from './inferSystemType';
 import { normalizePart, normalizeToken, pickMetadataString } from './equipmentMatchUtils';
 import {
+  applyRememberedSystemTypesToDraft,
+  loadPartSystemTypeMemory,
+} from './partSystemTypeMemory';
+import {
   buildProductPartIndex,
   collectProductPartFields,
   extractPartLikeTokens,
@@ -421,6 +425,15 @@ export function enrichImportReviewDraftFromProductDatabase(
   };
 
   return applyInferredCategoriesToImportDraft(withProducts);
+}
+
+export async function enrichImportReviewDraftWithMemory(
+  draft: ImportReviewDraft,
+  products: ProductModel[],
+): Promise<ImportReviewDraft> {
+  const remembered = await loadPartSystemTypeMemory(draft);
+  const enriched = enrichImportReviewDraftFromProductDatabase(draft, products);
+  return applyRememberedSystemTypesToDraft(enriched, remembered);
 }
 
 export function textsForImportEquipmentCategory(item: ImportEquipmentDraft): string[] {
