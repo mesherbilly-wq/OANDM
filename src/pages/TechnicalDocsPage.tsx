@@ -46,6 +46,18 @@ import {
 
 const attemptedRefills = new Set<number>();
 
+function techDocLooksLikeSpreadsheet(fileName?: string | null): boolean {
+  return /\.(xlsx|xls|csv|ods)($|\?)/i.test(fileName ?? '');
+}
+
+function techDocLooksLikePdf(fileName?: string | null, fileUrl?: string | null): boolean {
+  return /\.pdf($|\?)/i.test(`${fileName ?? ''} ${fileUrl ?? ''}`);
+}
+
+function techDocLooksLikeImage(fileName?: string | null, fileUrl?: string | null): boolean {
+  return /\.(png|jpe?g|gif|webp|bmp)($|\?)/i.test(`${fileName ?? ''} ${fileUrl ?? ''}`);
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface ColConfig {
@@ -631,7 +643,7 @@ export default function TechnicalDocsPage() {
 
     const filled: TechDocDocument[] = [];
     for (const doc of built) {
-      if (doc.rows.length === 0 && doc.file_url && doc.id > 0 && !doc.is_protected && !attemptedRefills.has(doc.id)) {
+      if (doc.rows.length === 0 && doc.file_url && doc.id > 0 && !doc.is_protected && !attemptedRefills.has(doc.id) && techDocLooksLikeSpreadsheet(doc.file_name)) {
         attemptedRefills.add(doc.id);
         filled.push(await refillDocumentFromFile(pid, doc));
       } else {
@@ -1337,8 +1349,24 @@ export default function TechnicalDocsPage() {
         defaultSystem={activeSystem || projectSystems[0]?.name || ''}
         existingFileNames={documents.map(doc => doc.file_name).filter((name): name is string => Boolean(name))}
         disabled={pdfParsing || importing}
-        onImportFiles={async (files, systemName, jobId) => {
-          await savePlainFileDocuments(files, { systemName, jobId });
+        onImportFiles={async (files, systemName, jobId, mode) => {
+          if (mode === 'original') {
+            await savePlainFileDocuments(files, { systemName, jobId });
+            return;
+          }
+          setPdfError(null);
+          setPendingQueue(files.map(file => ({
+            file,
+            title: file.name.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' '),
+            document_type: '',
+            system_name: systemName || activeSystem || projectSystems[0]?.name || '',
+            notes: `Imported from Simpro job ${jobId}`,
+            is_protected: false,
+            visible_in_portal: true,
+            include_in_om: true,
+            file_password: '',
+          })));
+          setPendingIndex(0);
         }}
       />
 
@@ -1454,7 +1482,8 @@ export default function TechnicalDocsPage() {
                       {!doc.visible_in_portal && <span className="bg-slate-100 px-1.5 py-0.5 rounded">Hidden from portal</span>}
                       {doc.document_type && <span className="bg-slate-100 px-1.5 py-0.5 rounded">{doc.document_type}</span>}
                       {doc.system_type && <span>{doc.system_type}</span>}
-                      {!doc.is_protected && <span>{doc.rows.length} rows</span>}
+                      {!doc.is_protected && doc.rows.length > 0 && <span>{doc.rows.length} rows</span>}
+                      {!doc.is_protected && doc.rows.length === 0 && doc.file_url && <span>Original file</span>}
                       {doc.file_name && <span className="truncate max-w-xs">{doc.file_name}</span>}
                       {doc.notes && <span className="truncate max-w-xs">{doc.notes}</span>}
                     </div>
@@ -1484,7 +1513,7 @@ export default function TechnicalDocsPage() {
                         </a>
                       )
                     )}
-                    {!doc.is_protected && doc.rows.length === 0 && doc.file_url && pid && (
+                    {!doc.is_protected && doc.rows.length === 0 && doc.file_url && pid && techDocLooksLikeSpreadsheet(doc.file_name) && (
                       <button
                         type="button"
                         onClick={async () => {
@@ -1500,11 +1529,13 @@ export default function TechnicalDocsPage() {
                     )}
                     {!doc.is_protected && (
                     <button type="button" onClick={() => setExpandedDocId(expanded ? null : doc.id)} className={`text-xs px-2 py-1 border rounded-lg ${expanded ? 'bg-cyan-50 border-cyan-300 text-cyan-700' : 'border-slate-200 text-slate-500 hover:bg-slate-100'}`}>
-                      {expanded ? 'Hide table' : 'View table'}
+                      {doc.rows.length === 0 && doc.file_url
+                        ? (expanded ? 'Hide file' : 'View file')
+                        : (expanded ? 'Hide table' : 'View table')}
                     </button>
                     )}
-                    {!doc.is_protected && <button type="button" onClick={() => openColConfig(doc)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><Settings2 className="w-3.5 h-3.5" /></button>}
-                    {!doc.is_protected && <button type="button" onClick={() => exportCSV(doc)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><Download className="w-3.5 h-3.5" /></button>}
+                    {!doc.is_protected && doc.rows.length > 0 && <button type="button" onClick={() => openColConfig(doc)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><Settings2 className="w-3.5 h-3.5" /></button>}
+                    {!doc.is_protected && doc.rows.length > 0 && <button type="button" onClick={() => exportCSV(doc)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><Download className="w-3.5 h-3.5" /></button>}
                     {doc.id > 0 && (
                       <button
                         type="button"
@@ -1521,7 +1552,25 @@ export default function TechnicalDocsPage() {
                     <button type="button" onClick={() => void deleteDocument(doc)} className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg"><Trash2 className="w-3.5 h-3.5" /></button>
                   </div>
                 </div>
-                {expanded && !doc.is_protected && (
+                {expanded && !doc.is_protected && doc.rows.length === 0 && doc.file_url && (
+                  <div className="border-t border-slate-100 bg-slate-50 px-5 py-4">
+                    {techDocLooksLikeImage(doc.file_name, doc.file_url) ? (
+                      <img src={doc.file_url} alt={doc.title} className="w-full max-h-[70vh] object-contain rounded-lg border border-slate-200 bg-white" />
+                    ) : techDocLooksLikePdf(doc.file_name, doc.file_url) || !techDocLooksLikeSpreadsheet(doc.file_name) ? (
+                      <iframe
+                        src={doc.file_url}
+                        title={doc.title}
+                        className="w-full rounded-lg shadow-sm border border-slate-200 bg-white"
+                        style={{ height: '720px' }}
+                      />
+                    ) : (
+                      <p className="text-sm text-slate-500">
+                        Original file kept as {doc.file_name}. Open it with File, or use Reload table if you want the rows extracted.
+                      </p>
+                    )}
+                  </div>
+                )}
+                {expanded && !doc.is_protected && (doc.rows.length > 0 || !doc.file_url) && (
                   visibleCols.length === 0 ? (
                     <p className="px-5 pb-4 text-sm text-slate-400">No columns configured.</p>
                   ) : (

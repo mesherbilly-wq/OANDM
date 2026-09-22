@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertCircle, Check, Loader2, Paperclip, RefreshCw } from 'lucide-react';
+import { AlertCircle, Check, FileText, Loader2, Paperclip, RefreshCw, Table2 } from 'lucide-react';
 import type { Project } from '../types';
 import type { ProjectSystem } from '../lib/systems';
 import {
@@ -40,7 +40,7 @@ export function SimproTechDocAttachments({
   defaultSystem: string;
   existingFileNames: string[];
   disabled?: boolean;
-  onImportFiles: (files: File[], systemName: string, jobId: string) => Promise<void>;
+  onImportFiles: (files: File[], systemName: string, jobId: string, mode: 'table' | 'original') => Promise<void>;
 }) {
   const [connection, setConnection] = useState<SimproConnectionSession | null>(null);
   const [connectionReady, setConnectionReady] = useState(false);
@@ -52,6 +52,7 @@ export function SimproTechDocAttachments({
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [modePrompt, setModePrompt] = useState(false);
 
   const alreadyImported = useMemo(
     () => new Set(existingFileNames.map(name => name.trim().toLowerCase()).filter(Boolean)),
@@ -115,13 +116,15 @@ export function SimproTechDocAttachments({
     setSelectedIds(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
   };
 
-  const importSelected = async () => {
+  const importSelected = async (mode: 'table' | 'original') => {
     if (!connection) return;
     const chosen = attachments.filter(item => selectedIds.includes(item.id));
     if (chosen.length === 0) {
       setError('Select at least one attachment.');
+      setModePrompt(false);
       return;
     }
+    setModePrompt(false);
     setImporting(true);
     setError(null);
     setStatus(null);
@@ -134,8 +137,12 @@ export function SimproTechDocAttachments({
     }
     try {
       if (files.length > 0) {
-        await onImportFiles(files, systemName, jobId.trim());
-        setStatus(`Added ${files.length} file${files.length === 1 ? '' : 's'} from Simpro job ${jobId.trim()}.`);
+        await onImportFiles(files, systemName, jobId.trim(), mode);
+        setStatus(
+          mode === 'table'
+            ? `Downloaded ${files.length} file${files.length === 1 ? '' : 's'}. Name each one and convert it to a table.`
+            : `Added ${files.length} original file${files.length === 1 ? '' : 's'} from Simpro job ${jobId.trim()}.`,
+        );
         setSelectedIds(current => current.filter(id => !chosen.some(item => item.id === id)));
       }
       if (failures.length > 0) setError(failures.join('\n'));
@@ -251,7 +258,14 @@ export function SimproTechDocAttachments({
           <div className="flex justify-end">
             <button
               type="button"
-              onClick={() => void importSelected()}
+              onClick={() => {
+                if (selectedIds.length === 0) {
+                  setError('Select at least one attachment.');
+                  return;
+                }
+                setError(null);
+                setModePrompt(true);
+              }}
               disabled={disabled || importing || loading || selectedIds.length === 0}
               className="inline-flex items-center gap-2 bg-cyan-600 text-white px-4 py-2 rounded-xl hover:bg-cyan-700 text-sm font-medium disabled:opacity-50"
             >
@@ -260,6 +274,48 @@ export function SimproTechDocAttachments({
             </button>
           </div>
         </>
+      )}
+
+      {modePrompt && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 space-y-4">
+            <h3 className="text-lg font-semibold text-slate-900">How should these files be added?</h3>
+            <p className="text-sm text-slate-500">
+              {selectedIds.length} selected from Simpro job {jobId.trim() || '—'}.
+            </p>
+            <button
+              type="button"
+              onClick={() => void importSelected('table')}
+              className="w-full text-left rounded-xl border border-slate-200 hover:border-cyan-400 hover:bg-cyan-50 px-4 py-3"
+            >
+              <span className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                <Table2 className="w-4 h-4 text-cyan-700" />
+                Convert into a table
+              </span>
+              <span className="block text-xs text-slate-500 mt-1">
+                Read a door schedule, zone list, IP table or similar and keep the rows in Technical Docs.
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void importSelected('original')}
+              className="w-full text-left rounded-xl border border-slate-200 hover:border-cyan-400 hover:bg-cyan-50 px-4 py-3"
+            >
+              <span className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                <FileText className="w-4 h-4 text-cyan-700" />
+                Import the original file
+              </span>
+              <span className="block text-xs text-slate-500 mt-1">
+                Keep the PDF or picture as-is. It will show in Technical Docs, the O&amp;M Builder and the downloaded pack.
+              </span>
+            </button>
+            <div className="flex justify-end">
+              <button type="button" onClick={() => setModePrompt(false)} className="px-4 py-2 text-sm font-medium text-slate-600">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

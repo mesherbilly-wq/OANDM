@@ -380,7 +380,26 @@ type TechDocBundle = {
   visibleInPortal?: boolean;
   hasFilePassword?: boolean;
   fileName?: string | null;
+  fileUrl?: string | null;
 };
+
+function techDocHasContent(bundle: TechDocBundle): boolean {
+  return Boolean(bundle.isProtected || bundle.rows.length > 0 || bundle.fileUrl);
+}
+
+function techDocSystemIncluded(bundle: TechDocBundle, included: Set<string>): boolean {
+  if (!bundle.system) return true;
+  if (included.has(bundle.system)) return true;
+  return Boolean(bundle.fileUrl);
+}
+
+function techDocLooksLikePdf(bundle: Pick<TechDocBundle, 'fileName' | 'fileUrl'>): boolean {
+  return /\.pdf($|\?)/i.test(`${bundle.fileName ?? ''} ${bundle.fileUrl ?? ''}`);
+}
+
+function techDocLooksLikeImage(bundle: Pick<TechDocBundle, 'fileName' | 'fileUrl'>): boolean {
+  return /\.(png|jpe?g|gif|webp|bmp)($|\?)/i.test(`${bundle.fileName ?? ''} ${bundle.fileUrl ?? ''}`);
+}
 
 const OmBrandContext = React.createContext(resolveOmBrand(null));
 function useOmBrand() {
@@ -766,6 +785,7 @@ export function ProjectOMExportPage() {
           visibleInPortal: doc.visible_in_portal !== false,
           hasFilePassword: !!doc.has_file_password,
           fileName: doc.file_name ?? null,
+          fileUrl: doc.file_url ?? null,
         });
       }
       const orphanRows = mappedRows.filter(r => !r.document_id || !namedDocs.some((d: { id: number }) => d.id === r.document_id));
@@ -930,8 +950,12 @@ export function ProjectOMExportPage() {
     for (const drawing of asFittedDrawings) add(drawing.file_url);
     for (const device of devices) add(device.datasheet?.datasheet_url ?? null);
     for (const manual of projectManuals) add(manual.manual.file_url);
+    for (const bundle of techDocBundles) {
+      if (bundle.includeInOm === false || bundle.isProtected || !bundle.fileUrl || bundle.rows.length > 0) continue;
+      if (techDocLooksLikePdf(bundle)) add(bundle.fileUrl);
+    }
     return urls;
-  }, [omUploads, scHandoverDocs, otherHandoverDocs, asFittedDrawings, devices, projectManuals]);
+  }, [omUploads, scHandoverDocs, otherHandoverDocs, asFittedDrawings, devices, projectManuals, techDocBundles]);
 
   const eagerPdfUrls = useMemo(() => {
     const urls: string[] = [];
@@ -1008,15 +1032,15 @@ export function ProjectOMExportPage() {
   const importedTechSystems = systemsWithTechImport(documentSystems, techDocState);
   const namedTechBundles = techDocBundles.filter(bundle =>
     bundle.includeInOm !== false
-    && (!bundle.system || includedSystemNames.has(bundle.system))
-    && (bundle.isProtected || bundle.rows.length > 0),
+    && techDocSystemIncluded(bundle, includedSystemNames)
+    && techDocHasContent(bundle),
   );
   const builderTechBundles = techDocBundles.filter(bundle =>
-    (!bundle.system || includedSystemNames.has(bundle.system))
+    techDocSystemIncluded(bundle, includedSystemNames)
     && (
       packReadOnly
-        ? bundle.visibleInPortal !== false && (bundle.isProtected || bundle.rows.length > 0)
-        : bundle.isProtected || bundle.rows.length > 0
+        ? bundle.visibleInPortal !== false && techDocHasContent(bundle)
+        : techDocHasContent(bundle)
     ),
   );
 
@@ -2014,6 +2038,49 @@ export function ProjectOMExportPage() {
                       </PrintSection>
                     )];
                   }
+                  if (bundle.fileUrl && bundle.rows.length === 0) {
+                    const isFirst = firstSection;
+                    firstSection = false;
+                    const subtitle = [bundle.system, bundle.title].filter(Boolean).join(' — ') || undefined;
+                    if (techDocLooksLikePdf(bundle)) {
+                      return [(
+                        <React.Fragment key={bundle.key}>
+                          {!isFirst && <div className="page-break" />}
+                          <PrintEmbeddedPdf
+                            title={bundle.title}
+                            subtitle={subtitle}
+                            fileName={bundle.fileName}
+                            url={bundle.fileUrl}
+                            pageImages={pdfPageImages}
+                            anchorId={isFirst ? 'print-section-technical_docs' : undefined}
+                            sectionKey="technical_docs"
+                          />
+                        </React.Fragment>
+                      )];
+                    }
+                    return [(
+                      <PrintSection
+                        key={bundle.key}
+                        title="Technical Documentation"
+                        subtitle={subtitle}
+                        anchorId={isFirst ? 'print-section-technical_docs' : undefined}
+                        forcePageBreak={!isFirst}
+                      >
+                        {techDocLooksLikeImage(bundle) ? (
+                          <img
+                            src={bundle.fileUrl}
+                            alt={bundle.title}
+                            className="om-print-doc-page w-full"
+                            style={{ display: 'block', pageBreakInside: 'avoid', breakInside: 'avoid' }}
+                          />
+                        ) : (
+                          <p style={{ fontSize: '0.9rem', color: '#58595B' }}>
+                            Original file: {bundle.fileName || bundle.title}
+                          </p>
+                        )}
+                      </PrintSection>
+                    )];
+                  }
                   const columns = resolveTechDocColumns(bundle.colConfig, bundle.rows);
                   const landscape = printTableNeedsLandscape(columns.length);
                   const rowChunks = chunkTechDocRows(bundle.rows, landscape ? TECH_DOC_PRINT_ROWS_LANDSCAPE : TECH_DOC_PRINT_ROWS);
@@ -2339,7 +2406,7 @@ function TechnicalDocsSection({ devices, techDocState, techDocBundles, documentS
   } | null>(null);
   const [fileViewer, setFileViewer] = useState<{ url: string; title: string; fileName?: string | null } | null>(null);
   const [unlockedPasswords, setUnlockedPasswords] = useState<Record<number, string>>({});
-  const named = (techDocBundles ?? []).filter(bundle => bundle.isProtected || bundle.rows.length > 0);
+  const named = (techDocBundles ?? []).filter(bundle => techDocHasContent(bundle));
 
   const accessProtected = async (bundle: TechDocBundle, mode: 'view' | 'download', typed?: string) => {
     if (!bundle.id) return;
@@ -2433,6 +2500,38 @@ function TechnicalDocsSection({ devices, techDocState, techDocBundles, documentS
             );
           }
           const visibleCols = resolveTechDocColumns(bundle.colConfig, bundle.rows);
+          if (bundle.fileUrl && bundle.rows.length === 0) {
+            return (
+              <div key={bundle.key} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="flex items-center gap-2 px-6 py-4 border-b border-slate-200 bg-slate-50">
+                  <FileText className="w-4 h-4 text-slate-400" />
+                  <h3 className="font-semibold text-slate-800">{bundle.title}</h3>
+                  {bundle.system && <span className="text-xs text-slate-500">{bundle.system}</span>}
+                  <span className="text-xs text-slate-500 bg-slate-200 px-2 py-0.5 rounded-full ml-1">Original file</span>
+                  <a
+                    href={bundle.fileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ml-auto text-xs px-2 py-1 border border-slate-200 text-slate-600 rounded-lg hover:bg-white inline-flex items-center gap-1"
+                  >
+                    <ExternalLink className="w-3 h-3" />Open
+                  </a>
+                </div>
+                <div className="bg-slate-100 px-6 py-4">
+                  {techDocLooksLikeImage(bundle) ? (
+                    <img src={bundle.fileUrl} alt={bundle.title} className="w-full max-h-[70vh] object-contain rounded-lg border border-slate-200 bg-white" />
+                  ) : (
+                    <iframe
+                      src={bundle.fileUrl}
+                      title={bundle.title}
+                      className="w-full rounded-lg shadow-sm border border-slate-200 bg-white"
+                      style={{ height: '1050px' }}
+                    />
+                  )}
+                </div>
+              </div>
+            );
+          }
           return (
             <div key={bundle.key} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
               <div className="flex items-center gap-2 px-6 py-4 border-b border-slate-200 bg-slate-50">
