@@ -212,7 +212,7 @@ export default function CompletionTemplatesPage() {
       setSourceFileName(file.name);
       await saveDraftTemplate(next, { systemType, sourceFileName: file.name });
       setVersions(await listTemplateVersions(next.key));
-      setNotice(`Full template drafted from ${file.name}, including checklists and sign-off. Headers, footer and colours stay as set in Companies.`);
+      setNotice(`Read every page of ${file.name} and drafted the template, including later checklists and sign-off where they were on the form.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not read that form.');
     } finally {

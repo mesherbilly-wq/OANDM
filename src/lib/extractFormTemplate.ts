@@ -41,13 +41,33 @@ async function extractPdf(file: File): Promise<{ text: string; images: PageImage
   for (let i = 1; i <= pdf.numPages; i += 1) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    const pageText = content.items.map((item) => ('str' in item ? String(item.str ?? '') : '')).join(' ').trim();
-    parts.push(`--- Page ${i} of ${pdf.numPages} ---\n${pageText}`);
+    const rows = content.items
+      .filter((item): item is { str: string; transform: number[] } => typeof item === 'object' && item !== null && 'str' in item)
+      .map(item => ({
+        str: String(item.str ?? ''),
+        x: Number(item.transform?.[4] ?? 0),
+        y: Number(item.transform?.[5] ?? 0),
+      }))
+      .filter(item => item.str.trim());
+    rows.sort((a, b) => (b.y - a.y) || (a.x - b.x));
+    const lines: string[] = [];
+    let line: string[] = [];
+    let lastY: number | null = null;
+    for (const row of rows) {
+      if (lastY != null && Math.abs(lastY - row.y) > 5) {
+        lines.push(line.join(' ').trim());
+        line = [];
+      }
+      line.push(row.str);
+      lastY = row.y;
+    }
+    if (line.length) lines.push(line.join(' ').trim());
+    parts.push(`--- Page ${i} of ${pdf.numPages} ---\n${lines.filter(Boolean).join('\n')}`);
   }
   const text = parts.join('\n\n');
   const sparse = text.replace(/--- Page \d+ of \d+ ---/g, '').replace(/\s+/g, '').length < 800;
   if (sparse) {
-    const imageLimit = Math.min(pdf.numPages, 12);
+    const imageLimit = Math.min(pdf.numPages, 16);
     for (let i = 1; i <= imageLimit; i += 1) {
       const page = await pdf.getPage(i);
       const viewport = page.getViewport({ scale: 1.05 });
@@ -148,21 +168,7 @@ export async function extractCompletionTemplateFromFile(opts: {
     sections: data.sections as CompletionSection[],
     reviewFlags: Array.isArray(data.reviewFlags) ? data.reviewFlags as CompletionReviewFlag[] : [],
   };
-  if (schemaMissingSignOff(extracted.sections, text)) {
-    throw new Error('The AI missed customer sign-off or later checklist pages. Upload again so the full document is read.');
-  }
   return extracted;
-}
-
-function schemaMissingSignOff(sections: CompletionSection[], text: string): boolean {
-  const hay = text.toLowerCase();
-  const sourceHasSignOff = /signature|sign off|sign-off|handover/.test(hay);
-  if (!sourceHasSignOff) return false;
-  const types = sections.flatMap(section => [
-    ...(section.fields ?? []),
-    ...(section.groups ?? []).flatMap(group => [...group.fields, ...(group.nested ?? []).flatMap(nested => nested.fields)]),
-  ]).map(field => field.type);
-  return !types.includes('signature') && !types.includes('declaration');
 }
 
 export function applyExtractedTemplate(
