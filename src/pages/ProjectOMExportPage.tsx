@@ -51,6 +51,8 @@ import {
   ProtectedTechDocPasswordPrompt,
   ProtectedTechDocViewer,
 } from '../components/ProtectedTechDocAccess';
+import { ensureApprovedCompletionPdf, listCompletionForms } from '../lib/completionFormsApi';
+import { completionDocUiStatus, type CompletionFormSummary } from '../lib/completionFormTypes';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -633,6 +635,7 @@ export function ProjectOMExportPage() {
   const [commRecords, setCommRecords] = useState<CommissioningRecord[]>([]);
   const [handoverDocs, setHandoverDocs] = useState<HandoverDocument[]>([]);
   const [omUploads, setOmUploads] = useState<OmUpload[]>([]);
+  const [completionForms, setCompletionForms] = useState<CompletionFormSummary[]>([]);
   const [asFittedDrawings, setAsFittedDrawings] = useState<AsBuiltDrawing[]>([]);
   const [asFittedItems, setAsFittedItems] = useState<AsFittedItemRow[]>([]);
   const [asFittedContent, setAsFittedContent] = useState('');
@@ -695,6 +698,7 @@ export function ProjectOMExportPage() {
       { data: systemData },
       techDocDocsRes,
       asFittedItemsRes,
+      completionFormRows,
     ] = await Promise.all([
       supabase.from('devices').select('*').eq('project_id', pid).neq('status', 'pending_review').order('system_type').order('device_name'),
       supabase.from('project_documents').select('*').eq('project_id', pid),
@@ -712,6 +716,7 @@ export function ProjectOMExportPage() {
       fetchProjectSystems(pid).catch(() => [] as ProjectSystemRecord[]),
       supabase.from('tech_doc_documents').select(TECH_DOC_DOCUMENT_SELECT).eq('project_id', pid).order('created_at', { ascending: true }),
       supabase.from('as_fitted_items').select('id,quoted_description,quoted_quantity,installed_description,actual_installed_quantity,reconciliation_status,change_reason').eq('project_id', pid).order('created_at'),
+      listCompletionForms(pid).catch(() => [] as CompletionFormSummary[]),
     ]);
 
     let namedTechDocsRes = techDocDocsRes;
@@ -734,7 +739,27 @@ export function ProjectOMExportPage() {
     setProjectDocs(docData ?? []);
     setCommRecords(commData ?? []);
     setHandoverDocs(handData ?? []);
-    setOmUploads(uplData ?? []);
+    let nextUploads = uplData ?? [];
+    let nextCompletionForms = completionFormRows;
+    const missingPdfs = nextCompletionForms.filter(form => form.status === 'complete' && !form.pdf_url);
+    if (missingPdfs.length > 0) {
+      for (const form of missingPdfs) {
+        try {
+          await ensureApprovedCompletionPdf({
+            form,
+            project: { id: pid, job_number: project?.job_number, project_number: project?.project_number },
+            brand: resolveOmBrand(contrData ?? null),
+          });
+        } catch {
+          // Keep the completed form visible; PDF can be generated from Commissioning.
+        }
+      }
+      nextCompletionForms = await listCompletionForms(pid).catch(() => nextCompletionForms);
+      const { data: uplAgain } = await supabase.from('om_pack_uploads').select('*').eq('project_id', pid);
+      if (uplAgain) nextUploads = uplAgain;
+    }
+    setOmUploads(nextUploads);
+    setCompletionForms(nextCompletionForms);
     setAsFittedDrawings(afdData ?? []);
     setAsFittedItems((asFittedItemsRes.error ? [] : asFittedItemsRes.data ?? []) as AsFittedItemRow[]);
     setScHandoverDocs(scHandData ?? []);
@@ -945,6 +970,7 @@ export function ProjectOMExportPage() {
       if (url && !urls.includes(url)) urls.push(url);
     };
     for (const upload of omUploads) add(upload.file_url);
+    for (const form of completionForms) add(form.pdf_url);
     for (const doc of scHandoverDocs) add(doc.file_url);
     for (const doc of otherHandoverDocs) add(doc.file_url);
     for (const drawing of asFittedDrawings) add(drawing.file_url);
@@ -955,7 +981,7 @@ export function ProjectOMExportPage() {
       if (techDocLooksLikePdf(bundle)) add(bundle.fileUrl);
     }
     return urls;
-  }, [omUploads, scHandoverDocs, otherHandoverDocs, asFittedDrawings, devices, projectManuals, techDocBundles]);
+  }, [omUploads, completionForms, scHandoverDocs, otherHandoverDocs, asFittedDrawings, devices, projectManuals, techDocBundles]);
 
   const eagerPdfUrls = useMemo(() => {
     const urls: string[] = [];
@@ -963,11 +989,12 @@ export function ProjectOMExportPage() {
       if (url && !urls.includes(url)) urls.push(url);
     };
     for (const upload of omUploads) add(upload.file_url);
+    for (const form of completionForms) add(form.pdf_url);
     for (const doc of scHandoverDocs) add(doc.file_url);
     for (const doc of otherHandoverDocs) add(doc.file_url);
     for (const drawing of asFittedDrawings) add(drawing.file_url);
     return urls;
-  }, [omUploads, scHandoverDocs, otherHandoverDocs, asFittedDrawings]);
+  }, [omUploads, completionForms, scHandoverDocs, otherHandoverDocs, asFittedDrawings]);
 
   const lazyPdfUrls = useMemo(() => {
     const eager = new Set(eagerPdfUrls);
@@ -1051,6 +1078,9 @@ export function ProjectOMExportPage() {
   const includedOtherHandoverDocs = otherHandoverDocs.filter(doc => documentBelongsToProjectSystems(doc, documentSystems));
   const includedAsFittedDrawings = asFittedDrawings.filter(drawing => documentBelongsToProjectSystems(drawing, documentSystems));
   const includedCommRecords = commRecords.filter(record => !record.system_type || includedSystemNames.has(record.system_type));
+  const liveCompletionForms = completionForms.filter(form => form.status !== 'revoked' && form.status !== 'superseded');
+  const completionPdfUrls = new Set(liveCompletionForms.map(form => form.pdf_url).filter((url): url is string => Boolean(url)));
+  const extraCommissioningUpload = omUploads.find(upload => upload.section === 'commissioning' && !completionPdfUrls.has(upload.file_url));
 
   const systemGroups = projectSystems.map(system => ({
     system: system.name,
@@ -1076,7 +1106,7 @@ export function ProjectOMExportPage() {
       return hasTechData || techDevices.length > 0 ? 'complete' : 'empty';
     }
     if (s === 'maintenance_plan') return systemGroups.some(g => g.devices.length > 0 && maintenancePlanHasContent(maintPlans[g.system])) ? 'complete' : 'empty';
-    if (s === 'commissioning') return getUpload('commissioning') ? 'complete' : includedCommRecords.length > 0 ? 'partial' : 'empty';
+    if (s === 'commissioning') return liveCompletionForms.some(form => form.status === 'complete' && form.pdf_url) || extraCommissioningUpload ? 'complete' : liveCompletionForms.length > 0 || includedCommRecords.length > 0 ? 'partial' : 'empty';
     if (s === 'handover') {
       const scReady = includedScHandoverDocs.some(doc => doc.file_url);
       const otherReady = includedOtherHandoverDocs.some(doc => doc.file_url);
@@ -1244,6 +1274,22 @@ export function ProjectOMExportPage() {
   // ── Print ─────────────────────────────────────────────────────────────────────
 
   const hUploads = includedHandoverUploads;
+  const commissioningPackPdfs = useMemo(() => {
+    const docs: { key: string; title: string; file_name: string | null; file_url: string }[] = [];
+    const seen = new Set<string>();
+    const add = (key: string, title: string, file_name: string | null | undefined, file_url: string | null | undefined) => {
+      if (!file_url || seen.has(file_url)) return;
+      seen.add(file_url);
+      docs.push({ key, title, file_name: file_name ?? null, file_url });
+    };
+    for (const form of liveCompletionForms) {
+      if (form.status === 'complete') add(`completion-${form.id}`, form.title, form.pdf_file_name, form.pdf_url);
+    }
+    if (extraCommissioningUpload) {
+      add(`commissioning-upload-${extraCommissioningUpload.id}`, 'Commissioning pack', extraCommissioningUpload.file_name, extraCommissioningUpload.file_url);
+    }
+    return docs;
+  }, [liveCompletionForms, extraCommissioningUpload]);
   const handoverPackPdfs = useMemo(() => {
     const docs: { key: string; title: string; file_name: string | null; file_url: string }[] = [];
     const seen = new Set<string>();
@@ -1753,7 +1799,11 @@ export function ProjectOMExportPage() {
               maintenance_plan: systemGroups.filter(g => g.devices.length > 0 && maintenancePlanHasContent(maintPlans[g.system])).length > 0
                 ? `Plans for ${systemGroups.filter(g => g.devices.length > 0 && maintenancePlanHasContent(maintPlans[g.system])).map(g => g.system).join(', ')}`
                 : 'Not yet created',
-              commissioning: getUpload('commissioning') ? 'PDF uploaded' : includedCommRecords.length > 0 ? `${includedCommRecords.length} test records in database` : 'Not yet uploaded',
+              commissioning: commissioningPackPdfs.length > 0
+                ? `${commissioningPackPdfs.length} document${commissioningPackPdfs.length !== 1 ? 's' : ''} ready`
+                : liveCompletionForms.length > 0
+                  ? `${liveCompletionForms.length} form${liveCompletionForms.length !== 1 ? 's' : ''} in progress`
+                  : includedCommRecords.length > 0 ? `${includedCommRecords.length} test records in database` : 'Not yet uploaded',
               handover: (() => {
                 const total = hUploads.length + includedScHandoverDocs.filter(d => d.file_url).length + includedOtherHandoverDocs.filter(d => d.file_url).length;
                 return total > 0 ? `${total} document${total !== 1 ? 's' : ''} ready` : handoverDocs.length > 0 || includedScHandoverDocs.length > 0 ? 'Handover data available' : 'Not yet uploaded';
@@ -1895,18 +1945,23 @@ export function ProjectOMExportPage() {
             />
           )}
           {activeSection === 'commissioning' && (
-            <UploadSection
-              sectionId="commissioning"
-              title="Commissioning Pack"
-              description="Upload your completed commissioning sign-off document (PDF). This can be the commissioning pack that was filled in and signed on site."
-              upload={getUpload('commissioning')}
-              uploading={uploading === 'commissioning'}
-              onUpload={() => triggerUpload('commissioning')}
-              onRemove={handleRemoveUpload}
-              fallbackContent={includedCommRecords.length > 0 ? <CommSummary records={includedCommRecords} /> : null}
-              fallbackLabel={`${includedCommRecords.length} commissioning test records in database`}
-              readOnly={packReadOnly}
-            />
+            <div className="space-y-4">
+              <CommissioningPackSection forms={liveCompletionForms} />
+              <UploadSection
+                sectionId="commissioning"
+                title={liveCompletionForms.length > 0 ? 'Additional commissioning PDF' : 'Commissioning Pack'}
+                description={liveCompletionForms.length > 0
+                  ? 'Optional extra commissioning document if you also have a signed pack to upload alongside the completion forms.'
+                  : 'Upload your completed commissioning sign-off document (PDF). This can be the commissioning pack that was filled in and signed on site.'}
+                upload={extraCommissioningUpload}
+                uploading={uploading === 'commissioning'}
+                onUpload={() => triggerUpload('commissioning')}
+                onRemove={handleRemoveUpload}
+                fallbackContent={liveCompletionForms.length === 0 && includedCommRecords.length > 0 ? <CommSummary records={includedCommRecords} /> : null}
+                fallbackLabel={`${includedCommRecords.length} commissioning test records in database`}
+                readOnly={packReadOnly}
+              />
+            </div>
           )}
           {activeSection === 'handover' && (
             <HandoverPackSection
@@ -1962,7 +2017,7 @@ export function ProjectOMExportPage() {
           hasSchedule={devices.length > 0}
           hasTechDocs={namedTechBundles.length > 0 || importedTechSystems.length > 0 || devices.some(d => d.ip_address || d.mac_address || d.firmware_version || d.username_hint || d.password_hint || d.controller_address || d.vlan || d.network_zone)}
           hasMaintPlan={systemGroups.some(g => g.devices.length > 0 && maintenancePlanHasContent(maintPlans[g.system]))}
-          hasCommissioning={!!(getUpload('commissioning') || includedCommRecords.length > 0)}
+          hasCommissioning={commissioningPackPdfs.length > 0 || liveCompletionForms.length > 0 || includedCommRecords.length > 0}
           hasHandover={handoverPackPdfs.length > 0 || handoverDocs.length > 0 || includedScHandoverDocs.length > 0}
           hasAsFitted={!!asFittedContent.trim() || asFittedItems.length > 0}
           hasAsFittedDrawings={includedAsFittedDrawings.length > 0}
@@ -2168,17 +2223,21 @@ export function ProjectOMExportPage() {
           </>
         )}
 
-        {getUpload('commissioning') ? (
+        {commissioningPackPdfs.length > 0 ? (
           <>
-            <PrintEmbeddedPdf
-              title="Commissioning Pack"
-              fileName={getUpload('commissioning')!.file_name}
-              url={getUpload('commissioning')!.file_url}
-              pageImages={pdfPageImages}
-              anchorId="print-section-commissioning"
-              sectionKey="commissioning"
-            />
-            <div className="page-break" />
+            {commissioningPackPdfs.map((doc, index) => (
+              <React.Fragment key={doc.key}>
+                <PrintEmbeddedPdf
+                  title={doc.title}
+                  fileName={doc.file_name}
+                  url={doc.file_url}
+                  pageImages={pdfPageImages}
+                  anchorId={index === 0 ? 'print-section-commissioning' : undefined}
+                  sectionKey="commissioning"
+                />
+                <div className="page-break" />
+              </React.Fragment>
+            ))}
           </>
         ) : includedCommRecords.length > 0 && (
           <>
@@ -3344,6 +3403,74 @@ function buildAutoScope(
   doc += `\n## Warranty & Support\n\nAll equipment is covered by manufacturer warranty as detailed in the datasheets in this manual. For service and support contact the installing contractor using the details on the cover page.\n`;
 
   return doc;
+}
+
+// ─── Commissioning Pack Section (screen) ─────────────────────────────────────
+
+function CommissioningPackSection({ forms }: { forms: CompletionFormSummary[] }) {
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  if (forms.length === 0) return null;
+  const completed = forms.filter(form => completionDocUiStatus(form.status) === 'completed').length;
+  const STATUS_CONFIG = {
+    not_started: { label: 'Not Started', color: 'bg-slate-100 text-slate-500 border-slate-200' },
+    in_progress: { label: 'In Progress', color: 'bg-amber-50 text-amber-700 border-amber-200' },
+    completed: { label: 'Completed', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  } as const;
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 px-6 py-4 border-b border-slate-100 bg-slate-50">
+        <CheckCircle className="w-4 h-4 text-slate-400" />
+        <h3 className="font-semibold text-slate-800">Completion Documents</h3>
+        <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-medium ${completed === forms.length ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+          {completed}/{forms.length} complete
+        </span>
+      </div>
+      <div className="divide-y divide-slate-100">
+        {forms.map(form => {
+          const status = completionDocUiStatus(form.status);
+          const statusCfg = STATUS_CONFIG[status];
+          const key = `completion-${form.id}`;
+          const isExpanded = expandedKey === key;
+          return (
+            <div key={key}>
+              <div className={`flex items-center gap-3 px-6 py-4 transition-colors ${isExpanded ? 'bg-slate-50' : 'hover:bg-slate-50'}`}>
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${status === 'completed' ? 'bg-emerald-100' : 'bg-slate-100'}`}>
+                  {status === 'completed' ? <CheckCircle className="w-4 h-4 text-emerald-600" /> : <FileText className="w-4 h-4 text-slate-500" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-slate-800 truncate">{form.title}</p>
+                  <p className="text-xs text-slate-400 truncate mt-0.5">{form.pdf_file_name || form.assigned_name || 'Completion form'}</p>
+                </div>
+                <span className={`text-xs font-medium px-2.5 py-1 rounded-full border flex-shrink-0 ${statusCfg.color}`}>
+                  {statusCfg.label}
+                </span>
+                {form.pdf_url && (
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <a href={form.pdf_url} target="_blank" rel="noopener noreferrer"
+                      className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors flex items-center gap-1">
+                      <ExternalLink className="w-3 h-3" />Open
+                    </a>
+                    <button type="button" onClick={() => setExpandedKey(isExpanded ? null : key)}
+                      className={`text-xs px-2 py-1 border rounded-lg transition-colors flex items-center gap-1 ${isExpanded ? 'bg-cyan-50 border-cyan-300 text-cyan-700' : 'border-slate-200 text-slate-500 hover:bg-slate-100'}`}>
+                      {isExpanded ? <X className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                      {isExpanded ? 'Close' : 'View PDF'}
+                    </button>
+                  </div>
+                )}
+              </div>
+              {isExpanded && form.pdf_url && (
+                <div className="border-t border-slate-100 bg-slate-100 px-6 py-4">
+                  <iframe src={form.pdf_url} title={form.title}
+                    className="w-full rounded-lg shadow-sm border border-slate-200" style={{ height: '1050px' }} />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 // ─── Handover Pack Section (screen) ──────────────────────────────────────────

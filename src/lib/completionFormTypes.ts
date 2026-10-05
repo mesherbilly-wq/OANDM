@@ -14,6 +14,14 @@ export type CompletionFormStatus =
   | 'revoked'
   | 'superseded';
 
+export type CompletionDocUiStatus = 'not_started' | 'in_progress' | 'completed';
+
+export function completionDocUiStatus(status?: CompletionFormStatus | null): CompletionDocUiStatus {
+  if (!status || status === 'draft' || status === 'revoked' || status === 'superseded') return 'not_started';
+  if (status === 'complete') return 'completed';
+  return 'in_progress';
+}
+
 export type CompletionTokenRole = 'engineer' | 'customer';
 
 export type CompletionSaveState = 'saved' | 'saving' | 'unsaved' | 'offline' | 'error';

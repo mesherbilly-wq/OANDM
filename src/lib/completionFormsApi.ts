@@ -12,6 +12,9 @@ import type {
   CompletionTemplateSchema,
 } from './completionFormTypes';
 import { blankCompletionSchema, slugifyTemplateKey } from './completionTemplateSystems';
+import { buildCompletionPdf } from './completionFormPdf';
+import type { ContractorBrand } from './contractorBrand';
+import { displayProjectJobNumber } from './projectJobNumber';
 
 function invoke<T>(action: string, payload: Record<string, unknown>): Promise<T> {
   return supabase.functions.invoke('completion-forms', { body: { action, ...payload } }).then(({ data, error }) => {
@@ -524,6 +527,38 @@ export async function saveApprovedPdf(opts: {
     file_url: url,
   });
   return url;
+}
+
+export async function ensureApprovedCompletionPdf(opts: {
+  form: CompletionFormSummary;
+  project: { id: number; job_number?: string | null; project_number?: string | null };
+  brand: ContractorBrand | null;
+}): Promise<string> {
+  if (opts.form.pdf_url) return opts.form.pdf_url;
+  const [{ data: row, error: rowErr }, { data: revision, error: revErr }] = await Promise.all([
+    supabase.from('completion_forms').select('*').eq('id', opts.form.id).single(),
+    supabase.from('completion_form_revisions').select('*').eq('form_id', opts.form.id).eq('revision_no', opts.form.current_revision_no).single(),
+  ]);
+  if (rowErr) throw new Error(rowErr.message);
+  if (revErr) throw new Error(revErr.message);
+  const built = await buildCompletionPdf({
+    schema: row?.schema_json,
+    answers: revision?.answers ?? {},
+    photos: [],
+    brand: opts.brand,
+    jobRef: displayProjectJobNumber(opts.project.job_number, opts.project.project_number),
+    documentRef: `${opts.form.template_key}-${opts.form.id}`,
+    revisionNo: opts.form.current_revision_no,
+    status: 'Approved',
+    issueDate: new Date().toLocaleDateString('en-GB'),
+    outstandingAuthorised: opts.form.outstanding_handover_authorised,
+  });
+  return saveApprovedPdf({
+    formId: opts.form.id,
+    projectId: opts.project.id,
+    fileName: built.fileName,
+    pdfBase64: built.pdfBase64,
+  });
 }
 
 export function getPublicCompletionForm(token: string): Promise<CompletionPublicForm> {

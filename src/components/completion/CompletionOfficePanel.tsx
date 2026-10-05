@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link as LinkIcon, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { CheckCircle, ExternalLink, FileText, Link as LinkIcon, Trash2 } from 'lucide-react';
 import { displayProjectJobNumber } from '../../lib/projectJobNumber';
 import { fetchContractorForProject, resolveOmBrand, type ContractorBrand } from '../../lib/contractorBrand';
-import { buildCompletionPdf } from '../../lib/completionFormPdf';
 import {
   approveForCustomer,
   deleteCompletionForm,
+  ensureApprovedCompletionPdf,
   issueCompletionForm,
   issueCustomerToken,
   listCompletionDocuments,
@@ -14,12 +14,11 @@ import {
   listProjectCompletionAssignments,
   replaceEngineerLink,
   returnCompletionForm,
-  saveApprovedPdf,
 } from '../../lib/completionFormsApi';
 import { supabase } from '../../lib/supabase';
 import { loadDocumentProjectSystems, PROJECT_WIDE_SYSTEM_KEY, PROJECT_WIDE_SYSTEM_LABEL } from '../../lib/documentProjectSystems';
 import { getCategoryStyle, type ProjectSystem } from '../../lib/systems';
-import type { CompletionFormSummary } from '../../lib/completionFormTypes';
+import { completionDocUiStatus, type CompletionFormSummary } from '../../lib/completionFormTypes';
 import type { Device, Project } from '../../types';
 
 const STATUS_LABEL: Record<string, string> = {
@@ -35,6 +34,43 @@ const STATUS_LABEL: Record<string, string> = {
   revoked: 'Revoked',
   superseded: 'Superseded',
 };
+
+const STATUS_CONFIG = {
+  not_started: { label: 'Not Started', color: 'bg-slate-100 text-slate-500 border-slate-200' },
+  in_progress: { label: 'In Progress', color: 'bg-amber-50 text-amber-700 border-amber-200' },
+  completed: { label: 'Completed', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+} as const;
+
+type DocCard = {
+  key: string;
+  title: string;
+  templateKey: string;
+  form: CompletionFormSummary | null;
+};
+
+function buildDocumentCards(
+  issueDocs: Array<{ template_key: string; title: string }>,
+  forms: CompletionFormSummary[],
+): DocCard[] {
+  const live = forms.filter(form => form.status !== 'revoked' && form.status !== 'superseded');
+  const assignedKeys = issueDocs.map(doc => doc.template_key);
+  const cards: DocCard[] = [];
+  for (const doc of issueDocs) {
+    const matches = live.filter(form => form.template_key === doc.template_key);
+    if (matches.length === 0) {
+      cards.push({ key: `empty-${doc.template_key}`, title: doc.title, templateKey: doc.template_key, form: null });
+      continue;
+    }
+    for (const form of matches) {
+      cards.push({ key: `form-${form.id}`, title: form.title || doc.title, templateKey: doc.template_key, form });
+    }
+  }
+  for (const form of live) {
+    if (assignedKeys.includes(form.template_key)) continue;
+    cards.push({ key: `form-${form.id}`, title: form.title, templateKey: form.template_key, form });
+  }
+  return cards;
+}
 
 export function CompletionOfficePanel({ project }: { project: Project }) {
   const [forms, setForms] = useState<CompletionFormSummary[]>([]);
@@ -53,6 +89,8 @@ export function CompletionOfficePanel({ project }: { project: Project }) {
   const [activeSystemKey, setActiveSystemKey] = useState(PROJECT_WIDE_SYSTEM_KEY);
   const [issueDocs, setIssueDocs] = useState<Array<{ template_key: string; title: string }>>([]);
   const [templateKey, setTemplateKey] = useState('');
+  const attachingRef = useRef(false);
+  const failedPdfIds = useRef(new Set<number>());
 
   const theme = resolveOmBrand(brand);
   const systemType = activeSystemKey === PROJECT_WIDE_SYSTEM_KEY ? PROJECT_WIDE_SYSTEM_LABEL : activeSystemKey;
@@ -86,6 +124,26 @@ export function CompletionOfficePanel({ project }: { project: Project }) {
   }, [project.id, project.contractor_profile_id]);
 
   useEffect(() => {
+    const missing = forms.filter(form => form.status === 'complete' && !form.pdf_url && !failedPdfIds.current.has(form.id));
+    if (!missing.length || attachingRef.current) return;
+    attachingRef.current = true;
+    void (async () => {
+      try {
+        for (const form of missing) {
+          try {
+            await ensureApprovedCompletionPdf({ form, project, brand });
+          } catch {
+            failedPdfIds.current.add(form.id);
+          }
+        }
+        await load();
+      } finally {
+        attachingRef.current = false;
+      }
+    })();
+  }, [forms, brand, project]);
+
+  useEffect(() => {
     void supabase.from('devices').select('system_type, system_category, project_system_id').eq('project_id', project.id)
       .then(async ({ data }) => {
         setProjectSystems(await loadDocumentProjectSystems(project.id, (data ?? []) as Device[]));
@@ -115,6 +173,34 @@ export function CompletionOfficePanel({ project }: { project: Project }) {
     ...projectSystems.map(system => ({ key: system.name, name: system.name, category: system.category })),
   ];
 
+  const documentCards = useMemo(() => buildDocumentCards(issueDocs, forms), [issueDocs, forms]);
+  const completedDocs = documentCards.filter(card => completionDocUiStatus(card.form?.status) === 'completed').length;
+  const totalDocs = documentCards.length;
+
+  const issueForm = async (key: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const issued = await issueCompletionForm({
+        projectId: project.id,
+        assignedName: assignedName.trim(),
+        assignedEmail: assignedEmail.trim() || undefined,
+        assignedCompany: assignedCompany.trim() || undefined,
+        expiryDays,
+        prefill,
+        templateKey: key,
+        companyName: theme.name,
+      });
+      await navigator.clipboard.writeText(issued.engineerUrl);
+      setNotice(`Engineer link copied. ${issued.emailNote}`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not issue the form.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
@@ -122,7 +208,7 @@ export function CompletionOfficePanel({ project }: { project: Project }) {
           <h3 className="text-base font-semibold text-slate-900">Completion and handover</h3>
           <p className="text-sm text-slate-500 mt-1">
             Issue a secure link using the documents assigned to this system on the Templates tab.
-            After office review the customer signs on site or through a separate link. The approved PDF goes into this project’s O&amp;M pack.
+            After office review the customer signs on site or through a separate link. Completed PDFs attach to this project’s O&amp;M pack.
           </p>
         </div>
         {needsSql && (
@@ -189,29 +275,7 @@ export function CompletionOfficePanel({ project }: { project: Project }) {
         <button
           type="button"
           disabled={busy || !assignedName.trim() || !templateKey}
-          onClick={async () => {
-            setBusy(true);
-            setError(null);
-            try {
-              const issued = await issueCompletionForm({
-                projectId: project.id,
-                assignedName: assignedName.trim(),
-                assignedEmail: assignedEmail.trim() || undefined,
-                assignedCompany: assignedCompany.trim() || undefined,
-                expiryDays,
-                prefill,
-                templateKey,
-                companyName: theme.name,
-              });
-              await navigator.clipboard.writeText(issued.engineerUrl);
-              setNotice(`Engineer link copied. ${issued.emailNote}`);
-              await load();
-            } catch (err) {
-              setError(err instanceof Error ? err.message : 'Could not issue the form.');
-            } finally {
-              setBusy(false);
-            }
-          }}
+          onClick={() => void issueForm(templateKey)}
           className="min-h-11 px-4 rounded-lg text-white text-sm font-medium disabled:opacity-50"
           style={{ background: theme.primary }}
         >
@@ -224,36 +288,89 @@ export function CompletionOfficePanel({ project }: { project: Project }) {
         </p>
       </div>
 
-      {forms.map(form => (
-        <FormCard
-          key={form.id}
-          form={form}
-          project={project}
-          brand={brand}
-          returnNote={returnNote}
-          outstanding={outstanding}
-          onReturnNote={setReturnNote}
-          onOutstanding={setOutstanding}
-          onNotice={setNotice}
-          onError={setError}
-          onRefresh={() => void load()}
-          onDelete={async () => {
-            if (!confirm(`Remove "${form.title}"? Issued links will stop working. This cannot be undone.`)) return;
-            try {
-              await deleteCompletionForm(form);
-              setNotice('Form removed.');
-              await load();
-            } catch (err) {
-              setError(err instanceof Error ? err.message : 'Could not remove the form.');
-            }
-          }}
-        />
-      ))}
+      <div className="flex items-center justify-between bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
+        <div>
+          <h2 className="font-semibold text-slate-900">Completion Documents</h2>
+          <p className="text-sm text-slate-500 mt-0.5">Issue the form, track progress, then open the signed PDF from here and the O&amp;M pack</p>
+        </div>
+        <span className={`text-sm font-semibold px-3 py-1 rounded-full ${totalDocs > 0 && completedDocs === totalDocs ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+          {completedDocs}/{totalDocs} complete
+        </span>
+      </div>
+
+      {documentCards.length === 0 ? (
+        <p className="text-sm text-slate-500 bg-white border border-slate-200 rounded-xl px-4 py-6 text-center">
+          No completion documents assigned for this system yet.
+        </p>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {documentCards.map(card => {
+            const status = completionDocUiStatus(card.form?.status);
+            const statusCfg = STATUS_CONFIG[status];
+            return (
+              <div key={card.key} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-100 bg-slate-50">
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${status === 'completed' ? 'bg-emerald-100' : 'bg-slate-200'}`}>
+                    {status === 'completed' ? <CheckCircle className="w-5 h-5 text-emerald-600" /> : <FileText className="w-5 h-5 text-slate-500" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-slate-800">{card.title}</p>
+                    <p className="text-xs text-slate-500 truncate mt-0.5">
+                      {card.form
+                        ? `${card.form.assigned_name || 'Unassigned'} · ${STATUS_LABEL[card.form.status] ?? card.form.status}`
+                        : 'Not issued yet'}
+                    </p>
+                  </div>
+                  <span className={`text-xs font-medium px-2.5 py-1 rounded-full border ${statusCfg.color}`}>
+                    {statusCfg.label}
+                  </span>
+                </div>
+                <div className="px-5 py-4 space-y-3">
+                  {!card.form ? (
+                    <button
+                      type="button"
+                      disabled={busy || !assignedName.trim()}
+                      onClick={() => void issueForm(card.templateKey)}
+                      className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg text-white disabled:opacity-50"
+                      style={{ background: theme.primary }}
+                    >
+                      Issue this document
+                    </button>
+                  ) : (
+                    <FormActions
+                      form={card.form}
+                      project={project}
+                      brand={brand}
+                      returnNote={returnNote}
+                      outstanding={outstanding}
+                      onReturnNote={setReturnNote}
+                      onOutstanding={setOutstanding}
+                      onNotice={setNotice}
+                      onError={setError}
+                      onRefresh={() => void load()}
+                      onDelete={async () => {
+                        if (!confirm(`Remove "${card.form?.title}"? Issued links will stop working. This cannot be undone.`)) return;
+                        try {
+                          await deleteCompletionForm(card.form!);
+                          setNotice('Form removed.');
+                          await load();
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : 'Could not remove the form.');
+                        }
+                      }}
+                    />
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
 
-function FormCard({
+function FormActions({
   form,
   project,
   brand,
@@ -280,23 +397,16 @@ function FormCard({
 }) {
   const theme = resolveOmBrand(brand);
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="font-semibold text-slate-900">{form.title}</p>
-          <p className="text-sm text-slate-500 mt-0.5">
-            {form.assigned_name || 'Unassigned'} · template v{form.template_version} · revision {form.current_revision_no}
-          </p>
-        </div>
-        <span className="text-xs font-semibold uppercase tracking-wide bg-slate-100 text-slate-700 px-2 py-1 rounded">
-          {STATUS_LABEL[form.status] ?? form.status}
-        </span>
-      </div>
+    <div className="space-y-3">
       {form.review_note && <p className="text-sm text-amber-900">Last note: {form.review_note}</p>}
       {form.pdf_url && (
-        <a href={form.pdf_url} target="_blank" rel="noreferrer" className="text-sm font-medium" style={{ color: theme.primary }}>
-          Open approved PDF
-        </a>
+        <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-lg px-3.5 py-2.5">
+          <FileText className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+          <span className="text-sm text-emerald-800 font-medium flex-1 min-w-0 truncate">{form.pdf_file_name || 'Approved PDF'}</span>
+          <a href={form.pdf_url} target="_blank" rel="noopener noreferrer" className="text-xs text-emerald-700 hover:underline flex items-center gap-0.5 flex-shrink-0">
+            View <ExternalLink className="w-3 h-3" />
+          </a>
+        </div>
       )}
       <div className="flex flex-wrap gap-2">
         <button type="button" className="text-sm px-3 py-2 border border-slate-200 rounded-lg inline-flex items-center gap-1" onClick={async () => {
@@ -345,29 +455,13 @@ function FormCard({
         {form.status === 'complete' && !form.pdf_url && (
           <button type="button" className="text-sm px-3 py-2 text-white rounded-lg" style={{ background: theme.primary }} onClick={async () => {
             try {
-              const [{ data: row }, { data: revision }] = await Promise.all([
-                supabase.from('completion_forms').select('*').eq('id', form.id).single(),
-                supabase.from('completion_form_revisions').select('*').eq('form_id', form.id).eq('revision_no', form.current_revision_no).single(),
-              ]);
-              const built = await buildCompletionPdf({
-                schema: row?.schema_json,
-                answers: revision?.answers ?? {},
-                photos: [],
-                brand,
-                jobRef: displayProjectJobNumber(project.job_number, project.project_number),
-                documentRef: `${form.template_key}-${form.id}`,
-                revisionNo: form.current_revision_no,
-                status: 'Approved',
-                issueDate: new Date().toLocaleDateString('en-GB'),
-                outstandingAuthorised: form.outstanding_handover_authorised,
-              });
-              await saveApprovedPdf({ formId: form.id, projectId: project.id, fileName: built.fileName, pdfBase64: built.pdfBase64 });
+              await ensureApprovedCompletionPdf({ form, project, brand });
               onNotice('Approved PDF saved to the O&M commissioning section.');
               onRefresh();
             } catch (err) {
               onError(err instanceof Error ? err.message : 'Could not build the PDF.');
             }
-            }}>Generate O&amp;M PDF</button>
+          }}>Generate O&amp;M PDF</button>
         )}
         <button
           type="button"
