@@ -39,6 +39,8 @@ export interface HandoverDocumentType {
   is_active: boolean;
 }
 
+export type HandoverCaptureMethod = 'safetyculture' | 'web_form' | 'upload';
+
 export interface HandoverDocumentDefinition {
   id: number;
   document_id: string;
@@ -54,6 +56,26 @@ export interface HandoverDocumentDefinition {
   multi: boolean;
   display_order: number;
   is_active: boolean;
+  capture_method?: HandoverCaptureMethod | null;
+  web_form_template_key?: string | null;
+}
+
+export function handoverCaptureMethod(
+  def: Pick<HandoverDocumentDefinition, 'capture_method' | 'sc_enabled' | 'upload_only'>,
+): HandoverCaptureMethod {
+  if (def.capture_method === 'web_form' || def.capture_method === 'safetyculture' || def.capture_method === 'upload') {
+    return def.capture_method;
+  }
+  if (def.upload_only) return 'upload';
+  if (def.sc_enabled) return 'safetyculture';
+  return 'upload';
+}
+
+export function flagsForCaptureMethod(method: HandoverCaptureMethod): { sc_enabled: boolean; upload_only: boolean } {
+  return {
+    sc_enabled: method === 'safetyculture',
+    upload_only: method === 'upload',
+  };
 }
 
 export const HANDOVER_ICON_MAP: Record<string, LucideIcon> = {
@@ -113,6 +135,8 @@ function fallbackDefinition(
     multi: opts.multi ?? false,
     display_order: opts.display_order ?? 0,
     is_active: opts.is_active ?? true,
+    capture_method: opts.capture_method ?? (opts.upload_only ? 'upload' : opts.sc_enabled ? 'safetyculture' : 'upload'),
+    web_form_template_key: opts.web_form_template_key ?? null,
   };
 }
 
@@ -403,6 +427,8 @@ function definitionsDiffer(
     || local.display_order !== db.display_order
     || local.is_active !== db.is_active
     || local.icon_key !== db.icon_key
+    || (local.capture_method ?? null) !== (db.capture_method ?? null)
+    || (local.web_form_template_key ?? null) !== (db.web_form_template_key ?? null)
   );
 }
 
@@ -451,6 +477,8 @@ async function syncLocalHandoverConfigToDatabase(
           multi: payload.multi,
           display_order: payload.display_order,
           is_active: payload.is_active,
+          capture_method: payload.capture_method,
+          web_form_template_key: payload.web_form_template_key,
           updated_at: new Date().toISOString(),
         }).eq('id', db.id)
       : await supabase.from('handover_document_definitions').insert({
@@ -467,6 +495,8 @@ async function syncLocalHandoverConfigToDatabase(
           multi: payload.multi,
           display_order: payload.display_order,
           is_active: payload.is_active,
+          capture_method: payload.capture_method,
+          web_form_template_key: payload.web_form_template_key,
         });
 
     if (!error) changed = true;
@@ -593,35 +623,50 @@ export async function upsertHandoverDocumentType(
 export async function upsertHandoverDocumentDefinition(
   def: Omit<HandoverDocumentDefinition, 'id' | 'created_at' | 'updated_at'> & { id?: number },
 ): Promise<string | null> {
+  const method = handoverCaptureMethod(def);
+  const flags = flagsForCaptureMethod(method);
   const payload = {
     document_id: def.document_id.trim(),
     type_key: def.type_key,
     title: def.title.trim(),
     description: def.description?.trim() || null,
     icon_key: def.icon_key || 'file',
-    sc_enabled: def.sc_enabled,
-    sc_template_id: def.sc_template_id?.trim() || null,
+    sc_enabled: flags.sc_enabled,
+    sc_template_id: method === 'safetyculture' ? (def.sc_template_id?.trim() || null) : null,
     field_mappings: def.field_mappings ?? { ...DEFAULT_SC_FIELD_MAPPINGS },
     required: def.required,
-    upload_only: def.upload_only,
+    upload_only: flags.upload_only,
     multi: def.multi,
     display_order: def.display_order,
     is_active: def.is_active,
     updated_at: new Date().toISOString(),
   };
+  const withMethod = {
+    ...payload,
+    capture_method: method,
+    web_form_template_key: method === 'web_form' ? (def.web_form_template_key?.trim() || null) : null,
+  };
 
-  if (def.id) {
-    const { error } = await supabase.from('handover_document_definitions').update(payload).eq('id', def.id);
-    if (!error) return null;
-    if (!isMissingSchemaError(error.message)) return error.message;
-  } else {
-    const { error } = await supabase.from('handover_document_definitions').insert(payload);
-    if (!error) return null;
-    if (/duplicate|unique/i.test(error.message)) {
-      return 'That Document ID already exists. Change it and save again.';
+  const write = async (body: Record<string, unknown>) => {
+    if (def.id) {
+      return supabase.from('handover_document_definitions').update(body).eq('id', def.id);
     }
-    if (!isMissingSchemaError(error.message)) return error.message;
+    return supabase.from('handover_document_definitions').insert({
+      document_id: payload.document_id,
+      type_key: payload.type_key,
+      ...body,
+    });
+  };
+
+  let { error } = await write(withMethod);
+  if (error && /capture_method|web_form_template_key/i.test(error.message)) {
+    ({ error } = await write(payload));
   }
+  if (!error) return null;
+  if (/duplicate|unique/i.test(error.message)) {
+    return 'That Document ID already exists. Change it and save again.';
+  }
+  if (!isMissingSchemaError(error.message)) return error.message;
 
   markHandoverConfigLocalOnly();
   const store = readLocalHandoverConfig();
@@ -640,6 +685,8 @@ export async function upsertHandoverDocumentDefinition(
     multi: payload.multi,
     display_order: payload.display_order,
     is_active: payload.is_active,
+    capture_method: method,
+    web_form_template_key: withMethod.web_form_template_key,
   };
 
   if (def.id) {

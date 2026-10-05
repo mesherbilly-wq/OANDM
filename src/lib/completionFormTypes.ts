@@ -16,10 +16,19 @@ export type CompletionFormStatus =
 
 export type CompletionDocUiStatus = 'not_started' | 'in_progress' | 'completed';
 
-export function completionDocUiStatus(status?: CompletionFormStatus | null): CompletionDocUiStatus {
-  if (!status || status === 'draft' || status === 'revoked' || status === 'superseded') return 'not_started';
-  if (status === 'complete') return 'completed';
+export function completionDocUiStatus(
+  status?: CompletionFormStatus | string | null,
+  extras?: { pdf_url?: string | null; completed_at?: string | null } | null,
+): CompletionDocUiStatus {
+  const value = String(status ?? '').trim().toLowerCase();
+  if (!value || value === 'draft' || value === 'revoked' || value === 'superseded') return 'not_started';
+  if (value === 'complete' || value === 'completed' || value === 'awaiting_customer' || extras?.completed_at) return 'completed';
   return 'in_progress';
+}
+
+export function completionShouldAttachPdf(status?: CompletionFormStatus | string | null): boolean {
+  const value = String(status ?? '').trim().toLowerCase();
+  return value === 'complete' || value === 'completed' || value === 'awaiting_customer';
 }
 
 export type CompletionTokenRole = 'engineer' | 'customer';

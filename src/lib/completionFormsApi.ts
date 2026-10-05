@@ -293,7 +293,7 @@ export async function deleteCompletionTemplate(templateKey: string): Promise<{ i
   const { error } = await supabase.from('completion_form_templates').delete().eq('template_key', templateKey);
   if (error) {
     if (/foreign key|violates/i.test(error.message)) {
-      throw new Error('This template is still linked to an issued form. Remove those forms on Commissioning first, or try again.');
+      throw new Error('This template is still linked to an issued form. Remove those forms on Handover first, or try again.');
     }
     throw new Error(error.message);
   }
@@ -520,21 +520,38 @@ export async function saveApprovedPdf(opts: {
     pdf_storage_path: path,
     updated_at: new Date().toISOString(),
   }).eq('id', opts.formId);
-  await supabase.from('om_pack_uploads').insert({
-    project_id: opts.projectId,
-    section: 'commissioning',
-    file_name: opts.fileName,
-    file_url: url,
-  });
+  const { data: existing } = await supabase
+    .from('om_pack_uploads')
+    .select('id')
+    .eq('project_id', opts.projectId)
+    .eq('file_url', url)
+    .maybeSingle();
+  if (!existing) {
+    await supabase.from('om_pack_uploads').insert({
+      project_id: opts.projectId,
+      section: 'commissioning',
+      file_name: opts.fileName,
+      file_url: url,
+    });
+  }
   return url;
+}
+
+export async function resolveCompletionViewUrl(form: CompletionFormSummary): Promise<string | null> {
+  if (form.pdf_url) return form.pdf_url;
+  const tokens = await listFormTokens(form.id);
+  const live = tokens.filter(token => !token.revoked_at);
+  const preferred = live.find(token => token.role === 'engineer') ?? live[0];
+  return preferred ? completionFormUrl(preferred.token) : null;
 }
 
 export async function ensureApprovedCompletionPdf(opts: {
   form: CompletionFormSummary;
   project: { id: number; job_number?: string | null; project_number?: string | null };
   brand: ContractorBrand | null;
+  force?: boolean;
 }): Promise<string> {
-  if (opts.form.pdf_url) return opts.form.pdf_url;
+  if (opts.form.pdf_url && !opts.force) return opts.form.pdf_url;
   const [{ data: row, error: rowErr }, { data: revision, error: revErr }] = await Promise.all([
     supabase.from('completion_forms').select('*').eq('id', opts.form.id).single(),
     supabase.from('completion_form_revisions').select('*').eq('form_id', opts.form.id).eq('revision_no', opts.form.current_revision_no).single(),

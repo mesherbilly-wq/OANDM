@@ -14,7 +14,6 @@ import ProjectSystemsPage from './pages/ProjectSystemsPage';
 import { ProjectDrawingsPage } from './pages/ProjectDrawingsPage';
 import DeviceSchedulePage from './pages/DeviceSchedulePage';
 import TechnicalDocsPage from './pages/TechnicalDocsPage';
-import CommissioningPage from './pages/CommissioningPage';
 import CompletionTemplatesPage from './pages/CompletionTemplatesPage';
 import HandoverPage from './pages/HandoverPage';
 import { ProjectDatasheetsPage } from './pages/ProjectDatasheetsPage';
@@ -189,7 +188,7 @@ function AuthedApp({
             <Route path="scope" element={<ScopeOfWorksPage />} />
             <Route path="as-fitted-scope" element={<AsFittedPage />} />
             <Route path="technical" element={<TechnicalDocsPage />} />
-            <Route path="commissioning" element={<CommissioningPage />} />
+            <Route path="commissioning" element={<Navigate to="../handover" replace />} />
             <Route path="templates" element={<CompletionTemplatesPage />} />
             <Route path="sdp" element={<SdpPage />} />
             <Route path="handover" element={<HandoverPage />} />

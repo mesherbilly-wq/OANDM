@@ -277,6 +277,9 @@ Deno.serve(async (req) => {
       status: "complete",
       completed_at: now,
       updated_at: now,
+      pdf_url: null,
+      pdf_file_name: null,
+      pdf_storage_path: null,
     }).eq("id", form.id);
     await db.from("completion_form_events").insert({
       form_id: form.id,

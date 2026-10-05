@@ -13,12 +13,13 @@ import {
   listFormTokens,
   listProjectCompletionAssignments,
   replaceEngineerLink,
+  resolveCompletionViewUrl,
   returnCompletionForm,
 } from '../../lib/completionFormsApi';
 import { supabase } from '../../lib/supabase';
 import { loadDocumentProjectSystems, PROJECT_WIDE_SYSTEM_KEY, PROJECT_WIDE_SYSTEM_LABEL } from '../../lib/documentProjectSystems';
 import { getCategoryStyle, type ProjectSystem } from '../../lib/systems';
-import { completionDocUiStatus, type CompletionFormSummary } from '../../lib/completionFormTypes';
+import { completionDocUiStatus, completionShouldAttachPdf, type CompletionFormSummary } from '../../lib/completionFormTypes';
 import type { Device, Project } from '../../types';
 
 const STATUS_LABEL: Record<string, string> = {
@@ -124,7 +125,7 @@ export function CompletionOfficePanel({ project }: { project: Project }) {
   }, [project.id, project.contractor_profile_id]);
 
   useEffect(() => {
-    const missing = forms.filter(form => form.status === 'complete' && !form.pdf_url && !failedPdfIds.current.has(form.id));
+    const missing = forms.filter(form => completionShouldAttachPdf(form.status) && !form.pdf_url && !failedPdfIds.current.has(form.id));
     if (!missing.length || attachingRef.current) return;
     attachingRef.current = true;
     void (async () => {
@@ -174,8 +175,32 @@ export function CompletionOfficePanel({ project }: { project: Project }) {
   ];
 
   const documentCards = useMemo(() => buildDocumentCards(issueDocs, forms), [issueDocs, forms]);
-  const completedDocs = documentCards.filter(card => completionDocUiStatus(card.form?.status) === 'completed').length;
+  const completedDocs = documentCards.filter(card => completionDocUiStatus(card.form?.status, card.form) === 'completed').length;
   const totalDocs = documentCards.length;
+
+  const viewDocument = async (form: CompletionFormSummary) => {
+    setError(null);
+    try {
+      if (completionShouldAttachPdf(form.status) && !form.pdf_url) {
+        try {
+          const pdfUrl = await ensureApprovedCompletionPdf({ form, project, brand });
+          window.open(pdfUrl, '_blank', 'noopener,noreferrer');
+          await load();
+          return;
+        } catch {
+          // Fall through to the live form if the PDF cannot be built yet.
+        }
+      }
+      const url = form.pdf_url || await resolveCompletionViewUrl(form);
+      if (!url) {
+        setError('No document to view yet. Issue the form first.');
+        return;
+      }
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not open the document.');
+    }
+  };
 
   const issueForm = async (key: string) => {
     setBusy(true);
@@ -305,7 +330,7 @@ export function CompletionOfficePanel({ project }: { project: Project }) {
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {documentCards.map(card => {
-            const status = completionDocUiStatus(card.form?.status);
+            const status = completionDocUiStatus(card.form?.status, card.form);
             const statusCfg = STATUS_CONFIG[status];
             return (
               <div key={card.key} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
@@ -337,7 +362,21 @@ export function CompletionOfficePanel({ project }: { project: Project }) {
                       Issue this document
                     </button>
                   ) : (
-                    <FormActions
+                    <>
+                      <div className={`flex items-center gap-3 rounded-lg px-3.5 py-2.5 border ${status === 'completed' ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}`}>
+                        <FileText className={`w-4 h-4 flex-shrink-0 ${status === 'completed' ? 'text-emerald-600' : 'text-slate-500'}`} />
+                        <span className={`text-sm font-medium flex-1 min-w-0 truncate ${status === 'completed' ? 'text-emerald-800' : 'text-slate-700'}`}>
+                          {card.form.pdf_file_name || card.title}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void viewDocument(card.form!)}
+                          className={`text-xs hover:underline flex items-center gap-0.5 flex-shrink-0 ${status === 'completed' ? 'text-emerald-700' : 'text-slate-700'}`}
+                        >
+                          View <ExternalLink className="w-3 h-3" />
+                        </button>
+                      </div>
+                      <CompletionFormActions
                       form={card.form}
                       project={project}
                       brand={brand}
@@ -359,6 +398,7 @@ export function CompletionOfficePanel({ project }: { project: Project }) {
                         }
                       }}
                     />
+                    </>
                   )}
                 </div>
               </div>
@@ -370,7 +410,7 @@ export function CompletionOfficePanel({ project }: { project: Project }) {
   );
 }
 
-function FormActions({
+export function CompletionFormActions({
   form,
   project,
   brand,
@@ -399,15 +439,6 @@ function FormActions({
   return (
     <div className="space-y-3">
       {form.review_note && <p className="text-sm text-amber-900">Last note: {form.review_note}</p>}
-      {form.pdf_url && (
-        <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-lg px-3.5 py-2.5">
-          <FileText className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-          <span className="text-sm text-emerald-800 font-medium flex-1 min-w-0 truncate">{form.pdf_file_name || 'Approved PDF'}</span>
-          <a href={form.pdf_url} target="_blank" rel="noopener noreferrer" className="text-xs text-emerald-700 hover:underline flex items-center gap-0.5 flex-shrink-0">
-            View <ExternalLink className="w-3 h-3" />
-          </a>
-        </div>
-      )}
       <div className="flex flex-wrap gap-2">
         <button type="button" className="text-sm px-3 py-2 border border-slate-200 rounded-lg inline-flex items-center gap-1" onClick={async () => {
           const tokens = await listFormTokens(form.id);
@@ -437,6 +468,11 @@ function FormActions({
               await approveForCustomer(form.id, outstanding);
               const url = await issueCustomerToken(form.id);
               await navigator.clipboard.writeText(url);
+              try {
+                await ensureApprovedCompletionPdf({ form: { ...form, status: 'awaiting_customer' }, project, brand });
+              } catch {
+                // View still opens the live form if the PDF cannot be built yet.
+              }
               onNotice('Approved for customer signature. Customer link copied.');
               onRefresh();
             }}>Approve for customer</button>
@@ -452,7 +488,7 @@ function FormActions({
             }}>Return for correction</button>
           </>
         )}
-        {form.status === 'complete' && !form.pdf_url && (
+        {completionShouldAttachPdf(form.status) && !form.pdf_url && (
           <button type="button" className="text-sm px-3 py-2 text-white rounded-lg" style={{ background: theme.primary }} onClick={async () => {
             try {
               await ensureApprovedCompletionPdf({ form, project, brand });

@@ -15,6 +15,7 @@ import {
 import {
   fetchHandoverDocumentDefinitions,
   fetchHandoverDocumentTypes,
+  handoverCaptureMethod,
   handoverDocumentIcon,
   inferHandoverDocumentTypeKey,
   mergeScFieldMappings,
@@ -29,6 +30,10 @@ import {
 } from '../lib/handoverDocumentConfig';
 import { getCategoryStyle, type ProjectSystem } from '../lib/systems';
 import HandoverConfigPage from './HandoverConfigPage';
+import { HandoverWebFormCard } from '../components/completion/HandoverWebFormCard';
+import { fetchContractorForProject, type ContractorBrand } from '../lib/contractorBrand';
+import { ensureApprovedCompletionPdf, listCompletionForms } from '../lib/completionFormsApi';
+import { completionDocUiStatus, completionShouldAttachPdf, type CompletionFormSummary } from '../lib/completionFormTypes';
 import { appendInspectionTitleItem } from '../components/safetyculture/safetyCultureFields';
 import type { Device, SCTemplateMapping } from '../types';
 import {
@@ -116,6 +121,10 @@ export default function HandoverPage() {
   const [scConnected, setScConnected] = useState(false);
   const [templates, setTemplates] = useState<any[]>([]);
   const [savedMappings, setSavedMappings] = useState<Record<string, SCTemplateMapping>>({});
+  const [completionForms, setCompletionForms] = useState<CompletionFormSummary[]>([]);
+  const [brand, setBrand] = useState<ContractorBrand | null>(null);
+  const [formNotice, setFormNotice] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Modal states
   const [activeDoc, setActiveDoc] = useState<HandoverDocumentDefinition | null>(null);
@@ -129,6 +138,8 @@ export default function HandoverPage() {
   const uploadDocRef = useRef('');
   const docsRef = useRef<HandoverDoc[]>([]);
   const syncingRef = useRef(false);
+  const attachingPdfRef = useRef(false);
+  const failedPdfIds = useRef(new Set<number>());
   docsRef.current = docs;
 
   // Other docs modal
@@ -152,7 +163,7 @@ export default function HandoverPage() {
 
   const load = useCallback(async () => {
     if (!pid) return;
-    const [{ data: docRows }, { data: uploadRows }, { data: otherRows }, { data: devRows }, { data: tokRow }, { data: maps }, typeRows, defRows] = await Promise.all([
+    const [{ data: docRows }, { data: uploadRows }, { data: otherRows }, { data: devRows }, { data: tokRow }, { data: maps }, typeRows, defRows, formRows] = await Promise.all([
       supabase.from('project_handover_docs').select('*').eq('project_id', pid),
       supabase.from('om_pack_uploads').select('*').eq('project_id', pid).or('section.like.handover_%,section.eq.nsi_certificate,section.eq.rams'),
       supabase.from('handover_other_docs').select('*').eq('project_id', pid).order('created_at'),
@@ -161,6 +172,7 @@ export default function HandoverPage() {
       supabase.from('sc_template_mappings').select('*'),
       fetchHandoverDocumentTypes(),
       fetchHandoverDocumentDefinitions(),
+      listCompletionForms(pid).catch(() => [] as CompletionFormSummary[]),
     ]);
     setDocs((docRows ?? []) as HandoverDoc[]);
     setLegacyUploads((uploadRows ?? []) as LegacyUpload[]);
@@ -171,6 +183,7 @@ export default function HandoverPage() {
     setProjectSystems(systems);
     setDocumentTypes(typeRows.filter(type => type.is_active));
     setDocumentDefinitions(defRows);
+    setCompletionForms(formRows);
     setScConnected(!!tokRow?.value);
     const byTmpl: Record<string, SCTemplateMapping> = {};
     for (const m of maps ?? []) byTmpl[m.template_id] = m;
@@ -179,6 +192,39 @@ export default function HandoverPage() {
   }, [pid]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!pid) return;
+    void fetchContractorForProject({ projectId: pid, contractorProfileId: project?.contractor_profile_id })
+      .then(setBrand)
+      .catch(() => undefined);
+  }, [pid, project?.contractor_profile_id]);
+
+  useEffect(() => {
+    const missing = completionForms.filter(form => completionShouldAttachPdf(form.status) && !form.pdf_url && !failedPdfIds.current.has(form.id));
+    if (!missing.length || !pid || attachingPdfRef.current) return;
+    attachingPdfRef.current = true;
+    let cancelled = false;
+    void (async () => {
+      try {
+        for (const form of missing) {
+          try {
+            await ensureApprovedCompletionPdf({
+              form,
+              project: { id: pid, job_number: project?.job_number, project_number: project?.project_number },
+              brand,
+            });
+          } catch {
+            failedPdfIds.current.add(form.id);
+          }
+        }
+        if (!cancelled) await load();
+      } finally {
+        attachingPdfRef.current = false;
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [completionForms, brand, pid, project?.job_number, project?.project_number, load]);
 
   const applyInspectionCompletion = async (doc: HandoverDoc, forceUpdate = false): Promise<boolean> => {
     if (!pid || !doc.sc_inspection_id) return false;
@@ -363,8 +409,8 @@ export default function HandoverPage() {
     [documentDefinitions, selectedDocTypeKey, existingDocumentIdsForActiveSystem],
   );
 
-  const scEnabledDefinitions = visibleDefinitions.filter(def => def.sc_enabled && !def.upload_only);
-  const uploadOnlyDefinitions = visibleDefinitions.filter(def => def.upload_only);
+  const certificateDefinitions = visibleDefinitions.filter(def => handoverCaptureMethod(def) !== 'upload');
+  const uploadOnlyDefinitions = visibleDefinitions.filter(def => handoverCaptureMethod(def) === 'upload');
 
   const definitionsById = useMemo(
     () => new Map(documentDefinitions.map(def => [def.document_id, def])),
@@ -621,8 +667,12 @@ export default function HandoverPage() {
   };
 
   // ── Stats ──────────────────────────────────────────────────────────────────
-  const totalDocs = scEnabledDefinitions.length + uploadOnlyDefinitions.length;
-  const completedDocs = scEnabledDefinitions.filter(def => {
+  const totalDocs = certificateDefinitions.length + uploadOnlyDefinitions.length;
+  const completedDocs = certificateDefinitions.filter(def => {
+    if (handoverCaptureMethod(def) === 'web_form') {
+      const key = def.web_form_template_key;
+      return completionForms.some(form => form.template_key === key && form.status !== 'revoked' && form.status !== 'superseded' && completionDocUiStatus(form.status, form) === 'completed');
+    }
     const rec = getDocRecord(def.document_id);
     return rec && ['completed', 'imported', 'uploaded'].includes(rec.status);
   }).length
@@ -724,24 +774,41 @@ export default function HandoverPage() {
       {/* Header */}
       <div className="flex items-center justify-between bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
         <div>
-          <h2 className="font-semibold text-slate-900">Handover Documents</h2>
-          <p className="text-sm text-slate-500 mt-0.5">Create inspections from SafetyCulture, upload signed PDFs, or import results</p>
+          <h2 className="font-semibold text-slate-900">Handover &amp; Commissioning Documents</h2>
+          <p className="text-sm text-slate-500 mt-0.5">Issue a web form, create a SafetyCulture inspection, or upload a signed PDF</p>
         </div>
         <span className={`text-sm font-semibold px-3 py-1 rounded-full ${completedDocs === totalDocs ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
           {completedDocs}/{totalDocs} complete
         </span>
       </div>
+      {formNotice && <p className="text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{formNotice}</p>}
+      {formError && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{formError}</p>}
 
-      {/* SC-enabled document cards */}
       <div className="space-y-3">
         <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide px-1">Certificates & Records</h3>
-        {scEnabledDefinitions.length === 0 ? (
+        {certificateDefinitions.length === 0 ? (
           <p className="text-sm text-slate-500 bg-white border border-slate-200 rounded-xl px-4 py-6 text-center">
             No documents configured for this system document type.
           </p>
         ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {scEnabledDefinitions.map(doc => {
+          {certificateDefinitions.map(doc => {
+            if (handoverCaptureMethod(doc) === 'web_form') {
+              return (
+                <HandoverWebFormCard
+                  key={doc.document_id}
+                  definition={doc}
+                  forms={completionForms.filter(form => form.template_key === doc.web_form_template_key)}
+                  project={project}
+                  brand={brand}
+                  systemType={activeSystemKey === PROJECT_WIDE_SYSTEM_KEY ? PROJECT_WIDE_SYSTEM_LABEL : activeSystemKey}
+                  engineerName={project.engineer ?? ''}
+                  onRefresh={() => void load()}
+                  onNotice={setFormNotice}
+                  onError={setFormError}
+                />
+              );
+            }
             const record = getDocRecord(doc.document_id);
             const status: DocStatus = record?.status as DocStatus ?? 'not_started';
             const statusCfg = STATUS_CONFIG[status];

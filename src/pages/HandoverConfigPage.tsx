@@ -4,21 +4,27 @@ import { Link } from 'react-router-dom';
 
 import migration024Sql from '../../supabase/migrations/20260626150000_024_handover_document_config.sql?raw';
 import migration038Sql from '../../supabase/migrations/20260916230000_038_restore_safetyculture_handover.sql?raw';
+import migration048Sql from '../../supabase/migrations/20261005200000_048_handover_capture_method.sql?raw';
 
 import {
   DEFAULT_SC_FIELD_MAPPINGS,
   fetchHandoverDocumentDefinitions,
   fetchHandoverDocumentTypes,
+  flagsForCaptureMethod,
+  handoverCaptureMethod,
   upsertHandoverDocumentDefinition,
   upsertHandoverDocumentType,
   deleteHandoverDocumentDefinition,
   isHandoverConfigLocalOnly,
+  type HandoverCaptureMethod,
   type HandoverDocumentDefinition,
   type HandoverDocumentType,
 } from '../lib/handoverDocumentConfig';
 import { invokeSafetyCulture } from '../lib/safetyCultureApi';
+import { listCompletionDocuments } from '../lib/completionFormsApi';
 import { supabase } from '../lib/supabase';
 import type { SCTemplateMapping } from '../types';
+import { useProject } from './ProjectLayout';
 import {
   SafetyCultureFieldMappingModal,
   type SafetyCultureFieldMappingResult,
@@ -30,8 +36,10 @@ const ICON_OPTIONS = [
 ];
 
 export default function HandoverConfigPage() {
+  const { project } = useProject();
   const [types, setTypes] = useState<HandoverDocumentType[]>([]);
   const [definitions, setDefinitions] = useState<HandoverDocumentDefinition[]>([]);
+  const [webForms, setWebForms] = useState<Array<{ template_key: string; title: string }>>([]);
   const [selectedTypeKey, setSelectedTypeKey] = useState<string>('cctv');
   const [templates, setTemplates] = useState<any[]>([]);
   const [savedMappings, setSavedMappings] = useState<Record<string, SCTemplateMapping>>({});
@@ -48,15 +56,17 @@ export default function HandoverConfigPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [typeRows, defRows, { data: maps }, tok] = await Promise.all([
+    const [typeRows, defRows, { data: maps }, tok, forms] = await Promise.all([
       fetchHandoverDocumentTypes(),
       fetchHandoverDocumentDefinitions(),
       supabase.from('sc_template_mappings').select('*'),
       supabase.from('integration_settings').select('value').eq('key', 'safetyculture_api_token').maybeSingle(),
+      listCompletionDocuments().catch(() => []),
     ]);
 
     setTypes(typeRows.filter(type => type.key !== 'project_wide'));
     setDefinitions(defRows);
+    setWebForms(forms.map(form => ({ template_key: form.template_key, title: form.title })));
     const byTmpl: Record<string, SCTemplateMapping> = {};
     for (const m of maps ?? []) byTmpl[m.template_id] = m;
     setSavedMappings(byTmpl);
@@ -99,6 +109,8 @@ export default function HandoverConfigPage() {
       field_mappings: { ...DEFAULT_SC_FIELD_MAPPINGS },
       required: false,
       upload_only: false,
+      capture_method: 'safetyculture',
+      web_form_template_key: null,
       multi: false,
       display_order: (typeDefinitions.at(-1)?.display_order ?? 0) + 10,
       is_active: true,
@@ -107,7 +119,11 @@ export default function HandoverConfigPage() {
 
   const beginEditDefinition = (def: HandoverDocumentDefinition) => {
     setEditingDefId(def.id);
-    setDraftDef({ ...def, field_mappings: { ...DEFAULT_SC_FIELD_MAPPINGS, ...def.field_mappings } });
+    setDraftDef({
+      ...def,
+      capture_method: handoverCaptureMethod(def),
+      field_mappings: { ...DEFAULT_SC_FIELD_MAPPINGS, ...def.field_mappings },
+    });
   };
 
   const saveDefinition = async () => {
@@ -115,6 +131,12 @@ export default function HandoverConfigPage() {
     setSaving(true);
     setError(null);
 
+    const method = handoverCaptureMethod({
+      capture_method: draftDef.capture_method,
+      sc_enabled: draftDef.sc_enabled ?? false,
+      upload_only: draftDef.upload_only ?? false,
+    });
+    const flags = flagsForCaptureMethod(method);
     const saveError = await upsertHandoverDocumentDefinition({
       id: editingDefId === 'new' ? undefined : (editingDefId as number),
       document_id: draftDef.document_id,
@@ -122,11 +144,13 @@ export default function HandoverConfigPage() {
       title: draftDef.title,
       description: draftDef.description ?? null,
       icon_key: draftDef.icon_key ?? 'file',
-      sc_enabled: draftDef.sc_enabled ?? false,
+      sc_enabled: flags.sc_enabled,
       sc_template_id: draftDef.sc_template_id ?? null,
       field_mappings: draftDef.field_mappings ?? { ...DEFAULT_SC_FIELD_MAPPINGS },
       required: draftDef.required ?? false,
-      upload_only: draftDef.upload_only ?? false,
+      upload_only: flags.upload_only,
+      capture_method: method,
+      web_form_template_key: draftDef.web_form_template_key ?? null,
       multi: draftDef.multi ?? false,
       display_order: draftDef.display_order ?? 0,
       is_active: draftDef.is_active ?? true,
@@ -236,15 +260,17 @@ export default function HandoverConfigPage() {
   return (
     <div className="space-y-6">
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
-        <h2 className="font-semibold text-slate-900">Handover document template sets</h2>
+        <h2 className="font-semibold text-slate-900">Handover &amp; Commissioning document sets</h2>
         <p className="text-sm text-slate-500 mt-1">
-          Configure which document cards appear for each system document type. Link SafetyCulture templates to each
-          document and configure field linking here. Connect the API on{' '}
+          Configure which document cards appear for each system. For each document choose a web form, SafetyCulture, or a PDF upload.
+          Edit web form layouts on the{' '}
+          <Link to={`/projects/${project.id}/templates`} className="text-cyan-600 hover:underline">Templates</Link>
+          {' '}tab. Connect SafetyCulture on{' '}
           <Link to="/integrations" className="text-cyan-600 hover:underline">Integrations</Link>.
         </p>
         <div className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-3 mt-3 space-y-2">
           <p>
-            Paste <strong>038</strong> in the Supabase SQL editor to turn SafetyCulture documents back on and hide the Pacific PDF packs.
+            Paste <strong>038</strong> then <strong>048</strong> in the Supabase SQL editor so SafetyCulture documents stay on and each card can use a web form, SafetyCulture, or upload.
           </p>
           <button
             type="button"
@@ -258,6 +284,19 @@ export default function HandoverConfigPage() {
           >
             {migrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
             {migrationCopied ? 'Copied 038 — paste in Supabase' : 'Copy 038 SQL'}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard.writeText(migration048Sql).then(() => {
+                setMigrationCopied(true);
+                window.setTimeout(() => setMigrationCopied(false), 2500);
+              }).catch(() => setError('Clipboard is blocked. Copy supabase/migrations/20261005200000_048_handover_capture_method.sql manually.'));
+            }}
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-slate-800 text-white hover:bg-slate-700 ml-2"
+          >
+            {migrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
+            Copy 048 SQL
           </button>
         </div>
         {!scConnected && (
@@ -342,18 +381,22 @@ export default function HandoverConfigPage() {
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     {def.required && <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">Required</span>}
-                    {def.sc_enabled && <span className="text-[10px] font-semibold uppercase tracking-wide text-cyan-700 bg-cyan-50 px-2 py-0.5 rounded-full">SC</span>}
-                    {def.upload_only && <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">Upload</span>}
+                    {handoverCaptureMethod(def) === 'web_form' && <span className="text-[10px] font-semibold uppercase tracking-wide text-violet-700 bg-violet-50 px-2 py-0.5 rounded-full">Web form</span>}
+                    {handoverCaptureMethod(def) === 'safetyculture' && <span className="text-[10px] font-semibold uppercase tracking-wide text-cyan-700 bg-cyan-50 px-2 py-0.5 rounded-full">SC</span>}
+                    {handoverCaptureMethod(def) === 'upload' && <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">Upload</span>}
                     <button type="button" onClick={() => beginEditDefinition(def)} className="text-xs text-cyan-700 hover:underline">Edit</button>
                     <button type="button" onClick={() => void removeDefinition(def)} className="p-1 text-slate-400 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
                   </div>
                 </div>
                 <div className="px-4 py-2 text-xs text-slate-500 flex flex-wrap gap-3">
                   <span>Order: {def.display_order}</span>
-                  {def.sc_template_id && (
+                  {def.sc_template_id && handoverCaptureMethod(def) === 'safetyculture' && (
                     <span>
                       Template: {savedMappings[def.sc_template_id]?.template_name ?? def.sc_template_id}
                     </span>
+                  )}
+                  {def.web_form_template_key && handoverCaptureMethod(def) === 'web_form' && (
+                    <span>Web form: {webForms.find(form => form.template_key === def.web_form_template_key)?.title ?? def.web_form_template_key}</span>
                   )}
                   {def.sc_enabled && def.sc_template_id && (
                     <span className={mappedFieldCount(def) > 0 ? 'text-emerald-600' : 'text-amber-600'}>
@@ -414,21 +457,62 @@ export default function HandoverConfigPage() {
                   className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2"
                 />
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input type="checkbox" checked={draftDef.sc_enabled ?? false} onChange={e => setDraftDef(current => ({ ...current, sc_enabled: e.target.checked }))} />
-                  SafetyCulture enabled
-                </label>
-                <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input type="checkbox" checked={draftDef.upload_only ?? false} onChange={e => setDraftDef(current => ({ ...current, upload_only: e.target.checked, sc_enabled: e.target.checked ? false : current.sc_enabled }))} />
-                  Upload only
-                </label>
-                <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input type="checkbox" checked={draftDef.required ?? false} onChange={e => setDraftDef(current => ({ ...current, required: e.target.checked }))} />
-                  Required
-                </label>
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-slate-700">Capture method</p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {([
+                    { id: 'web_form', label: 'Web form' },
+                    { id: 'safetyculture', label: 'SafetyCulture' },
+                    { id: 'upload', label: 'Upload PDF' },
+                  ] as Array<{ id: HandoverCaptureMethod; label: string }>).map(option => (
+                    <label key={option.id} className={`flex items-center gap-2 text-sm border rounded-lg px-3 py-2 ${handoverCaptureMethod(draftDef as HandoverDocumentDefinition) === option.id ? 'border-cyan-300 bg-cyan-50 text-cyan-900' : 'border-slate-200 text-slate-700'}`}>
+                      <input
+                        type="radio"
+                        name="capture-method"
+                        checked={handoverCaptureMethod(draftDef as HandoverDocumentDefinition) === option.id}
+                        onChange={() => setDraftDef(current => ({
+                          ...current,
+                          capture_method: option.id,
+                          sc_enabled: option.id === 'safetyculture',
+                          upload_only: option.id === 'upload',
+                        }))}
+                      />
+                      {option.label}
+                    </label>
+                  ))}
+                </div>
               </div>
-                  {draftDef.sc_enabled && (
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" checked={draftDef.required ?? false} onChange={e => setDraftDef(current => ({ ...current, required: e.target.checked }))} />
+                Required
+              </label>
+              {handoverCaptureMethod(draftDef as HandoverDocumentDefinition) === 'upload' && (
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input type="checkbox" checked={draftDef.multi ?? false} onChange={e => setDraftDef(current => ({ ...current, multi: e.target.checked }))} />
+                  Allow multiple uploads
+                </label>
+              )}
+              {handoverCaptureMethod(draftDef as HandoverDocumentDefinition) === 'web_form' && (
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-slate-700 mb-1 block">Web form template</label>
+                  <select
+                    value={draftDef.web_form_template_key ?? ''}
+                    onChange={e => setDraftDef(current => ({ ...current, web_form_template_key: e.target.value || null }))}
+                    className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2"
+                  >
+                    <option value="">Choose web form…</option>
+                    {webForms.map(form => (
+                      <option key={form.template_key} value={form.template_key}>{form.title}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-slate-500">
+                    Create or edit layouts on the{' '}
+                    <Link to={`/projects/${project.id}/templates`} className="text-cyan-600 hover:underline">Templates</Link>
+                    {' '}tab, then select the form here.
+                  </p>
+                </div>
+              )}
+                  {handoverCaptureMethod(draftDef as HandoverDocumentDefinition) === 'safetyculture' && (
                 <div className="space-y-3">
                   <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 text-xs text-slate-600">
                     <p>

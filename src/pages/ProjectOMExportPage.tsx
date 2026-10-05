@@ -52,7 +52,7 @@ import {
   ProtectedTechDocViewer,
 } from '../components/ProtectedTechDocAccess';
 import { ensureApprovedCompletionPdf, listCompletionForms } from '../lib/completionFormsApi';
-import { completionDocUiStatus, type CompletionFormSummary } from '../lib/completionFormTypes';
+import { completionDocUiStatus, completionShouldAttachPdf, type CompletionFormSummary } from '../lib/completionFormTypes';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -741,7 +741,7 @@ export function ProjectOMExportPage() {
     setHandoverDocs(handData ?? []);
     let nextUploads = uplData ?? [];
     let nextCompletionForms = completionFormRows;
-    const missingPdfs = nextCompletionForms.filter(form => form.status === 'complete' && !form.pdf_url);
+    const missingPdfs = nextCompletionForms.filter(form => completionShouldAttachPdf(form.status) && !form.pdf_url);
     if (missingPdfs.length > 0) {
       for (const form of missingPdfs) {
         try {
@@ -1106,7 +1106,7 @@ export function ProjectOMExportPage() {
       return hasTechData || techDevices.length > 0 ? 'complete' : 'empty';
     }
     if (s === 'maintenance_plan') return systemGroups.some(g => g.devices.length > 0 && maintenancePlanHasContent(maintPlans[g.system])) ? 'complete' : 'empty';
-    if (s === 'commissioning') return liveCompletionForms.some(form => form.status === 'complete' && form.pdf_url) || extraCommissioningUpload ? 'complete' : liveCompletionForms.length > 0 || includedCommRecords.length > 0 ? 'partial' : 'empty';
+    if (s === 'commissioning') return liveCompletionForms.some(form => completionShouldAttachPdf(form.status) && form.pdf_url) || extraCommissioningUpload ? 'complete' : liveCompletionForms.length > 0 || includedCommRecords.length > 0 ? 'partial' : 'empty';
     if (s === 'handover') {
       const scReady = includedScHandoverDocs.some(doc => doc.file_url);
       const otherReady = includedOtherHandoverDocs.some(doc => doc.file_url);
@@ -1283,7 +1283,7 @@ export function ProjectOMExportPage() {
       docs.push({ key, title, file_name: file_name ?? null, file_url });
     };
     for (const form of liveCompletionForms) {
-      if (form.status === 'complete') add(`completion-${form.id}`, form.title, form.pdf_file_name, form.pdf_url);
+      if (form.pdf_url) add(`completion-${form.id}`, form.title, form.pdf_file_name, form.pdf_url);
     }
     if (extraCommissioningUpload) {
       add(`commissioning-upload-${extraCommissioningUpload.id}`, 'Commissioning pack', extraCommissioningUpload.file_name, extraCommissioningUpload.file_url);
@@ -3410,7 +3410,7 @@ function buildAutoScope(
 function CommissioningPackSection({ forms }: { forms: CompletionFormSummary[] }) {
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   if (forms.length === 0) return null;
-  const completed = forms.filter(form => completionDocUiStatus(form.status) === 'completed').length;
+  const completed = forms.filter(form => completionDocUiStatus(form.status, form) === 'completed').length;
   const STATUS_CONFIG = {
     not_started: { label: 'Not Started', color: 'bg-slate-100 text-slate-500 border-slate-200' },
     in_progress: { label: 'In Progress', color: 'bg-amber-50 text-amber-700 border-amber-200' },
@@ -3428,7 +3428,7 @@ function CommissioningPackSection({ forms }: { forms: CompletionFormSummary[] })
       </div>
       <div className="divide-y divide-slate-100">
         {forms.map(form => {
-          const status = completionDocUiStatus(form.status);
+          const status = completionDocUiStatus(form.status, form);
           const statusCfg = STATUS_CONFIG[status];
           const key = `completion-${form.id}`;
           const isExpanded = expandedKey === key;
@@ -3445,19 +3445,23 @@ function CommissioningPackSection({ forms }: { forms: CompletionFormSummary[] })
                 <span className={`text-xs font-medium px-2.5 py-1 rounded-full border flex-shrink-0 ${statusCfg.color}`}>
                   {statusCfg.label}
                 </span>
-                {form.pdf_url && (
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <a href={form.pdf_url} target="_blank" rel="noopener noreferrer"
-                      className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors flex items-center gap-1">
-                      <ExternalLink className="w-3 h-3" />Open
-                    </a>
-                    <button type="button" onClick={() => setExpandedKey(isExpanded ? null : key)}
-                      className={`text-xs px-2 py-1 border rounded-lg transition-colors flex items-center gap-1 ${isExpanded ? 'bg-cyan-50 border-cyan-300 text-cyan-700' : 'border-slate-200 text-slate-500 hover:bg-slate-100'}`}>
-                      {isExpanded ? <X className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                      {isExpanded ? 'Close' : 'View PDF'}
-                    </button>
-                  </div>
-                )}
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {form.pdf_url ? (
+                    <>
+                      <a href={form.pdf_url} target="_blank" rel="noopener noreferrer"
+                        className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors flex items-center gap-1">
+                        <ExternalLink className="w-3 h-3" />Open
+                      </a>
+                      <button type="button" onClick={() => setExpandedKey(isExpanded ? null : key)}
+                        className={`text-xs px-2 py-1 border rounded-lg transition-colors flex items-center gap-1 ${isExpanded ? 'bg-cyan-50 border-cyan-300 text-cyan-700' : 'border-slate-200 text-slate-500 hover:bg-slate-100'}`}>
+                        {isExpanded ? <X className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                        {isExpanded ? 'Close' : 'View PDF'}
+                      </button>
+                    </>
+                  ) : (
+                    <span className="text-xs text-slate-400">PDF attaching…</span>
+                  )}
+                </div>
               </div>
               {isExpanded && form.pdf_url && (
                 <div className="border-t border-slate-100 bg-slate-100 px-6 py-4">

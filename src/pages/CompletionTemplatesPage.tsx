@@ -223,7 +223,7 @@ export default function CompletionTemplatesPage() {
         <div>
           <h2 className="font-semibold text-slate-900">Templates</h2>
           <p className="text-sm text-slate-500 mt-0.5">
-            Pick a system, assign one or more completion documents, then edit or AI-import a form. Branding follows Companies.
+            Edit and AI-import web form layouts here. On Handover &amp; Commissioning → Config, pick Web form, SafetyCulture or Upload for each document. Branding follows Companies.
           </p>
         </div>
       </div>

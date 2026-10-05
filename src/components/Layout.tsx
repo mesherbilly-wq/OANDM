@@ -3,7 +3,7 @@ import { Link, useLocation, Outlet } from 'react-router-dom';
 import {
   LayoutDashboard, FolderOpen, Box, Menu, X, Plus, Plug,
   ChevronDown, ChevronRight,
-  BookOpen, Cpu, Wifi, ClipboardCheck, ShieldAlert, Award, Download, Info,
+  BookOpen, Cpu, Wifi, ClipboardCheck, Award, Download, Info,
   FileText, Layers, LogOut, Building2, User, Users, ClipboardList, ScrollText, Pencil,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -21,9 +21,8 @@ const PROJECT_MODULES = [
   { name: 'Scope of Works',     slug: 'scope',         icon: ScrollText },
   { name: 'As Fitted',          slug: 'as-fitted-scope', icon: ClipboardList },
   { name: 'Technical Docs',     slug: 'technical',     icon: Wifi },
-  { name: 'Commissioning',      slug: 'commissioning',  icon: ShieldAlert },
   { name: 'Templates',          slug: 'templates',      icon: Pencil },
-  { name: 'Handover',           slug: 'handover',       icon: Award },
+  { name: 'Handover & Commissioning', slug: 'handover', icon: Award },
   { name: 'As Fitted Drawings', slug: 'as-fitted',      icon: Layers },
   { name: 'Datasheets',         slug: 'datasheets',    icon: BookOpen },
   { name: 'O&M Builder',        slug: 'om-builder',    icon: FolderOpen },
