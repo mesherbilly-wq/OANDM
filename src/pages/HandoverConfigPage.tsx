@@ -16,6 +16,8 @@ import {
   upsertHandoverDocumentType,
   deleteHandoverDocumentDefinition,
   isHandoverConfigLocalOnly,
+  uniqueHandoverDocumentId,
+  slugifyHandoverDocumentId,
   PROJECT_WIDE_DOCUMENT_TYPE_KEY,
   type HandoverCaptureMethod,
   type HandoverDocumentDefinition,
@@ -41,7 +43,9 @@ export default function HandoverConfigPage() {
   const [types, setTypes] = useState<HandoverDocumentType[]>([]);
   const [definitions, setDefinitions] = useState<HandoverDocumentDefinition[]>([]);
   const [webForms, setWebForms] = useState<Array<{ template_key: string; title: string }>>([]);
-  const [selectedTypeKey, setSelectedTypeKey] = useState<string>('cctv');
+  const [selectedTypeKey, setSelectedTypeKey] = useState<string>(PROJECT_WIDE_DOCUMENT_TYPE_KEY);
+  const [addingType, setAddingType] = useState(false);
+  const [newTypeLabel, setNewTypeLabel] = useState('');
   const [templates, setTemplates] = useState<any[]>([]);
   const [savedMappings, setSavedMappings] = useState<Record<string, SCTemplateMapping>>({});
   const [scConnected, setScConnected] = useState(false);
@@ -71,6 +75,7 @@ export default function HandoverConfigPage() {
       return (a.display_order - b.display_order) || a.label.localeCompare(b.label);
     });
     setTypes(ordered);
+    setSelectedTypeKey(current => ordered.some(type => type.key === current) ? current : (ordered[0]?.key ?? PROJECT_WIDE_DOCUMENT_TYPE_KEY));
     setDefinitions(defRows);
     setWebForms(forms.map(form => ({ template_key: form.template_key, title: form.title })));
     const byTmpl: Record<string, SCTemplateMapping> = {};
@@ -103,9 +108,10 @@ export default function HandoverConfigPage() {
   );
 
   const beginNewDefinition = () => {
+    setError(null);
     setEditingDefId('new');
     setDraftDef({
-      document_id: '',
+      document_id: uniqueHandoverDocumentId(selectedTypeKey, 'new document', definitions.map(def => def.document_id)),
       type_key: selectedTypeKey,
       title: '',
       description: '',
@@ -133,7 +139,17 @@ export default function HandoverConfigPage() {
   };
 
   const saveDefinition = async () => {
-    if (!draftDef.document_id?.trim() || !draftDef.title?.trim() || !draftDef.type_key) return;
+    const title = draftDef.title?.trim() ?? '';
+    if (!title) {
+      setError('Enter a document title.');
+      return;
+    }
+    const documentId = (draftDef.document_id?.trim()
+      || uniqueHandoverDocumentId(draftDef.type_key ?? selectedTypeKey, title, definitions.map(def => def.document_id)));
+    if (!draftDef.type_key) {
+      setError('Choose a document type.');
+      return;
+    }
     setSaving(true);
     setError(null);
 
@@ -145,7 +161,7 @@ export default function HandoverConfigPage() {
     const flags = flagsForCaptureMethod(method);
     const saveError = await upsertHandoverDocumentDefinition({
       id: editingDefId === 'new' ? undefined : (editingDefId as number),
-      document_id: draftDef.document_id,
+      document_id: documentId,
       type_key: draftDef.type_key,
       title: draftDef.title,
       description: draftDef.description ?? null,
@@ -192,6 +208,34 @@ export default function HandoverConfigPage() {
     setSaving(false);
     if (saveError) setError(saveError);
     else await load();
+  };
+
+  const saveNewType = async () => {
+    const label = newTypeLabel.trim();
+    if (!label) {
+      setError('Enter a name for the document set.');
+      return;
+    }
+    const existingKeys = types.map(type => type.key);
+    let key = slugifyHandoverDocumentId(label);
+    if (existingKeys.includes(key)) key = uniqueHandoverDocumentId(key, 'set', existingKeys);
+    setSaving(true);
+    setError(null);
+    const saveError = await upsertHandoverDocumentType({
+      key,
+      label,
+      display_order: (types.at(-1)?.display_order ?? 0) + 10,
+      is_active: true,
+    });
+    setSaving(false);
+    if (saveError) {
+      setError(saveError);
+      return;
+    }
+    setNewTypeLabel('');
+    setAddingType(false);
+    await load();
+    setSelectedTypeKey(key);
   };
 
   const selectedTemplateName = useMemo(() => {
@@ -268,7 +312,7 @@ export default function HandoverConfigPage() {
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
         <h2 className="font-semibold text-slate-900">Handover &amp; Commissioning document sets</h2>
         <p className="text-sm text-slate-500 mt-1">
-          Configure which document cards appear for each system, including Project-wide documents such as acceptance certificates and RAMS. For each document choose a web form, SafetyCulture, or a PDF upload.
+          Configure which document cards appear for each system, including Project-wide Certificates & Records such as acceptance certificates and RAMS. Add or remove cards here. For each document choose a web form, SafetyCulture, or a PDF upload.
           Edit web form layouts on the{' '}
           <Link to={`/projects/${project.id}/templates`} className="text-cyan-600 hover:underline">Templates</Link>
           {' '}tab. Connect SafetyCulture on{' '}
@@ -346,7 +390,7 @@ export default function HandoverConfigPage() {
             <button
               key={type.key}
               type="button"
-              onClick={() => setSelectedTypeKey(type.key)}
+              onClick={() => { setSelectedTypeKey(type.key); setEditingDefId(null); }}
               className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
                 selectedTypeKey === type.key ? 'bg-cyan-600 text-white' : 'text-slate-700 hover:bg-slate-100'
               }`}
@@ -357,6 +401,28 @@ export default function HandoverConfigPage() {
               </span>
             </button>
           ))}
+          {addingType ? (
+            <div className="pt-2 space-y-2">
+              <input
+                value={newTypeLabel}
+                onChange={event => setNewTypeLabel(event.target.value)}
+                placeholder="e.g. Electrical certificates"
+                className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2"
+              />
+              <div className="flex gap-2">
+                <button type="button" onClick={() => void saveNewType()} className="flex-1 text-xs font-medium px-2 py-1.5 rounded-lg bg-slate-900 text-white">Save type</button>
+                <button type="button" onClick={() => { setAddingType(false); setNewTypeLabel(''); }} className="flex-1 text-xs px-2 py-1.5 rounded-lg border border-slate-200">Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setAddingType(true)}
+              className="w-full text-left px-3 py-2 rounded-lg text-sm text-slate-600 hover:bg-slate-100 inline-flex items-center gap-1.5"
+            >
+              <Plus className="w-3.5 h-3.5" />Add document type
+            </button>
+          )}
         </div>
 
         <div className="space-y-4">
@@ -365,7 +431,12 @@ export default function HandoverConfigPage() {
               <h3 className="font-semibold text-slate-900">
                 {types.find(type => type.key === selectedTypeKey)?.label ?? selectedTypeKey}
               </h3>
-              <p className="text-xs text-slate-500 mt-0.5">{typeDefinitions.length} document{typeDefinitions.length !== 1 ? 's' : ''}</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {typeDefinitions.length} document{typeDefinitions.length !== 1 ? 's' : ''}
+                {selectedTypeKey === PROJECT_WIDE_DOCUMENT_TYPE_KEY
+                  ? ' — these appear under Certificates & Records on the Project-wide tab.'
+                  : ' — these appear under Certificates & Records for systems using this set.'}
+              </p>
             </div>
             <button
               type="button"
@@ -377,6 +448,18 @@ export default function HandoverConfigPage() {
           </div>
 
           <div className="space-y-3">
+            {typeDefinitions.length === 0 && editingDefId == null && (
+              <div className="bg-white border border-dashed border-slate-300 rounded-xl px-4 py-8 text-center">
+                <p className="text-sm text-slate-600">No certificates or records in this set yet.</p>
+                <button
+                  type="button"
+                  onClick={beginNewDefinition}
+                  className="mt-3 inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium bg-slate-900 text-white rounded-lg hover:bg-slate-700"
+                >
+                  <Plus className="w-4 h-4" />Add document
+                </button>
+              </div>
+            )}
             {typeDefinitions.map(def => (
               <div key={def.id} className={`bg-white rounded-xl border shadow-sm overflow-hidden ${def.is_active ? 'border-slate-200' : 'border-slate-100 opacity-70'}`}>
                 <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-slate-100 bg-slate-50">
@@ -451,9 +534,33 @@ export default function HandoverConfigPage() {
                 <label className="text-xs font-medium text-slate-700 mb-1 block">Title</label>
                 <input
                   value={draftDef.title ?? ''}
-                  onChange={e => setDraftDef(current => ({ ...current, title: e.target.value }))}
+                  onChange={e => {
+                    const title = e.target.value;
+                    setDraftDef(current => ({
+                      ...current,
+                      title,
+                      document_id: editingDefId === 'new'
+                        ? uniqueHandoverDocumentId(
+                          current.type_key ?? selectedTypeKey,
+                          title || 'new document',
+                          definitions.map(def => def.document_id),
+                        )
+                        : current.document_id,
+                    }));
+                  }}
+                  placeholder="e.g. Electrical installation certificate"
                   className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2"
                 />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-slate-700 mb-1 block">Icon</label>
+                <select
+                  value={draftDef.icon_key ?? 'file'}
+                  onChange={e => setDraftDef(current => ({ ...current, icon_key: e.target.value }))}
+                  className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2"
+                >
+                  {ICON_OPTIONS.map(icon => <option key={icon} value={icon}>{icon.replace('_', ' ')}</option>)}
+                </select>
               </div>
               <div>
                 <label className="text-xs font-medium text-slate-700 mb-1 block">Description</label>
@@ -491,6 +598,10 @@ export default function HandoverConfigPage() {
               <label className="flex items-center gap-2 text-sm text-slate-700">
                 <input type="checkbox" checked={draftDef.required ?? false} onChange={e => setDraftDef(current => ({ ...current, required: e.target.checked }))} />
                 Required
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" checked={draftDef.is_active ?? true} onChange={e => setDraftDef(current => ({ ...current, is_active: e.target.checked }))} />
+                Show on the Handover tab
               </label>
               {handoverCaptureMethod(draftDef as HandoverDocumentDefinition) === 'upload' && (
                 <label className="flex items-center gap-2 text-sm text-slate-700">

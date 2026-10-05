@@ -186,12 +186,12 @@ export async function fetchHandoverDocumentTypes(): Promise<HandoverDocumentType
   if (error) {
     if (isMissingSchemaError(error.message)) {
       markHandoverConfigLocalOnly();
-      return readLocalHandoverConfig().types;
+      return mergeFallbackTypes(readLocalHandoverConfig().types);
     }
     return FALLBACK_DOCUMENT_TYPES;
   }
   if (!data?.length) return FALLBACK_DOCUMENT_TYPES;
-  return data as HandoverDocumentType[];
+  return ensureFallbackDocumentTypes(data as HandoverDocumentType[]);
 }
 
 export async function fetchHandoverDocumentDefinitions(): Promise<HandoverDocumentDefinition[]> {
@@ -234,6 +234,40 @@ export async function fetchHandoverDocumentDefinitions(): Promise<HandoverDocume
   }
 
   return definitions;
+}
+
+function mergeFallbackTypes(types: HandoverDocumentType[]): HandoverDocumentType[] {
+  const keys = new Set(types.map(type => type.key));
+  return [
+    ...types,
+    ...FALLBACK_DOCUMENT_TYPES.filter(type => !keys.has(type.key)),
+  ];
+}
+
+async function ensureFallbackDocumentTypes(types: HandoverDocumentType[]): Promise<HandoverDocumentType[]> {
+  const merged = mergeFallbackTypes(types);
+  const missing = merged.filter(type => !types.some(existing => existing.key === type.key));
+  if (!missing.length) return merged;
+
+  for (const type of missing) {
+    const { error } = await supabase.from('handover_document_types').insert({
+      key: type.key,
+      label: type.label,
+      display_order: type.display_order,
+      is_active: type.is_active,
+    });
+    if (error && !/duplicate|unique/i.test(error.message) && !isMissingSchemaError(error.message)) {
+      return merged;
+    }
+  }
+
+  const { data, error } = await supabase
+    .from('handover_document_types')
+    .select('*')
+    .order('display_order')
+    .order('label');
+  if (error || !data?.length) return merged;
+  return mergeFallbackTypes(data as HandoverDocumentType[]);
 }
 
 export function definitionsForType(

@@ -787,9 +787,18 @@ export default function HandoverPage() {
       <div className="space-y-3">
         <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide px-1">Certificates & Records</h3>
         {certificateDefinitions.length === 0 ? (
-          <p className="text-sm text-slate-500 bg-white border border-slate-200 rounded-xl px-4 py-6 text-center">
-            No documents configured for this system document type.
-          </p>
+          <div className="text-sm text-slate-500 bg-white border border-slate-200 rounded-xl px-4 py-6 text-center space-y-3">
+            <p>No documents configured for this system document type.</p>
+            {showConfig && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('config')}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium bg-slate-900 text-white rounded-lg hover:bg-slate-700"
+              >
+                Add or remove documents in Handover Config
+              </button>
+            )}
+          </div>
         ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {certificateDefinitions.map(doc => {

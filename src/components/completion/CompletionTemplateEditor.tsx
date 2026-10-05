@@ -9,6 +9,7 @@ import type {
   CompletionFieldType,
   CompletionGroup,
   CompletionSection,
+  CompletionShowWhen,
   CompletionTemplateSchema,
 } from '../../lib/completionFormTypes';
 
@@ -25,25 +26,184 @@ function newGroup(): CompletionGroup {
   return {
     id: `group_${Date.now()}`,
     title: 'Repeatable items',
-    addLabel: 'Add item',
+    addLabel: 'Add camera',
     nameTemplate: 'Item {location}',
     identityFields: [],
     fields: [newField('Item name')],
   };
 }
 
+type LogicField = { id: string; label: string; options?: string[] };
+
+const SHOW_OPS: Array<{ id: CompletionShowWhen['op']; label: string }> = [
+  { id: 'eq', label: 'equals' },
+  { id: 'neq', label: 'does not equal' },
+  { id: 'in', label: 'is any of' },
+  { id: 'includes', label: 'includes' },
+];
+
+function uniqueLogicFields(fields: LogicField[]): LogicField[] {
+  const seen = new Set<string>();
+  return fields.filter(field => {
+    if (!field.id || seen.has(field.id)) return false;
+    seen.add(field.id);
+    return true;
+  });
+}
+
+function ShowWhenEditor({
+  rules,
+  onChange,
+  fields,
+  rowFieldIds,
+  example,
+}: {
+  rules: CompletionShowWhen[] | undefined;
+  onChange: (rules: CompletionShowWhen[] | undefined) => void;
+  fields: LogicField[];
+  rowFieldIds?: string[];
+  example: string;
+}) {
+  const list = rules ?? [];
+  const update = (next: CompletionShowWhen[]) => onChange(next.length ? next : undefined);
+
+  return (
+    <div className="rounded-lg border border-dashed border-slate-300 p-3 space-y-2 bg-slate-50">
+      <p className="text-xs font-semibold text-slate-700">Show logic</p>
+      <p className="text-[11px] text-slate-500">{example}</p>
+      {list.length === 0 && (
+        <p className="text-[11px] text-slate-500">Always shown. Add a condition so this only appears when another answer matches — for example Extra works equals Yes.</p>
+      )}
+      {list.map((rule, index) => {
+        const source = fields.find(field => field.id === rule.field);
+        return (
+          <div key={`${rule.field}-${index}`} className="grid gap-2 sm:grid-cols-[1fr_8rem_1fr_auto] items-end">
+            <label className="text-[11px] text-slate-600">When
+              <select
+                value={rule.field}
+                onChange={event => {
+                  const fieldId = event.target.value;
+                  const next = [...list];
+                  next[index] = {
+                    ...rule,
+                    field: fieldId,
+                    scope: rowFieldIds?.includes(fieldId) ? 'row' : 'section',
+                    values: rule.values,
+                  };
+                  update(next);
+                }}
+                className="mt-1 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white"
+              >
+                <option value="">Choose question</option>
+                {fields.map(field => <option key={field.id} value={field.id}>{field.label}</option>)}
+              </select>
+            </label>
+            <label className="text-[11px] text-slate-600">Rule
+              <select
+                value={rule.op}
+                onChange={event => {
+                  const next = [...list];
+                  next[index] = { ...rule, op: event.target.value as CompletionShowWhen['op'] };
+                  update(next);
+                }}
+                className="mt-1 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white"
+              >
+                {SHOW_OPS.map(op => <option key={op.id} value={op.id}>{op.label}</option>)}
+              </select>
+            </label>
+            <label className="text-[11px] text-slate-600">Value
+              <input
+                value={rule.values.join(', ')}
+                onChange={event => {
+                  const next = [...list];
+                  next[index] = {
+                    ...rule,
+                    values: event.target.value.split(',').map(item => item.trim()).filter(Boolean),
+                  };
+                  update(next);
+                }}
+                placeholder="Yes"
+                className="mt-1 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => update(list.filter((_, i) => i !== index))}
+              className="p-2 text-red-700 hover:bg-red-50 rounded-lg"
+              title="Delete condition"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+            {(source?.options?.length ?? 0) > 0 && (
+              <div className="sm:col-span-4 flex flex-wrap gap-1">
+                {source?.options?.map(option => {
+                  const on = rule.values.includes(option);
+                  return (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => {
+                        const values = on
+                          ? rule.values.filter(value => value !== option)
+                          : [...rule.values, option];
+                        const next = [...list];
+                        next[index] = { ...rule, values };
+                        update(next);
+                      }}
+                      className={`text-[11px] px-2 py-1 rounded-full border ${on ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200'}`}
+                    >
+                      {option}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <button
+        type="button"
+        className="text-xs font-medium inline-flex items-center gap-1 text-slate-700"
+        onClick={() => update([...list, {
+          field: fields[0]?.id ?? '',
+          op: 'eq',
+          values: ['Yes'],
+          scope: rowFieldIds?.includes(fields[0]?.id ?? '') ? 'row' : 'section',
+        }])}
+      >
+        <Plus className="w-3.5 h-3.5" />Add condition
+      </button>
+    </div>
+  );
+}
+
 function FieldEditor({
   field,
   onChange,
   onRemove,
+  logicFields,
+  rowFieldIds,
 }: {
   field: CompletionField;
   onChange: (field: CompletionField) => void;
   onRemove: () => void;
+  logicFields: LogicField[];
+  rowFieldIds?: string[];
 }) {
   const needsOptions = field.type === 'select' || field.type === 'multiselect';
+  const triggers = uniqueLogicFields(logicFields.filter(item => item.id !== field.id));
   return (
     <div className="border border-slate-200 rounded-lg p-3 space-y-2 bg-white">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-xs font-medium text-slate-500 pt-1">Question</p>
+        <button
+          type="button"
+          onClick={onRemove}
+          className="inline-flex items-center gap-1 text-xs font-medium text-red-700 hover:bg-red-50 rounded-lg px-2 py-1.5"
+        >
+          <Trash2 className="w-4 h-4" />Delete field
+        </button>
+      </div>
       <div className="grid gap-2 sm:grid-cols-2">
         <label className="text-xs text-slate-600">Label
           <input value={field.label} onChange={event => onChange({ ...field, label: event.target.value })} className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
@@ -85,15 +245,14 @@ function FieldEditor({
           <input type="checkbox" checked={Boolean(field.sensitive)} onChange={event => onChange({ ...field, sensitive: event.target.checked })} />
           Hide from PDF
         </label>
-        <button type="button" onClick={onRemove} className="ml-auto text-xs text-red-700 inline-flex items-center gap-1">
-          <Trash2 className="w-3.5 h-3.5" />Remove field
-        </button>
       </div>
-      {(field.showWhen?.length ?? 0) > 0 && (
-        <p className="text-[11px] text-slate-500">
-          Shown when {(field.showWhen ?? []).map(rule => `${rule.field} ${rule.op} ${rule.values.join(' / ')}`).join(' and ')}
-        </p>
-      )}
+      <ShowWhenEditor
+        rules={field.showWhen}
+        fields={triggers}
+        rowFieldIds={rowFieldIds}
+        example="Example: Extra works equals Yes shows this question. On a camera, Camera technology equals HD IP shows IP address."
+        onChange={showWhen => onChange({ ...field, showWhen })}
+      />
     </div>
   );
 }
@@ -102,24 +261,37 @@ function GroupEditor({
   group,
   onChange,
   onRemove,
+  sectionFields,
 }: {
   group: CompletionGroup;
   onChange: (group: CompletionGroup) => void;
   onRemove: () => void;
+  sectionFields: LogicField[];
 }) {
+  const rowFields = uniqueLogicFields(group.fields.map(field => ({
+    id: field.id,
+    label: field.label,
+    options: field.options,
+  })));
+  const logicFields = uniqueLogicFields([...sectionFields, ...rowFields]);
+  const rowFieldIds = group.fields.map(field => field.id);
+
   return (
     <div className="border border-slate-300 rounded-xl p-4 space-y-3 bg-slate-50">
       <div className="flex items-start justify-between gap-3">
         <p className="text-sm font-semibold text-slate-800">
           Repeatable group
           <span className="ml-2 font-normal text-slate-500">
-            {group.fields.length} field{group.fields.length === 1 ? '' : 's'}
+            {group.fields.length} field{group.fields.length === 1 ? '' : 's'} — {group.addLabel || 'Add item'}
           </span>
         </p>
-        <button type="button" onClick={onRemove} className="text-xs text-red-700 inline-flex items-center gap-1">
-          <Trash2 className="w-3.5 h-3.5" />Remove group
+        <button type="button" onClick={onRemove} className="inline-flex items-center gap-1 text-xs font-medium text-red-700 hover:bg-red-50 rounded-lg px-2 py-1.5">
+          <Trash2 className="w-4 h-4" />Delete group
         </button>
       </div>
+      <p className="text-[11px] text-slate-500">
+        Use this for Add camera: the engineer taps the add button and gets a new set of questions for that camera.
+      </p>
       <div className="grid gap-2 sm:grid-cols-2">
         <label className="text-xs text-slate-600">Group title
           <input value={group.title} onChange={event => onChange({ ...group, title: event.target.value })} className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white" />
@@ -131,17 +303,20 @@ function GroupEditor({
           <input value={group.nameTemplate} onChange={event => onChange({ ...group, nameTemplate: event.target.value })} className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white" placeholder="Camera {camera_number} — {location}" />
         </label>
       </div>
-      {(group.showWhen?.length ?? 0) > 0 && (
-        <p className="text-[11px] text-slate-500">
-          Shown when {(group.showWhen ?? []).map(rule => `${rule.field} ${rule.op} ${rule.values.join(' / ')}`).join(' and ')}
-        </p>
-      )}
+      <ShowWhenEditor
+        rules={group.showWhen}
+        fields={sectionFields}
+        example="Example: Extra works equals Yes shows this whole Add item block. Alterations to specification shows extra-work rows."
+        onChange={showWhen => onChange({ ...group, showWhen })}
+      />
       <p className="text-xs font-medium text-slate-600">Fields in each item</p>
       <div className="space-y-2">
         {group.fields.map((field, index) => (
           <FieldEditor
             key={field.id}
             field={field}
+            logicFields={logicFields}
+            rowFieldIds={rowFieldIds}
             onChange={next => {
               const fields = [...group.fields];
               fields[index] = next;
@@ -162,6 +337,7 @@ function GroupEditor({
         <GroupEditor
           key={nested.id}
           group={nested}
+          sectionFields={logicFields}
           onChange={next => {
             const nestedGroups = [...(group.nested ?? [])];
             nestedGroups[index] = next;
@@ -227,6 +403,10 @@ export function CompletionTemplateEditor({
       sections: schema.sections.map(item => item.id === next.id ? next : item),
     });
   };
+
+  const sectionLogicFields: LogicField[] = uniqueLogicFields(
+    (section?.fields ?? []).map(field => ({ id: field.id, label: field.label, options: field.options })),
+  );
 
   return (
     <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
@@ -334,6 +514,7 @@ export function CompletionTemplateEditor({
                 <FieldEditor
                   key={field.id}
                   field={field}
+                  logicFields={sectionLogicFields}
                   onChange={next => {
                     const fields = [...(section.fields ?? [])];
                     fields[index] = next;
@@ -358,12 +539,13 @@ export function CompletionTemplateEditor({
             <div className="space-y-3">
               <p className="text-sm font-semibold text-slate-800">Repeatable items</p>
               <p className="text-xs text-slate-500">
-                Use these for cameras, recorders, power supplies and anything the engineer can add more than once. Each item can have fields such as IP address, model and location.
+                Use these for Add camera, extra works, recorders and anything the engineer can add more than once. Each added item gets its own questions. Use Show logic so a group only appears when another answer equals a value, for example Extra works equals Yes.
               </p>
               {(section.groups ?? []).map((group, index) => (
                 <GroupEditor
                   key={group.id}
                   group={group}
+                  sectionFields={sectionLogicFields}
                   onChange={next => {
                     const groups = [...(section.groups ?? [])];
                     groups[index] = next;
