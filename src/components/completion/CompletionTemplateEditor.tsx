@@ -1,12 +1,185 @@
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, Upload } from 'lucide-react';
+import { Loader2, Plus, Trash2, Upload } from 'lucide-react';
 import { FormLetterhead } from '../FormLetterhead';
 import { resolveOmBrand, type ContractorBrand } from '../../lib/contractorBrand';
 import { CompletionFormRunner } from './CompletionFormRunner';
 import { emptyAnswers } from '../../lib/completionFormEngine';
-import type { CompletionField, CompletionSection, CompletionTemplateSchema } from '../../lib/completionFormTypes';
+import type {
+  CompletionField,
+  CompletionFieldType,
+  CompletionGroup,
+  CompletionSection,
+  CompletionTemplateSchema,
+} from '../../lib/completionFormTypes';
 
-const FIELD_TYPES = ['text', 'textarea', 'number', 'date', 'select', 'multiselect', 'test_result', 'photo', 'note', 'declaration', 'signature'];
+const FIELD_TYPES: CompletionFieldType[] = [
+  'text', 'textarea', 'number', 'date', 'tel', 'email', 'select', 'multiselect',
+  'test_result', 'photo', 'note', 'declaration', 'signature',
+];
+
+function newField(label = 'New question'): CompletionField {
+  return { id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, label, type: 'text' };
+}
+
+function newGroup(): CompletionGroup {
+  return {
+    id: `group_${Date.now()}`,
+    title: 'Repeatable items',
+    addLabel: 'Add item',
+    nameTemplate: 'Item {location}',
+    identityFields: [],
+    fields: [newField('Item name')],
+  };
+}
+
+function FieldEditor({
+  field,
+  onChange,
+  onRemove,
+}: {
+  field: CompletionField;
+  onChange: (field: CompletionField) => void;
+  onRemove: () => void;
+}) {
+  const needsOptions = field.type === 'select' || field.type === 'multiselect';
+  return (
+    <div className="border border-slate-200 rounded-lg p-3 space-y-2 bg-white">
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="text-xs text-slate-600">Label
+          <input value={field.label} onChange={event => onChange({ ...field, label: event.target.value })} className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+        </label>
+        <label className="text-xs text-slate-600">Type
+          <select value={field.type} onChange={event => onChange({ ...field, type: event.target.value as CompletionFieldType })} className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm">
+            {FIELD_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
+          </select>
+        </label>
+        <label className="text-xs text-slate-600">Help text
+          <input value={field.help ?? ''} onChange={event => onChange({ ...field, help: event.target.value || undefined })} className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+        </label>
+        <label className="text-xs text-slate-600">Unit
+          <input value={field.unit ?? ''} onChange={event => onChange({ ...field, unit: event.target.value || undefined })} className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="fps, Mpx, V" />
+        </label>
+        {needsOptions && (
+          <label className="text-xs text-slate-600 sm:col-span-2">Choices (comma separated)
+            <input
+              value={(field.options ?? []).join(', ')}
+              onChange={event => onChange({
+                ...field,
+                options: event.target.value.split(',').map(item => item.trim()).filter(Boolean),
+              })}
+              className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+            />
+          </label>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="inline-flex items-center gap-2 text-xs text-slate-700">
+          <input type="checkbox" checked={Boolean(field.required)} onChange={event => onChange({ ...field, required: event.target.checked })} />
+          Required
+        </label>
+        <label className="inline-flex items-center gap-2 text-xs text-slate-700">
+          <input type="checkbox" checked={Boolean(field.customerVisible)} onChange={event => onChange({ ...field, customerVisible: event.target.checked })} />
+          Customer can see
+        </label>
+        <label className="inline-flex items-center gap-2 text-xs text-slate-700">
+          <input type="checkbox" checked={Boolean(field.sensitive)} onChange={event => onChange({ ...field, sensitive: event.target.checked })} />
+          Hide from PDF
+        </label>
+        <button type="button" onClick={onRemove} className="ml-auto text-xs text-red-700 inline-flex items-center gap-1">
+          <Trash2 className="w-3.5 h-3.5" />Remove field
+        </button>
+      </div>
+      {(field.showWhen?.length ?? 0) > 0 && (
+        <p className="text-[11px] text-slate-500">
+          Shown when {(field.showWhen ?? []).map(rule => `${rule.field} ${rule.op} ${rule.values.join(' / ')}`).join(' and ')}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function GroupEditor({
+  group,
+  onChange,
+  onRemove,
+}: {
+  group: CompletionGroup;
+  onChange: (group: CompletionGroup) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="border border-slate-300 rounded-xl p-4 space-y-3 bg-slate-50">
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-sm font-semibold text-slate-800">
+          Repeatable group
+          <span className="ml-2 font-normal text-slate-500">
+            {group.fields.length} field{group.fields.length === 1 ? '' : 's'}
+          </span>
+        </p>
+        <button type="button" onClick={onRemove} className="text-xs text-red-700 inline-flex items-center gap-1">
+          <Trash2 className="w-3.5 h-3.5" />Remove group
+        </button>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="text-xs text-slate-600">Group title
+          <input value={group.title} onChange={event => onChange({ ...group, title: event.target.value })} className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white" />
+        </label>
+        <label className="text-xs text-slate-600">Add button label
+          <input value={group.addLabel} onChange={event => onChange({ ...group, addLabel: event.target.value })} className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white" placeholder="Add camera" />
+        </label>
+        <label className="text-xs text-slate-600 sm:col-span-2">Row title template
+          <input value={group.nameTemplate} onChange={event => onChange({ ...group, nameTemplate: event.target.value })} className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white" placeholder="Camera {camera_number} — {location}" />
+        </label>
+      </div>
+      {(group.showWhen?.length ?? 0) > 0 && (
+        <p className="text-[11px] text-slate-500">
+          Shown when {(group.showWhen ?? []).map(rule => `${rule.field} ${rule.op} ${rule.values.join(' / ')}`).join(' and ')}
+        </p>
+      )}
+      <p className="text-xs font-medium text-slate-600">Fields in each item</p>
+      <div className="space-y-2">
+        {group.fields.map((field, index) => (
+          <FieldEditor
+            key={field.id}
+            field={field}
+            onChange={next => {
+              const fields = [...group.fields];
+              fields[index] = next;
+              onChange({ ...group, fields });
+            }}
+            onRemove={() => onChange({ ...group, fields: group.fields.filter((_, i) => i !== index) })}
+          />
+        ))}
+      </div>
+      <button
+        type="button"
+        className="text-sm font-medium inline-flex items-center gap-1"
+        onClick={() => onChange({ ...group, fields: [...group.fields, newField()] })}
+      >
+        <Plus className="w-4 h-4" />Add field to this group
+      </button>
+      {(group.nested ?? []).map((nested, index) => (
+        <GroupEditor
+          key={nested.id}
+          group={nested}
+          onChange={next => {
+            const nestedGroups = [...(group.nested ?? [])];
+            nestedGroups[index] = next;
+            onChange({ ...group, nested: nestedGroups });
+          }}
+          onRemove={() => onChange({ ...group, nested: (group.nested ?? []).filter((_, i) => i !== index) })}
+        />
+      ))}
+      <button
+        type="button"
+        className="text-sm font-medium inline-flex items-center gap-1"
+        onClick={() => onChange({ ...group, nested: [...(group.nested ?? []), newGroup()] })}
+      >
+        <Plus className="w-4 h-4" />Add nested group
+      </button>
+    </div>
+  );
+}
 
 export function CompletionTemplateEditor({
   schema,
@@ -113,44 +286,104 @@ export function CompletionTemplateEditor({
               style={item.id === section?.id ? { background: theme.primary } : undefined}
             >
               {item.title}
+              {(item.groups?.length ?? 0) > 0 ? ` (${item.groups?.length} group${item.groups?.length === 1 ? '' : 's'})` : ''}
             </button>
           ))}
+          <button
+            type="button"
+            className="px-3 py-2 rounded-lg text-sm border border-dashed border-slate-300 text-slate-600 inline-flex items-center gap-1"
+            onClick={() => {
+              const id = `section_${Date.now()}`;
+              onChange({
+                ...schema,
+                sections: [...schema.sections, { id, title: 'New section', summary: '', fields: [] }],
+              });
+              setSectionId(id);
+            }}
+          >
+            <Plus className="w-3.5 h-3.5" />Add section
+          </button>
         </div>
         {section && (
-          <div className="space-y-3">
-            <label className="block text-sm">Section title
-              <input value={section.title} onChange={event => updateSection({ ...section, title: event.target.value })} className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
-            </label>
+          <div className="space-y-4">
+            <div className="flex items-end gap-3">
+              <label className="block text-sm flex-1">Section title
+                <input value={section.title} onChange={event => updateSection({ ...section, title: event.target.value })} className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              </label>
+              {schema.sections.length > 1 && (
+                <button
+                  type="button"
+                  className="text-xs text-red-700 inline-flex items-center gap-1 pb-2"
+                  onClick={() => {
+                    const next = schema.sections.filter(item => item.id !== section.id);
+                    onChange({ ...schema, sections: next });
+                    setSectionId(next[0]?.id ?? '');
+                  }}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />Remove section
+                </button>
+              )}
+            </div>
             <label className="block text-sm">Instructions
               <textarea value={section.summary} onChange={event => updateSection({ ...section, summary: event.target.value })} className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm min-h-20" />
             </label>
-            {(section.fields ?? []).map((field, index) => (
-              <div key={field.id} className="border border-slate-200 rounded-lg p-3 grid gap-2 sm:grid-cols-2">
-                <input value={field.label} onChange={event => {
-                  const fields = [...(section.fields ?? [])];
-                  fields[index] = { ...field, label: event.target.value };
-                  updateSection({ ...section, fields });
-                }} className="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
-                <select value={field.type} onChange={event => {
-                  const fields = [...(section.fields ?? [])];
-                  fields[index] = { ...field, type: event.target.value as CompletionField['type'] };
-                  updateSection({ ...section, fields });
-                }} className="border border-slate-200 rounded-lg px-3 py-2 text-sm">
-                  {FIELD_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
-                </select>
-              </div>
-            ))}
-            <button
-              type="button"
-              className="text-sm font-medium"
-              style={{ color: theme.primary }}
-              onClick={() => updateSection({
-                ...section,
-                fields: [...(section.fields ?? []), { id: `field_${Date.now()}`, label: 'New question', type: 'text' }],
-              })}
-            >
-              Add field
-            </button>
+
+            <div className="space-y-2">
+              <p className="text-sm font-semibold text-slate-800">Questions</p>
+              {(section.fields ?? []).map((field, index) => (
+                <FieldEditor
+                  key={field.id}
+                  field={field}
+                  onChange={next => {
+                    const fields = [...(section.fields ?? [])];
+                    fields[index] = next;
+                    updateSection({ ...section, fields });
+                  }}
+                  onRemove={() => updateSection({ ...section, fields: (section.fields ?? []).filter((_, i) => i !== index) })}
+                />
+              ))}
+              <button
+                type="button"
+                className="text-sm font-medium inline-flex items-center gap-1"
+                style={{ color: theme.primary }}
+                onClick={() => updateSection({
+                  ...section,
+                  fields: [...(section.fields ?? []), newField()],
+                })}
+              >
+                <Plus className="w-4 h-4" />Add field
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <p className="text-sm font-semibold text-slate-800">Repeatable items</p>
+              <p className="text-xs text-slate-500">
+                Use these for cameras, recorders, power supplies and anything the engineer can add more than once. Each item can have fields such as IP address, model and location.
+              </p>
+              {(section.groups ?? []).map((group, index) => (
+                <GroupEditor
+                  key={group.id}
+                  group={group}
+                  onChange={next => {
+                    const groups = [...(section.groups ?? [])];
+                    groups[index] = next;
+                    updateSection({ ...section, groups });
+                  }}
+                  onRemove={() => updateSection({ ...section, groups: (section.groups ?? []).filter((_, i) => i !== index) })}
+                />
+              ))}
+              <button
+                type="button"
+                className="text-sm font-medium inline-flex items-center gap-1"
+                style={{ color: theme.primary }}
+                onClick={() => updateSection({
+                  ...section,
+                  groups: [...(section.groups ?? []), newGroup()],
+                })}
+              >
+                <Plus className="w-4 h-4" />Add repeatable group
+              </button>
+            </div>
           </div>
         )}
         <div className="flex flex-wrap gap-2">
