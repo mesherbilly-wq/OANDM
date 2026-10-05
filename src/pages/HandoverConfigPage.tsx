@@ -16,6 +16,7 @@ import {
   upsertHandoverDocumentType,
   deleteHandoverDocumentDefinition,
   isHandoverConfigLocalOnly,
+  PROJECT_WIDE_DOCUMENT_TYPE_KEY,
   type HandoverCaptureMethod,
   type HandoverDocumentDefinition,
   type HandoverDocumentType,
@@ -64,7 +65,12 @@ export default function HandoverConfigPage() {
       listCompletionDocuments().catch(() => []),
     ]);
 
-    setTypes(typeRows.filter(type => type.key !== 'project_wide'));
+    const ordered = [...typeRows].sort((a, b) => {
+      if (a.key === PROJECT_WIDE_DOCUMENT_TYPE_KEY) return -1;
+      if (b.key === PROJECT_WIDE_DOCUMENT_TYPE_KEY) return 1;
+      return (a.display_order - b.display_order) || a.label.localeCompare(b.label);
+    });
+    setTypes(ordered);
     setDefinitions(defRows);
     setWebForms(forms.map(form => ({ template_key: form.template_key, title: form.title })));
     const byTmpl: Record<string, SCTemplateMapping> = {};
@@ -262,7 +268,7 @@ export default function HandoverConfigPage() {
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
         <h2 className="font-semibold text-slate-900">Handover &amp; Commissioning document sets</h2>
         <p className="text-sm text-slate-500 mt-1">
-          Configure which document cards appear for each system. For each document choose a web form, SafetyCulture, or a PDF upload.
+          Configure which document cards appear for each system, including Project-wide documents such as acceptance certificates and RAMS. For each document choose a web form, SafetyCulture, or a PDF upload.
           Edit web form layouts on the{' '}
           <Link to={`/projects/${project.id}/templates`} className="text-cyan-600 hover:underline">Templates</Link>
           {' '}tab. Connect SafetyCulture on{' '}
@@ -582,7 +588,7 @@ export default function HandoverConfigPage() {
       )}
 
       <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs text-slate-500">
-        Toggle document types off to hide them from the system document type dropdown on the Documents tab.
+        Toggle document types off to hide them from the system document type dropdown on the Documents tab. Project-wide is the set used on the Project-wide tab.
         <div className="flex flex-wrap gap-2 mt-2">
           {types.map(type => (
             <button
