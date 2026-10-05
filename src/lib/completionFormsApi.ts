@@ -1,7 +1,6 @@
 import { supabase } from './supabase';
 import { publishedSchema } from './completionFormEngine';
 import { CCTV_NCP104_SCHEMA } from './cctvNcp104Completion';
-import { accessControlOmSchemaFor, isAccessControlSystemType } from './accessControlOmHandover';
 import { recordEmailOutbox, getEmailSettings } from './emailSettings';
 import { COMPLETION_TEMPLATE_KEY } from './completionFormTypes';
 import type {
@@ -182,12 +181,8 @@ export async function createCompletionDocument(opts: {
   systemType: string;
   title: string;
 }): Promise<CompletionTemplateSchema> {
-  const key = slugifyTemplateKey(opts.systemType, opts.title);
-  const existing = await loadLatestTemplate(key);
-  if (existing) return existing.schema;
-  const schema = isAccessControlSystemType(opts.systemType)
-    ? accessControlOmSchemaFor(key, opts.title.trim())
-    : blankCompletionSchema(key, opts.title.trim());
+  const key = await uniqueCompletionTemplateKey(opts.systemType, opts.title);
+  const schema = blankCompletionSchema(key, opts.title.trim());
   const { error } = await supabase.from('completion_form_templates').insert({
     template_key: key,
     version: 1,
@@ -201,9 +196,25 @@ export async function createCompletionDocument(opts: {
       throw new Error('Paste 046 SQL in Supabase so templates can be assigned to a system type.');
     }
     if (missingTemplateSql(error.message)) throw new Error('Paste 045 SQL in Supabase, then create the document again.');
+    if (/duplicate|unique/i.test(error.message)) {
+      throw new Error('A document with that name already exists. Choose a different name.');
+    }
     throw new Error(error.message);
   }
   return schema;
+}
+
+async function uniqueCompletionTemplateKey(systemType: string, title: string): Promise<string> {
+  const base = slugifyTemplateKey(systemType, title);
+  let key = base;
+  let n = 2;
+  while (await loadLatestTemplate(key)) {
+    const suffix = `_${n}`;
+    key = `${base.slice(0, Math.max(12, 72 - suffix.length))}${suffix}`;
+    n += 1;
+    if (n > 40) return `${base.slice(0, 48)}_${Date.now().toString(36)}`;
+  }
+  return key;
 }
 
 export async function listProjectCompletionAssignments(projectId: number, systemType: string): Promise<string[]> {
