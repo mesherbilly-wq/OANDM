@@ -1,5 +1,9 @@
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { supabase } from './supabase';
+import {
+  accessControlOmSchemaFor,
+  looksLikeOmAccessControlForm,
+} from './accessControlOmHandover';
 import type { CompletionReviewFlag, CompletionSection, CompletionTemplateSchema } from './completionFormTypes';
 
 type PageImage = { media_type: string; data: string };
@@ -28,33 +32,37 @@ function isImageFile(file: File): boolean {
   return file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(file.name);
 }
 
-async function extractPdf(file: File): Promise<{ text: string; images: PageImage[] }> {
+async function extractPdf(file: File): Promise<{ text: string; images: PageImage[]; pageCount: number }> {
   const pdfjsLib = await import('pdfjs-dist');
   pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
   const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
   const parts: string[] = [];
   const images: PageImage[] = [];
-  const pageLimit = Math.min(pdf.numPages, 12);
-  const imageLimit = Math.min(pdf.numPages, 4);
-  for (let i = 1; i <= pageLimit; i += 1) {
+  for (let i = 1; i <= pdf.numPages; i += 1) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    parts.push(content.items.map((item) => ('str' in item ? String(item.str ?? '') : '')).join(' '));
-    if (i <= imageLimit) {
-      const viewport = page.getViewport({ scale: 1.15 });
+    const pageText = content.items.map((item) => ('str' in item ? String(item.str ?? '') : '')).join(' ').trim();
+    parts.push(`--- Page ${i} of ${pdf.numPages} ---\n${pageText}`);
+  }
+  const text = parts.join('\n\n');
+  const sparse = text.replace(/--- Page \d+ of \d+ ---/g, '').replace(/\s+/g, '').length < 800;
+  if (sparse) {
+    const imageLimit = Math.min(pdf.numPages, 12);
+    for (let i = 1; i <= imageLimit; i += 1) {
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: 1.05 });
       const canvas = document.createElement('canvas');
       canvas.width = Math.round(viewport.width);
       canvas.height = Math.round(viewport.height);
       const ctx = canvas.getContext('2d');
-      if (ctx) {
-        await page.render({ canvasContext: ctx, canvas, viewport }).promise;
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
-        const data = dataUrl.split(',')[1];
-        if (data) images.push({ media_type: 'image/jpeg', data });
-      }
+      if (!ctx) continue;
+      await page.render({ canvasContext: ctx, canvas, viewport }).promise;
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.62);
+      const data = dataUrl.split(',')[1];
+      if (data) images.push({ media_type: 'image/jpeg', data });
     }
   }
-  return { text: parts.join('\n'), images };
+  return { text, images, pageCount: pdf.numPages };
 }
 
 async function extractWordText(file: File): Promise<string> {
@@ -88,13 +96,16 @@ export async function extractCompletionTemplateFromFile(opts: {
   file: File;
   systemType: string;
   existingTitle?: string;
+  existingKey?: string;
 }): Promise<{ title: string; statusNotice: string; sections: CompletionSection[]; reviewFlags: CompletionReviewFlag[] }> {
   let text = '';
   let images: PageImage[] = [];
+  let pageCount = 0;
   if (isPdfFile(opts.file)) {
     const extracted = await extractPdf(opts.file);
     text = extracted.text;
     images = extracted.images;
+    pageCount = extracted.pageCount;
   } else if (isWordFile(opts.file)) {
     text = await extractWordText(opts.file);
   } else if (isImageFile(opts.file)) {
@@ -105,12 +116,24 @@ export async function extractCompletionTemplateFromFile(opts: {
   if (!text.trim() && images.length === 0) {
     throw new Error('No readable content was found in that file.');
   }
+
+  if (looksLikeOmAccessControlForm(opts.file.name, text)) {
+    const builtIn = accessControlOmSchemaFor(opts.existingKey || 'access_control_om_handover', opts.existingTitle);
+    return {
+      title: builtIn.title,
+      statusNotice: builtIn.statusNotice,
+      sections: builtIn.sections,
+      reviewFlags: builtIn.reviewFlags,
+    };
+  }
+
   const { data, error } = await supabase.functions.invoke('extract-form-template', {
     body: {
       text,
       file_name: opts.file.name,
       system_type: opts.systemType,
       existing_title: opts.existingTitle ?? '',
+      page_count: pageCount || undefined,
       images,
     },
   });
@@ -119,12 +142,27 @@ export async function extractCompletionTemplateFromFile(opts: {
   if (!Array.isArray(data?.sections) || data.sections.length === 0) {
     throw new Error('The AI could not read a usable form from that file.');
   }
-  return {
+  const extracted = {
     title: String(data.title ?? opts.existingTitle ?? opts.file.name),
     statusNotice: String(data.statusNotice ?? 'Company form. This is not an official certificate.'),
     sections: data.sections as CompletionSection[],
     reviewFlags: Array.isArray(data.reviewFlags) ? data.reviewFlags as CompletionReviewFlag[] : [],
   };
+  if (schemaMissingSignOff(extracted.sections, text)) {
+    throw new Error('The AI missed customer sign-off or later checklist pages. Upload again so the full document is read.');
+  }
+  return extracted;
+}
+
+function schemaMissingSignOff(sections: CompletionSection[], text: string): boolean {
+  const hay = text.toLowerCase();
+  const sourceHasSignOff = /signature|sign off|sign-off|handover/.test(hay);
+  if (!sourceHasSignOff) return false;
+  const types = sections.flatMap(section => [
+    ...(section.fields ?? []),
+    ...(section.groups ?? []).flatMap(group => [...group.fields, ...(group.nested ?? []).flatMap(nested => nested.fields)]),
+  ]).map(field => field.type);
+  return !types.includes('signature') && !types.includes('declaration');
 }
 
 export function applyExtractedTemplate(

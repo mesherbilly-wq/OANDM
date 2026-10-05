@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import { publishedSchema } from './completionFormEngine';
 import { CCTV_NCP104_SCHEMA } from './cctvNcp104Completion';
+import { accessControlOmSchemaFor, isAccessControlSystemType } from './accessControlOmHandover';
 import { recordEmailOutbox, getEmailSettings } from './emailSettings';
 import { COMPLETION_TEMPLATE_KEY } from './completionFormTypes';
 import type {
@@ -184,7 +185,9 @@ export async function createCompletionDocument(opts: {
   const key = slugifyTemplateKey(opts.systemType, opts.title);
   const existing = await loadLatestTemplate(key);
   if (existing) return existing.schema;
-  const schema = blankCompletionSchema(key, opts.title.trim());
+  const schema = isAccessControlSystemType(opts.systemType)
+    ? accessControlOmSchemaFor(key, opts.title.trim())
+    : blankCompletionSchema(key, opts.title.trim());
   const { error } = await supabase.from('completion_form_templates').insert({
     template_key: key,
     version: 1,

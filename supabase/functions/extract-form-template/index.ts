@@ -31,17 +31,20 @@ JSON shape:
           "help": "optional short hint",
           "options": ["only for select, multiselect or test_result"],
           "unit": "optional unit",
-          "sensitive": false
+          "sensitive": false,
+          "showWhen": [{ "field": "other_field_id", "op": "eq", "values": ["Yes"] }]
         }
       ],
       "groups": [
         {
-          "id": "cameras",
-          "title": "Cameras",
-          "addLabel": "Add camera",
-          "nameTemplate": "Camera {camera_number} — {location}",
-          "identityFields": ["camera_number", "location"],
-          "fields": []
+          "id": "doors",
+          "title": "Doors",
+          "addLabel": "Add door",
+          "nameTemplate": "Door {location}",
+          "identityFields": ["location"],
+          "showWhen": [{ "field": "system_new_or_existing", "op": "eq", "values": ["New"] }],
+          "fields": [],
+          "nested": []
         }
       ]
     }
@@ -51,13 +54,17 @@ JSON shape:
 Field types allowed: text, textarea, number, date, tel, email, select, multiselect, test_result, photo, note, declaration, signature.
 
 Rules:
-- Keep every question, instruction, choice, repeatable group and conditional from the source
-- Use repeatable groups for equipment rows (cameras, recorders, doors, zones)
+- The source may be 20+ pages. You MUST implement EVERY page through the LAST page. Never stop after the first sections.
+- You MUST include customer training, operational checklists, repeatable equipment (Add camera / Add door / Add controller), and customer / engineer / project manager sign-off when they appear in the source.
+- Keep every question, instruction, choice, repeatable group and "If answer is X then…" condition from the source
+- Convert "If answer is X Answer Question(s)" into showWhen on the later fields or groups
+- Use repeatable groups for equipment rows (cameras, recorders, doors, controllers, readers, zones, trainees)
+- A missing signature, handover declaration or checklist from later pages makes the output invalid — go back and include them
 - Do not copy 25-page blank spacing
 - Do not treat the form as an official NSI or MoJ certificate
 - Usernames, passwords and verification codes must have "sensitive": true
 - Customer-facing handover/training/signature fields should have customerVisible true
-- Prefer test_result (Pass / Fail / Not tested / Not applicable) over a Yes-only tick
+- Prefer test_result (Pass / Fail / Not tested / Not applicable) over a Yes-only tick when the source is a test
 - Correct obvious spelling in labels; keep technical meaning
 - ids must be snake_case and unique within a section or group
 - Ignore headers, logos, page numbers and decorative branding from the scan; the app applies the company letterhead separately`;
@@ -90,12 +97,13 @@ Deno.serve(async (req) => {
   const fileName = String(body.file_name ?? "uploaded form");
   const systemType = String(body.system_type ?? "");
   const existingTitle = String(body.existing_title ?? "");
+  const pageCount = Number(body.page_count ?? 0);
   const images = Array.isArray(body.images) ? body.images as Array<{ media_type?: string; data?: string }> : [];
 
   if (!text && images.length === 0) return json({ error: "Upload a PDF, Word file or picture of the form." }, 400);
 
   const content: unknown[] = [];
-  for (const image of images.slice(0, 6)) {
+  for (const image of images.slice(0, 8)) {
     const data = String(image.data ?? "").replace(/\s/g, "");
     const mediaType = String(image.media_type ?? "image/jpeg");
     if (!data) continue;
@@ -109,9 +117,10 @@ Deno.serve(async (req) => {
 System type for this document: ${systemType || "not specified"}
 Existing document title if updating: ${existingTitle || "new document"}
 Source file name: ${fileName}
+Source page count: ${pageCount || "unknown"} — implement every page, including training, checklists and customer sign-off at the end.
 
 Source text:
-${text.slice(0, 80000) || "(no selectable text — read the attached page images)"}`,
+${text.slice(0, 180000) || "(no selectable text — read the attached page images)"}`,
   });
 
   try {
@@ -124,7 +133,7 @@ ${text.slice(0, 80000) || "(no selectable text — read the attached page images
       },
       body: JSON.stringify({
         model: "claude-opus-4-5",
-        max_tokens: 16000,
+        max_tokens: 24000,
         messages: [{ role: "user", content }],
       }),
     });

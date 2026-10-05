@@ -10,8 +10,9 @@ import {
   loadDocumentProjectSystems,
 } from '../lib/documentProjectSystems';
 import { fetchContractorForProject, resolveOmBrand, type ContractorBrand } from '../lib/contractorBrand';
-import { COMPLETION_TEMPLATE_KEY } from '../lib/completionFormTypes';
+import { COMPLETION_TEMPLATE_KEY, ACCESS_CONTROL_OM_TEMPLATE_KEY } from '../lib/completionFormTypes';
 import { defaultTemplateSchema } from '../lib/completionFormsApi';
+import { accessControlOmSchemaFor } from '../lib/accessControlOmHandover';
 import {
   assignProjectCompletionDocument,
   createCompletionDocument,
@@ -113,6 +114,7 @@ export default function CompletionTemplatesPage() {
       setSourceFileName(row?.source_file_name ?? null);
       if (row?.schema) setSchema(row.schema);
       else if (selectedKey === COMPLETION_TEMPLATE_KEY) setSchema(defaultTemplateSchema());
+      else if (selectedKey === ACCESS_CONTROL_OM_TEMPLATE_KEY) setSchema(accessControlOmSchemaFor(selectedKey));
     }).catch(err => {
       if (!cancelled) setError(err instanceof Error ? err.message : 'Could not open that document.');
     });
@@ -203,13 +205,14 @@ export default function CompletionTemplatesPage() {
         file,
         systemType,
         existingTitle: schema.title,
+        existingKey: schema.key,
       });
       const next = applyExtractedTemplate(schema, extracted);
       setSchema(next);
       setSourceFileName(file.name);
       await saveDraftTemplate(next, { systemType, sourceFileName: file.name });
       setVersions(await listTemplateVersions(next.key));
-      setNotice(`Template drafted from ${file.name}. Headers, footer and colours stay as set in Companies.`);
+      setNotice(`Full template drafted from ${file.name}, including checklists and sign-off. Headers, footer and colours stay as set in Companies.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not read that form.');
     } finally {

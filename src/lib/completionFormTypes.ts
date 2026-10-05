@@ -1,5 +1,6 @@
 export const COMPLETION_TEMPLATE_KEY = 'cctv_ncp104_completion';
 export const COMPLETION_TEMPLATE_VERSION = 1;
+export const ACCESS_CONTROL_OM_TEMPLATE_KEY = 'access_control_om_handover';
 
 export type CompletionFormStatus =
   | 'draft'
