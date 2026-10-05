@@ -18,6 +18,7 @@ export function CompletionTemplateEditor({
   onImportFile,
   onSaveDraft,
   onPublish,
+  onDelete,
   error,
   notice,
 }: {
@@ -30,6 +31,7 @@ export function CompletionTemplateEditor({
   onImportFile: (file: File) => void;
   onSaveDraft: () => void;
   onPublish: () => void;
+  onDelete?: () => void;
   error: string | null;
   notice: string | null;
 }) {
@@ -155,6 +157,9 @@ export function CompletionTemplateEditor({
           <button type="button" className="px-3 py-2 border border-slate-200 rounded-lg text-sm" onClick={() => setPreview(true)}>Preview mobile form</button>
           <button type="button" className="px-3 py-2 border border-slate-200 rounded-lg text-sm" onClick={onSaveDraft}>Save draft</button>
           <button type="button" className="px-3 py-2 text-white rounded-lg text-sm" style={{ background: theme.primary }} onClick={onPublish}>Publish new version</button>
+          {onDelete && (
+            <button type="button" className="px-3 py-2 border border-red-200 text-red-700 rounded-lg text-sm" onClick={onDelete}>Delete template</button>
+          )}
         </div>
       </div>
       <footer className="border-t px-6 py-3 flex items-center justify-between" style={{ borderColor: theme.primary }}>

@@ -1,17 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link as LinkIcon } from 'lucide-react';
+import { Link as LinkIcon, Trash2 } from 'lucide-react';
 import { displayProjectJobNumber } from '../../lib/projectJobNumber';
 import { fetchContractorForProject, resolveOmBrand, type ContractorBrand } from '../../lib/contractorBrand';
 import { buildCompletionPdf } from '../../lib/completionFormPdf';
 import {
   approveForCustomer,
-  ensurePublishedTemplate,
-  getProjectCompletionAssignment,
+  deleteCompletionForm,
   issueCompletionForm,
   issueCustomerToken,
   listCompletionDocuments,
   listCompletionForms,
   listFormTokens,
+  listProjectCompletionAssignments,
   replaceEngineerLink,
   returnCompletionForm,
   saveApprovedPdf,
@@ -51,8 +51,8 @@ export function CompletionOfficePanel({ project }: { project: Project }) {
   const [outstanding, setOutstanding] = useState(false);
   const [projectSystems, setProjectSystems] = useState<ProjectSystem[]>([]);
   const [activeSystemKey, setActiveSystemKey] = useState(PROJECT_WIDE_SYSTEM_KEY);
+  const [issueDocs, setIssueDocs] = useState<Array<{ template_key: string; title: string }>>([]);
   const [templateKey, setTemplateKey] = useState('');
-  const [templateTitle, setTemplateTitle] = useState('');
 
   const theme = resolveOmBrand(brand);
   const systemType = activeSystemKey === PROJECT_WIDE_SYSTEM_KEY ? PROJECT_WIDE_SYSTEM_LABEL : activeSystemKey;
@@ -95,15 +95,15 @@ export function CompletionOfficePanel({ project }: { project: Project }) {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      if (systemType === 'CCTV') {
-        await ensurePublishedTemplate().catch(() => undefined);
-      }
-      const assigned = await getProjectCompletionAssignment(project.id, systemType);
-      const docs = await listCompletionDocuments(systemType);
+      const [assigned, docs] = await Promise.all([
+        listProjectCompletionAssignments(project.id, systemType),
+        listCompletionDocuments(systemType),
+      ]);
       if (cancelled) return;
-      const chosen = docs.find(doc => doc.template_key === assigned) ?? docs[0];
-      setTemplateKey(chosen?.template_key ?? '');
-      setTemplateTitle(chosen?.title ?? '');
+      const assignedDocs = docs.filter(doc => assigned.includes(doc.template_key));
+      const available = assignedDocs.length > 0 ? assignedDocs : docs;
+      setIssueDocs(available.map(doc => ({ template_key: doc.template_key, title: doc.title })));
+      setTemplateKey(current => available.some(doc => doc.template_key === current) ? current : (available[0]?.template_key ?? ''));
     })();
     return () => {
       cancelled = true;
@@ -121,7 +121,7 @@ export function CompletionOfficePanel({ project }: { project: Project }) {
         <div>
           <h3 className="text-base font-semibold text-slate-900">Completion and handover</h3>
           <p className="text-sm text-slate-500 mt-1">
-            Issue a secure link using the document assigned to this system on the Templates tab.
+            Issue a secure link using the documents assigned to this system on the Templates tab.
             After office review the customer signs on site or through a separate link. The approved PDF goes into this project’s O&amp;M pack.
           </p>
         </div>
@@ -151,11 +151,26 @@ export function CompletionOfficePanel({ project }: { project: Project }) {
             );
           })}
         </div>
-        <p className="text-sm text-slate-600">
-          {templateTitle
-            ? <>Document for {systemType}: <span className="font-medium text-slate-900">{templateTitle}</span></>
-            : <>No document assigned for {systemType}. Choose one on the Templates tab.</>}
-        </p>
+        {issueDocs.length > 0 ? (
+          <label className="block text-sm text-slate-700">Document to issue
+            <select
+              value={templateKey}
+              onChange={event => setTemplateKey(event.target.value)}
+              className="mt-1 w-full max-w-md border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white"
+            >
+              {issueDocs.map(doc => (
+                <option key={doc.template_key} value={doc.template_key}>{doc.title}</option>
+              ))}
+            </select>
+            <span className="block text-xs text-slate-500 mt-1">
+              {issueDocs.length === 1
+                ? `Assigned for ${systemType}. Tick more documents on the Templates tab.`
+                : `${issueDocs.length} documents assigned for ${systemType}.`}
+            </span>
+          </label>
+        ) : (
+          <p className="text-sm text-slate-600">No document assigned for {systemType}. Choose one or more on the Templates tab.</p>
+        )}
 
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="text-sm text-slate-700">Engineer or subcontractor name
@@ -200,7 +215,7 @@ export function CompletionOfficePanel({ project }: { project: Project }) {
           className="min-h-11 px-4 rounded-lg text-white text-sm font-medium disabled:opacity-50"
           style={{ background: theme.primary }}
         >
-          Issue {templateTitle || 'completion form'}
+          Issue {issueDocs.find(doc => doc.template_key === templateKey)?.title || 'completion form'}
         </button>
         <p className="text-xs text-slate-500">
           Layout preview only (not saved): <a className="underline" href="/c/demo-cctv" target="_blank" rel="noreferrer">engineer demo</a>
@@ -222,6 +237,16 @@ export function CompletionOfficePanel({ project }: { project: Project }) {
           onNotice={setNotice}
           onError={setError}
           onRefresh={() => void load()}
+          onDelete={async () => {
+            if (!confirm(`Remove "${form.title}"? Issued links will stop working. This cannot be undone.`)) return;
+            try {
+              await deleteCompletionForm(form);
+              setNotice('Form removed.');
+              await load();
+            } catch (err) {
+              setError(err instanceof Error ? err.message : 'Could not remove the form.');
+            }
+          }}
         />
       ))}
     </div>
@@ -239,6 +264,7 @@ function FormCard({
   onNotice,
   onError,
   onRefresh,
+  onDelete,
 }: {
   form: CompletionFormSummary;
   project: Project;
@@ -250,6 +276,7 @@ function FormCard({
   onNotice: (value: string) => void;
   onError: (value: string) => void;
   onRefresh: () => void;
+  onDelete: () => Promise<void>;
 }) {
   const theme = resolveOmBrand(brand);
   return (
@@ -340,8 +367,15 @@ function FormCard({
             } catch (err) {
               onError(err instanceof Error ? err.message : 'Could not build the PDF.');
             }
-          }}>Generate O&amp;M PDF</button>
+            }}>Generate O&amp;M PDF</button>
         )}
+        <button
+          type="button"
+          className="text-sm px-3 py-2 border border-red-200 text-red-700 rounded-lg inline-flex items-center gap-1"
+          onClick={() => void onDelete()}
+        >
+          <Trash2 className="w-3.5 h-3.5" />Remove form
+        </button>
       </div>
       <p className="text-xs text-slate-400">
         Simpro return attach is queued only. It is not sent to a live job from this screen.

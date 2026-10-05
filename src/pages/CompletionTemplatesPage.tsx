@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, Plus } from 'lucide-react';
+import { Loader2, Plus, Trash2 } from 'lucide-react';
 import { useProject } from './ProjectLayout';
 import { supabase } from '../lib/supabase';
 import { getCategoryStyle, type ProjectSystem } from '../lib/systems';
@@ -13,15 +13,16 @@ import { fetchContractorForProject, resolveOmBrand, type ContractorBrand } from 
 import { COMPLETION_TEMPLATE_KEY } from '../lib/completionFormTypes';
 import { defaultTemplateSchema } from '../lib/completionFormsApi';
 import {
+  assignProjectCompletionDocument,
   createCompletionDocument,
-  ensurePublishedTemplate,
-  getProjectCompletionAssignment,
+  deleteCompletionTemplate,
   listCompletionDocuments,
+  listProjectCompletionAssignments,
   listTemplateVersions,
   loadLatestTemplate,
   publishDraftTemplate,
   saveDraftTemplate,
-  saveProjectCompletionAssignment,
+  unassignProjectCompletionDocument,
 } from '../lib/completionFormsApi';
 import { applyExtractedTemplate, extractCompletionTemplateFromFile } from '../lib/extractFormTemplate';
 import { CompletionTemplateEditor } from '../components/completion/CompletionTemplateEditor';
@@ -34,6 +35,7 @@ export default function CompletionTemplatesPage() {
   const [projectSystems, setProjectSystems] = useState<ProjectSystem[]>([]);
   const [activeSystemKey, setActiveSystemKey] = useState(PROJECT_WIDE_SYSTEM_KEY);
   const [documents, setDocuments] = useState<Array<{ template_key: string; title: string; latest_version: number; latest_status: string }>>([]);
+  const [assignedKeys, setAssignedKeys] = useState<string[]>([]);
   const [selectedKey, setSelectedKey] = useState('');
   const [schema, setSchema] = useState<CompletionTemplateSchema | null>(null);
   const [versions, setVersions] = useState<Array<{ id: number; version: number; status: string; title: string }>>([]);
@@ -76,16 +78,16 @@ export default function CompletionTemplatesPage() {
     const load = async () => {
       setError(null);
       try {
-        if (systemType === 'CCTV') {
-          await ensurePublishedTemplate(COMPLETION_TEMPLATE_KEY).catch(() => undefined);
-        }
-        const docs = await listCompletionDocuments(systemType);
+        const [docs, assigned] = await Promise.all([
+          listCompletionDocuments(systemType),
+          listProjectCompletionAssignments(pid, systemType),
+        ]);
         if (cancelled) return;
         setDocuments(docs);
-        const assigned = await getProjectCompletionAssignment(pid, systemType);
-        const nextKey = assigned && docs.some(doc => doc.template_key === assigned)
-          ? assigned
-          : docs[0]?.template_key ?? '';
+        setAssignedKeys(assigned);
+        const nextKey = (assigned[0] && docs.some(doc => doc.template_key === assigned[0]) ? assigned[0] : null)
+          ?? docs[0]?.template_key
+          ?? '';
         setSelectedKey(nextKey);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load templates.');
@@ -119,17 +121,52 @@ export default function CompletionTemplatesPage() {
     };
   }, [selectedKey]);
 
-  const handleDocumentChange = async (templateKey: string) => {
+  const handleSelectDocument = (templateKey: string) => {
     setSelectedKey(templateKey);
-    if (!templateKey) return;
+  };
+
+  const handleToggleAssigned = async (templateKey: string, assigned: boolean) => {
     setSavingType(true);
+    setError(null);
     try {
-      await saveProjectCompletionAssignment(pid, systemType, templateKey);
-      setNotice(`This ${systemType} system will use that document.`);
+      if (assigned) {
+        await assignProjectCompletionDocument(pid, systemType, templateKey);
+        setAssignedKeys(current => current.includes(templateKey) ? current : [...current, templateKey]);
+        setNotice(`Added to ${systemType} on this project.`);
+      } else {
+        await unassignProjectCompletionDocument(pid, systemType, templateKey);
+        setAssignedKeys(current => current.filter(key => key !== templateKey));
+        setNotice(`Removed from ${systemType} on this project. The template itself is kept.`);
+      }
+      setSelectedKey(templateKey);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not save the document for this system.');
+      setError(err instanceof Error ? err.message : 'Could not update the documents for this system.');
     } finally {
       setSavingType(false);
+    }
+  };
+
+  const handleDeleteTemplate = async (templateKey: string, title: string) => {
+    if (!confirm(`Delete template "${title}"? Issued copies stay on Commissioning until you remove them. This cannot be undone.`)) return;
+    setError(null);
+    try {
+      await deleteCompletionTemplate(templateKey);
+      const [docs, assigned] = await Promise.all([
+        listCompletionDocuments(systemType),
+        listProjectCompletionAssignments(pid, systemType),
+      ]);
+      setDocuments(docs);
+      setAssignedKeys(assigned);
+      const nextKey = selectedKey === templateKey ? (docs[0]?.template_key ?? '') : selectedKey;
+      setSelectedKey(nextKey);
+      if (!nextKey) {
+        setSchema(null);
+        setVersions([]);
+        setSourceFileName(null);
+      }
+      setNotice('Template deleted.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete the template.');
     }
   };
 
@@ -145,7 +182,7 @@ export default function CompletionTemplatesPage() {
       setNewTitle('');
       const docs = await listCompletionDocuments(systemType);
       setDocuments(docs);
-      await handleDocumentChange(created.key);
+      await handleToggleAssigned(created.key, true);
       setSchema(created);
       setNotice('New document created as a draft. Upload an existing form or add questions.');
     } catch (err) {
@@ -186,7 +223,7 @@ export default function CompletionTemplatesPage() {
         <div>
           <h2 className="font-semibold text-slate-900">Templates</h2>
           <p className="text-sm text-slate-500 mt-0.5">
-            Pick a system, choose its completion document, then edit or AI-import the form. Branding follows Companies.
+            Pick a system, assign one or more completion documents, then edit or AI-import a form. Branding follows Companies.
           </p>
         </div>
       </div>
@@ -210,31 +247,54 @@ export default function CompletionTemplatesPage() {
         })}
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4 flex flex-wrap items-end gap-4">
-        <div className="min-w-[16rem] flex-1">
-          <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
-            System document
-          </label>
-          <select
-            value={selectedKey}
-            onChange={event => void handleDocumentChange(event.target.value)}
-            className="w-full max-w-md text-sm border border-slate-200 rounded-lg px-3 py-2.5 bg-white focus:outline-none focus:ring-2 disabled:opacity-50"
-            style={{ outlineColor: theme.primary }}
-          >
-            {documents.length === 0 && <option value="">No documents for {systemType} yet</option>}
-            {documents.map(doc => (
-              <option key={doc.template_key} value={doc.template_key}>
-                {doc.title} (v{doc.latest_version} {doc.latest_status})
-              </option>
-            ))}
-          </select>
-          <p className="text-xs text-slate-500 mt-1.5">
-            {activeSystemKey === PROJECT_WIDE_SYSTEM_KEY
-              ? 'Project-wide completion document for this job.'
-              : `Document used when issuing a completion form for ${systemType}. Saved per system.`}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4 space-y-4">
+        <div>
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Documents for {systemType}</p>
+          <p className="text-xs text-slate-500 mt-1">
+            Tick every form this system should use. Open a row to edit it. Commissioning can issue any ticked document.
           </p>
         </div>
-        <div className="flex items-end gap-2">
+        {documents.length === 0 ? (
+          <p className="text-sm text-slate-500">No documents for {systemType} yet. Add one below.</p>
+        ) : (
+          <ul className="divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden">
+            {documents.map(doc => {
+              const assigned = assignedKeys.includes(doc.template_key);
+              const selected = selectedKey === doc.template_key;
+              return (
+                <li key={doc.template_key} className={`flex items-center gap-3 px-3 py-2.5 ${selected ? 'bg-slate-50' : 'bg-white'}`}>
+                  <input
+                    type="checkbox"
+                    checked={assigned}
+                    onChange={event => void handleToggleAssigned(doc.template_key, event.target.checked)}
+                    className="h-4 w-4"
+                    aria-label={`Assign ${doc.title} to ${systemType}`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleSelectDocument(doc.template_key)}
+                    className="flex-1 text-left min-w-0"
+                  >
+                    <span className="block text-sm font-medium text-slate-900 truncate">{doc.title}</span>
+                    <span className="block text-xs text-slate-500">
+                      v{doc.latest_version} {doc.latest_status}
+                      {assigned ? ' · assigned to this system' : ''}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="min-h-10 min-w-10 inline-flex items-center justify-center text-red-600 hover:bg-red-50 rounded-lg"
+                    aria-label={`Delete ${doc.title}`}
+                    onClick={() => void handleDeleteTemplate(doc.template_key, doc.title)}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <div className="flex flex-wrap items-end gap-2">
           <label className="block text-sm">
             <span className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">New document</span>
             <input
@@ -252,12 +312,12 @@ export default function CompletionTemplatesPage() {
           >
             <Plus className="w-4 h-4" />Add
           </button>
+          {savingType && (
+            <div className="flex items-center gap-2 text-xs text-slate-500 pb-2">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />Saving…
+            </div>
+          )}
         </div>
-        {savingType && (
-          <div className="flex items-center gap-2 text-xs text-slate-500 pb-2">
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />Saving…
-          </div>
-        )}
       </div>
 
       {schema ? (
@@ -289,7 +349,7 @@ export default function CompletionTemplatesPage() {
                 await saveDraftTemplate(schema, { systemType, sourceFileName });
                 await publishDraftTemplate(schema.key);
                 setVersions(await listTemplateVersions(schema.key));
-                await handleDocumentChange(schema.key);
+                await handleToggleAssigned(schema.key, true);
                 setNotice('Published. New issues will use this version. Old issued forms keep theirs.');
                 setError(null);
               } catch (err) {
@@ -297,6 +357,7 @@ export default function CompletionTemplatesPage() {
               }
             })();
           }}
+          onDelete={() => void handleDeleteTemplate(schema.key, schema.title)}
         />
       ) : (
         <div className="bg-white border border-slate-200 rounded-xl px-5 py-10 text-center text-sm text-slate-500">

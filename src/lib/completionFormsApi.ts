@@ -200,33 +200,101 @@ export async function createCompletionDocument(opts: {
   return schema;
 }
 
-export async function getProjectCompletionAssignment(projectId: number, systemType: string): Promise<string | null> {
+export async function listProjectCompletionAssignments(projectId: number, systemType: string): Promise<string[]> {
   const { data, error } = await supabase
     .from('project_completion_documents')
     .select('template_key')
     .eq('project_id', projectId)
     .eq('system_type', systemType)
-    .maybeSingle();
+    .order('updated_at', { ascending: false });
   if (error) {
-    if (missingTemplateSql(error.message)) return null;
+    if (missingTemplateSql(error.message)) return [];
     throw new Error(error.message);
   }
-  return data?.template_key ? String(data.template_key) : null;
+  return (data ?? []).map(row => String(row.template_key)).filter(Boolean);
 }
 
-export async function saveProjectCompletionAssignment(projectId: number, systemType: string, templateKey: string): Promise<void> {
+export async function assignProjectCompletionDocument(projectId: number, systemType: string, templateKey: string): Promise<void> {
   const { error } = await supabase.from('project_completion_documents').upsert({
     project_id: projectId,
     system_type: systemType,
     template_key: templateKey,
     updated_at: new Date().toISOString(),
-  }, { onConflict: 'project_id,system_type' });
+  }, { onConflict: 'project_id,system_type,template_key' });
   if (error) {
+    if (/on conflict|no unique|project_id_system_type_key/i.test(error.message)) {
+      throw new Error('Paste 047 SQL in Supabase so a system can keep more than one document.');
+    }
     if (missingTemplateSql(error.message)) {
-      throw new Error('Paste 046 SQL in Supabase so each system can keep its selected document.');
+      throw new Error('Paste 046 SQL in Supabase so each system can keep its selected documents.');
     }
     throw new Error(error.message);
   }
+}
+
+export async function unassignProjectCompletionDocument(projectId: number, systemType: string, templateKey: string): Promise<void> {
+  const { error } = await supabase.from('project_completion_documents')
+    .delete()
+    .eq('project_id', projectId)
+    .eq('system_type', systemType)
+    .eq('template_key', templateKey);
+  if (error) {
+    if (missingTemplateSql(error.message)) {
+      throw new Error('Paste 046 SQL in Supabase so each system can keep its selected documents.');
+    }
+    throw new Error(error.message);
+  }
+}
+
+export async function deleteCompletionForm(form: CompletionFormSummary): Promise<void> {
+  await supabase.from('completion_form_tokens')
+    .update({ revoked_at: new Date().toISOString() })
+    .eq('form_id', form.id)
+    .is('revoked_at', null);
+  const { data: assets } = await supabase
+    .from('completion_form_assets')
+    .select('storage_path')
+    .eq('form_id', form.id);
+  const assetPaths = (assets ?? []).map(row => String(row.storage_path)).filter(Boolean);
+  if (assetPaths.length) {
+    await supabase.storage.from('completion-form-files').remove(assetPaths);
+  }
+  if (form.pdf_storage_path) {
+    await supabase.storage.from('om-uploads').remove([form.pdf_storage_path]);
+  }
+  if (form.pdf_url) {
+    await supabase.from('om_pack_uploads')
+      .delete()
+      .eq('project_id', form.project_id)
+      .eq('file_url', form.pdf_url);
+  }
+  const { error } = await supabase.from('completion_forms').delete().eq('id', form.id);
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteCompletionTemplate(templateKey: string): Promise<{ issuedCount: number }> {
+  const { count } = await supabase
+    .from('completion_forms')
+    .select('id', { count: 'exact', head: true })
+    .eq('template_key', templateKey);
+  const { data: versions, error: versionError } = await supabase
+    .from('completion_form_templates')
+    .select('id')
+    .eq('template_key', templateKey);
+  if (versionError) throw new Error(versionError.message);
+  const ids = (versions ?? []).map(row => Number(row.id)).filter(Boolean);
+  if (ids.length) {
+    await supabase.from('completion_forms').update({ template_id: null }).in('template_id', ids);
+  }
+  await supabase.from('project_completion_documents').delete().eq('template_key', templateKey);
+  const { error } = await supabase.from('completion_form_templates').delete().eq('template_key', templateKey);
+  if (error) {
+    if (/foreign key|violates/i.test(error.message)) {
+      throw new Error('This template is still linked to an issued form. Remove those forms on Commissioning first, or try again.');
+    }
+    throw new Error(error.message);
+  }
+  return { issuedCount: count ?? 0 };
 }
 
 export async function listCompletionForms(projectId: number): Promise<CompletionFormSummary[]> {
