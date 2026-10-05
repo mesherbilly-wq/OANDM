@@ -98,6 +98,18 @@ export interface CompletionTemplateSchema {
   reviewFlags: CompletionReviewFlag[];
 }
 
+export interface CompletionTemplateRecord {
+  id: number;
+  template_key: string;
+  version: number;
+  title: string;
+  status: string;
+  system_type: string | null;
+  schema: CompletionTemplateSchema;
+  published_at: string | null;
+  source_file_name?: string | null;
+}
+
 export interface CompletionPhoto {
   id: string;
   fieldPath: string;

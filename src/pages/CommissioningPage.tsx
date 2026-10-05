@@ -7,9 +7,6 @@ import {
   Plus, CheckCircle, XCircle, Circle, Save, Loader2,
 } from 'lucide-react';
 import { CompletionOfficePanel } from '../components/completion/CompletionOfficePanel';
-import { CompletionTemplateEditor } from '../components/completion/CompletionTemplateEditor';
-import { canAccessHandoverConfig } from '../lib/appRoles';
-import { useUserAccess } from '../lib/userAccess';
 
 const DEFAULT_TEMPLATES: Record<string, { sections: string[]; items: Array<{ section: string; test_description: string; expected_result: string }> }> = {
   CCTV: {
@@ -119,7 +116,6 @@ const DEFAULT_TEMPLATES: Record<string, { sections: string[]; items: Array<{ sec
 
 export default function CommissioningPage() {
   const { project } = useProject();
-  const { role } = useUserAccess();
   const pid = project?.id;
 
   const [activeTab, setActiveTab] = useState<string>('CCTV');
@@ -213,7 +209,7 @@ export default function CommissioningPage() {
       <div className="flex items-center justify-between bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
         <div>
           <h2 className="font-semibold text-slate-900">Commissioning</h2>
-          <p className="text-sm text-slate-500 mt-0.5">CCTV completion handover and system test checklists</p>
+          <p className="text-sm text-slate-500 mt-0.5">Issue a completion form from the assigned Templates document, then run system test checklists</p>
         </div>
         <span className={`text-sm font-bold px-3 py-1 rounded-full ${
           status === 'PASS' ? 'bg-emerald-100 text-emerald-700' : status === 'FAIL' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-600'
@@ -221,7 +217,6 @@ export default function CommissioningPage() {
       </div>
 
       {project && <CompletionOfficePanel project={project} />}
-      {canAccessHandoverConfig(role) && <CompletionTemplateEditor />}
 
       {/* System tabs */}
       {visibleTabs.length > 0 ? (

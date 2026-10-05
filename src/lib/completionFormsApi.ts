@@ -8,8 +8,10 @@ import type {
   CompletionFormSummary,
   CompletionPublicForm,
   CompletionSignature,
+  CompletionTemplateRecord,
   CompletionTemplateSchema,
 } from './completionFormTypes';
+import { blankCompletionSchema, slugifyTemplateKey } from './completionTemplateSystems';
 
 function invoke<T>(action: string, payload: Record<string, unknown>): Promise<T> {
   return supabase.functions.invoke('completion-forms', { body: { action, ...payload } }).then(({ data, error }) => {
@@ -29,30 +31,202 @@ export function completionFormUrl(token: string): string {
   return `${window.location.origin}/c/${token}`;
 }
 
-export async function ensurePublishedTemplate(): Promise<{ id: number; schema: CompletionTemplateSchema }> {
+function missingTemplateSql(message: string): boolean {
+  return /does not exist|schema cache|column .*system_type|project_completion_documents/i.test(message);
+}
+
+export async function ensurePublishedTemplate(templateKey = COMPLETION_TEMPLATE_KEY): Promise<{ id: number; schema: CompletionTemplateSchema; systemType: string | null }> {
+  const published = await getPublishedTemplate(templateKey);
+  if (published) return published;
+  if (templateKey !== COMPLETION_TEMPLATE_KEY) {
+    throw new Error('Publish this document on the Templates tab before issuing it.');
+  }
   const schema = publishedSchema();
-  const { data: existing } = await supabase
-    .from('completion_form_templates')
-    .select('id, schema')
-    .eq('template_key', schema.key)
-    .eq('version', schema.version)
-    .maybeSingle();
-  if (existing?.id) return { id: Number(existing.id), schema: (existing.schema as CompletionTemplateSchema) ?? schema };
   const { data, error } = await supabase.from('completion_form_templates').insert({
     template_key: schema.key,
     version: schema.version,
     title: schema.title,
     status: 'published',
+    system_type: 'CCTV',
     schema,
     published_at: new Date().toISOString(),
   }).select('id').single();
   if (error) {
-    if (/does not exist|schema cache/i.test(error.message)) {
-      throw new Error('Paste 045 SQL in Supabase, then issue the form again.');
+    if (/column .*system_type/i.test(error.message)) {
+      const retry = await supabase.from('completion_form_templates').insert({
+        template_key: schema.key,
+        version: schema.version,
+        title: schema.title,
+        status: 'published',
+        schema,
+        published_at: new Date().toISOString(),
+      }).select('id').single();
+      if (retry.error) throw new Error(missingTemplateSql(retry.error.message) ? 'Paste 045 SQL in Supabase, then issue the form again.' : retry.error.message);
+      return { id: Number(retry.data.id), schema, systemType: 'CCTV' };
+    }
+    if (missingTemplateSql(error.message)) throw new Error('Paste 045 SQL in Supabase, then issue the form again.');
+    throw new Error(error.message);
+  }
+  return { id: Number(data.id), schema, systemType: 'CCTV' };
+}
+
+export async function getPublishedTemplate(templateKey: string): Promise<{ id: number; schema: CompletionTemplateSchema; systemType: string | null } | null> {
+  let query = await supabase
+    .from('completion_form_templates')
+    .select('id, schema, system_type')
+    .eq('template_key', templateKey)
+    .eq('status', 'published')
+    .order('version', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (query.error && /column .*system_type/i.test(query.error.message)) {
+    query = await supabase
+      .from('completion_form_templates')
+      .select('id, schema')
+      .eq('template_key', templateKey)
+      .eq('status', 'published')
+      .order('version', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+  }
+  if (query.error) {
+    if (missingTemplateSql(query.error.message)) return null;
+    throw new Error(query.error.message);
+  }
+  if (!query.data?.id) return null;
+  return {
+    id: Number(query.data.id),
+    schema: (query.data.schema as CompletionTemplateSchema),
+    systemType: (query.data as { system_type?: string | null }).system_type ?? (templateKey === COMPLETION_TEMPLATE_KEY ? 'CCTV' : null),
+  };
+}
+
+export async function listCompletionDocuments(systemType?: string): Promise<Array<{
+  template_key: string;
+  title: string;
+  system_type: string | null;
+  latest_version: number;
+  latest_status: string;
+}>> {
+  const withType = await supabase
+    .from('completion_form_templates')
+    .select('template_key, title, system_type, version, status')
+    .order('version', { ascending: false });
+  const result = withType.error && /column .*system_type/i.test(withType.error.message)
+    ? await supabase.from('completion_form_templates').select('template_key, title, version, status').order('version', { ascending: false })
+    : withType;
+  const { data, error } = result;
+  if (error) {
+    if (missingTemplateSql(error.message)) return [];
+    throw new Error(error.message);
+  }
+  const latest = new Map<string, { template_key: string; title: string; system_type: string | null; latest_version: number; latest_status: string }>();
+  for (const row of data ?? []) {
+    const key = String(row.template_key);
+    if (latest.has(key)) continue;
+    latest.set(key, {
+      template_key: key,
+      title: String(row.title ?? key),
+      system_type: (row as { system_type?: string | null }).system_type ?? (key === COMPLETION_TEMPLATE_KEY ? 'CCTV' : null),
+      latest_version: Number(row.version),
+      latest_status: String(row.status),
+    });
+  }
+  const rows = Array.from(latest.values());
+  if (!systemType) return rows;
+  return rows.filter(row => (row.system_type ?? '') === systemType);
+}
+
+export async function listTemplateVersions(templateKey = COMPLETION_TEMPLATE_KEY): Promise<Array<{ id: number; version: number; status: string; title: string }>> {
+  const { data, error } = await supabase
+    .from('completion_form_templates')
+    .select('id, version, status, title')
+    .eq('template_key', templateKey)
+    .order('version', { ascending: false });
+  if (error) {
+    if (missingTemplateSql(error.message)) return [];
+    throw new Error(error.message);
+  }
+  return data ?? [];
+}
+
+export async function loadLatestTemplate(templateKey: string): Promise<CompletionTemplateRecord | null> {
+  let query = await supabase
+    .from('completion_form_templates')
+    .select('id, template_key, version, title, status, system_type, schema, published_at, source_file_name')
+    .eq('template_key', templateKey)
+    .order('version', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (query.error && /column .*(system_type|source_file_name)/i.test(query.error.message)) {
+    query = await supabase
+      .from('completion_form_templates')
+      .select('id, template_key, version, title, status, schema, published_at')
+      .eq('template_key', templateKey)
+      .order('version', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+  }
+  if (query.error) {
+    if (missingTemplateSql(query.error.message)) return null;
+    throw new Error(query.error.message);
+  }
+  return query.data as CompletionTemplateRecord | null;
+}
+
+export async function createCompletionDocument(opts: {
+  systemType: string;
+  title: string;
+}): Promise<CompletionTemplateSchema> {
+  const key = slugifyTemplateKey(opts.systemType, opts.title);
+  const existing = await loadLatestTemplate(key);
+  if (existing) return existing.schema;
+  const schema = blankCompletionSchema(key, opts.title.trim());
+  const { error } = await supabase.from('completion_form_templates').insert({
+    template_key: key,
+    version: 1,
+    title: schema.title,
+    status: 'draft',
+    system_type: opts.systemType,
+    schema,
+  });
+  if (error) {
+    if (/column .*system_type/i.test(error.message)) {
+      throw new Error('Paste 046 SQL in Supabase so templates can be assigned to a system type.');
+    }
+    if (missingTemplateSql(error.message)) throw new Error('Paste 045 SQL in Supabase, then create the document again.');
+    throw new Error(error.message);
+  }
+  return schema;
+}
+
+export async function getProjectCompletionAssignment(projectId: number, systemType: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('project_completion_documents')
+    .select('template_key')
+    .eq('project_id', projectId)
+    .eq('system_type', systemType)
+    .maybeSingle();
+  if (error) {
+    if (missingTemplateSql(error.message)) return null;
+    throw new Error(error.message);
+  }
+  return data?.template_key ? String(data.template_key) : null;
+}
+
+export async function saveProjectCompletionAssignment(projectId: number, systemType: string, templateKey: string): Promise<void> {
+  const { error } = await supabase.from('project_completion_documents').upsert({
+    project_id: projectId,
+    system_type: systemType,
+    template_key: templateKey,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'project_id,system_type' });
+  if (error) {
+    if (missingTemplateSql(error.message)) {
+      throw new Error('Paste 046 SQL in Supabase so each system can keep its selected document.');
     }
     throw new Error(error.message);
   }
-  return { id: Number(data.id), schema };
 }
 
 export async function listCompletionForms(projectId: number): Promise<CompletionFormSummary[]> {
@@ -85,8 +259,10 @@ export async function issueCompletionForm(opts: {
   assignedCompany?: string;
   expiryDays: number;
   prefill: Record<string, string>;
+  templateKey?: string;
+  companyName?: string;
 }): Promise<{ form: CompletionFormSummary; engineerUrl: string; emailed: boolean; emailNote: string }> {
-  const template = await ensurePublishedTemplate();
+  const template = await ensurePublishedTemplate(opts.templateKey ?? COMPLETION_TEMPLATE_KEY);
   const answers = {
     job: {
       job_number: opts.prefill.job_number ?? '',
@@ -148,7 +324,7 @@ export async function issueCompletionForm(opts: {
         to: opts.assignedEmail,
         title: template.schema.title,
         url: engineerUrl,
-        company: 'Pacific',
+        company: opts.companyName || 'Operations & Maintenance',
       });
       emailed = Boolean(result.emailed);
       emailNote = emailed
@@ -350,20 +526,10 @@ export async function compressPhoto(file: File): Promise<File> {
   return new File([blob], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' });
 }
 
-export async function listTemplateVersions(): Promise<Array<{ id: number; version: number; status: string; title: string }>> {
-  const { data, error } = await supabase
-    .from('completion_form_templates')
-    .select('id, version, status, title')
-    .eq('template_key', COMPLETION_TEMPLATE_KEY)
-    .order('version', { ascending: false });
-  if (error) {
-    if (/does not exist|schema cache/i.test(error.message)) return [];
-    throw new Error(error.message);
-  }
-  return data ?? [];
-}
-
-export async function saveDraftTemplate(schema: CompletionTemplateSchema): Promise<void> {
+export async function saveDraftTemplate(schema: CompletionTemplateSchema, opts?: {
+  systemType?: string;
+  sourceFileName?: string | null;
+}): Promise<void> {
   const { data: latest } = await supabase
     .from('completion_form_templates')
     .select('id, version, status')
@@ -371,26 +537,35 @@ export async function saveDraftTemplate(schema: CompletionTemplateSchema): Promi
     .order('version', { ascending: false })
     .limit(1)
     .maybeSingle();
+  const extra = {
+    schema,
+    title: schema.title,
+    ...(opts?.systemType ? { system_type: opts.systemType } : {}),
+    ...(opts?.sourceFileName !== undefined ? { source_file_name: opts.sourceFileName } : {}),
+  };
   if (latest?.status === 'draft') {
-    const { error } = await supabase.from('completion_form_templates').update({ schema, title: schema.title }).eq('id', latest.id);
-    if (error) throw new Error(error.message);
+    const { error } = await supabase.from('completion_form_templates').update(extra).eq('id', latest.id);
+    if (error) throw new Error(/column .*system_type|source_file_name/i.test(error.message)
+      ? 'Paste 046 SQL in Supabase so templates can keep a system type and source file.'
+      : error.message);
     return;
   }
   const { error } = await supabase.from('completion_form_templates').insert({
     template_key: schema.key,
     version: (latest?.version ?? schema.version) + 1,
-    title: schema.title,
     status: 'draft',
-    schema,
+    ...extra,
   });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(/column .*system_type|source_file_name/i.test(error.message)
+    ? 'Paste 046 SQL in Supabase so templates can keep a system type and source file.'
+    : error.message);
 }
 
-export async function publishDraftTemplate(): Promise<void> {
+export async function publishDraftTemplate(templateKey = COMPLETION_TEMPLATE_KEY): Promise<void> {
   const { data: draft, error } = await supabase
     .from('completion_form_templates')
     .select('id')
-    .eq('template_key', COMPLETION_TEMPLATE_KEY)
+    .eq('template_key', templateKey)
     .eq('status', 'draft')
     .maybeSingle();
   if (error) throw new Error(error.message);

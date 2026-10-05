@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Loader2, Plus, Copy, Trash2 } from 'lucide-react';
-import { FormLetterhead, PACIFIC_INK, PACIFIC_RED } from '../FormLetterhead';
+import { FormFooter, FormLetterhead } from '../FormLetterhead';
+import { resolveOmBrand, type ContractorBrand } from '../../lib/contractorBrand';
 import { SignaturePad } from '../SignaturePad';
 import {
   asRecord,
@@ -54,9 +55,10 @@ export function CompletionFormRunner({
   demo,
 }: {
   form: CompletionPublicForm;
-  brand: { company_name: string | null; logo_url?: string | null } | null;
+  brand: ContractorBrand | null;
   demo?: boolean;
 }) {
+  const theme = resolveOmBrand(brand);
   const customer = form.role === 'customer';
   const sections = useMemo(
     () => form.schema.sections.filter(section => !customer || section.customerVisible),
@@ -141,7 +143,8 @@ export function CompletionFormRunner({
   if (done) {
     return (
       <div className="max-w-xl mx-auto p-6 space-y-4">
-        <FormLetterhead brand={brand as never} title={form.title} jobRef={form.project.jobNumber} />
+        <FormLetterhead brand={brand} title={form.title} jobRef={form.project.jobNumber} />
+        <FormFooter brand={brand} documentTitle={form.title} jobRef={form.project.jobNumber} />
         <div className="bg-white border border-slate-200 rounded-xl p-5">
           <h2 className="text-lg font-semibold text-slate-900">Received</h2>
           <p className="text-sm text-slate-600 mt-2">
@@ -153,10 +156,10 @@ export function CompletionFormRunner({
   }
 
   return (
-    <div className="min-h-screen bg-[#f4f4f4] text-slate-900">
+    <div className="min-h-screen bg-[#f4f4f4] text-slate-900" style={{ ['--om-brand' as string]: theme.primary, ['--om-ink' as string]: theme.ink }}>
       <div className="max-w-3xl mx-auto pb-28">
         <FormLetterhead
-          brand={brand as never}
+          brand={brand}
           title={form.title}
           subtitle={`Revision ${form.revisionNo} · ${form.status.replace(/_/g, ' ')}`}
           jobRef={form.project.jobNumber || form.project.siteName}
@@ -165,11 +168,11 @@ export function CompletionFormRunner({
         <div className="px-4 pt-3 space-y-3">
           <div className="bg-white border border-slate-200 rounded-xl px-4 py-3">
             <div className="flex items-center justify-between gap-3 text-sm">
-              <span style={{ color: PACIFIC_INK }}>{section ? `${index + 1} of ${sections.length}` : ''}</span>
+              <span style={{ color: 'var(--om-ink)' }}>{section ? `${index + 1} of ${sections.length}` : ''}</span>
               <span className={`text-sm font-medium ${saveState === 'error' || saveState === 'offline' ? 'text-amber-800' : 'text-slate-600'}`}>{saveLabel}</span>
             </div>
             <div className="mt-2 h-2 bg-slate-100 rounded-full overflow-hidden">
-              <div className="h-full rounded-full" style={{ width: `${progress.percent}%`, background: PACIFIC_RED }} />
+              <div className="h-full rounded-full" style={{ width: `${progress.percent}%`, background: 'var(--om-brand)' }} />
             </div>
             <p className="text-xs text-slate-500 mt-2">{progress.complete} of {progress.required} required answers complete</p>
           </div>
@@ -258,7 +261,7 @@ export function CompletionFormRunner({
                           type="button"
                           onClick={() => updateSection({ [group.id]: [...rows, emptyGroupRow(group)] })}
                           className="inline-flex items-center gap-1.5 min-h-11 px-3 rounded-lg text-sm font-medium text-white"
-                          style={{ background: PACIFIC_RED }}
+                          style={{ background: 'var(--om-brand)' }}
                         >
                           <Plus className="w-4 h-4" />{group.addLabel}
                         </button>
@@ -305,7 +308,7 @@ export function CompletionFormRunner({
                               <div className="flex items-center justify-between">
                                 <p className="text-sm font-medium">{nested.title}</p>
                                 {!locked && (
-                                  <button type="button" className="text-sm font-medium" style={{ color: PACIFIC_RED }} onClick={() => {
+                                  <button type="button" className="text-sm font-medium" style={{ color: 'var(--om-brand)' }} onClick={() => {
                                     const next = rows.map((current, i) => i === rowIndex ? { ...current, [nested.id]: [...children, emptyGroupRow(nested)] } : current);
                                     updateSection({ [group.id]: next });
                                   }}>{nested.addLabel}</button>
@@ -366,6 +369,7 @@ export function CompletionFormRunner({
             </div>
           )}
         </div>
+        <FormFooter brand={brand} documentTitle={form.title} jobRef={form.project.jobNumber || form.project.siteName} />
       </div>
 
       <div className="fixed bottom-0 inset-x-0 bg-white border-t border-slate-200">
@@ -377,7 +381,7 @@ export function CompletionFormRunner({
             Save and exit
           </button>
           {index < sections.length - 1 ? (
-            <button type="button" onClick={() => setIndex(i => i + 1)} className="flex-1 min-h-12 rounded-lg text-white text-sm font-semibold" style={{ background: PACIFIC_RED }}>
+            <button type="button" onClick={() => setIndex(i => i + 1)} className="flex-1 min-h-12 rounded-lg text-white text-sm font-semibold" style={{ background: 'var(--om-brand)' }}>
               Next <ChevronRight className="w-4 h-4 inline" />
             </button>
           ) : (
@@ -427,7 +431,7 @@ export function CompletionFormRunner({
                 }
               }}
               className="flex-1 min-h-12 rounded-lg text-white text-sm font-semibold disabled:opacity-50"
-              style={{ background: PACIFIC_RED }}
+              style={{ background: 'var(--om-brand)' }}
             >
               {busy ? <Loader2 className="w-4 h-4 animate-spin inline" /> : customer ? 'Sign handover' : 'Sign and submit'}
             </button>
@@ -461,8 +465,8 @@ function FieldControl({
   if (field.type === 'note') {
     return <p className="text-sm leading-relaxed text-slate-600">{field.label}</p>;
   }
-  return (
-    <label className="block space-y-1.5">
+  const body = (
+    <>
       <span className="block text-sm font-medium text-slate-800">
         {field.label}
         {field.required ? <span className="text-[#C00000]"> *</span> : null}
@@ -471,6 +475,14 @@ function FieldControl({
       {field.help && <span className="block text-xs text-slate-500">{field.help}</span>}
       <Control field={field} value={value} onChange={onChange} disabled={disabled} photos={photos} onUpload={onUpload} />
       {issue && <span className="block text-sm text-red-700">{issue}</span>}
+    </>
+  );
+  if (field.type === 'signature') {
+    return <div className="block space-y-1.5">{body}</div>;
+  }
+  return (
+    <label className="block space-y-1.5">
+      {body}
     </label>
   );
 }
@@ -553,7 +565,7 @@ function Control({
               disabled={disabled}
               onClick={() => onChange({ ...current, result: current.result === option.value ? '' : option.value })}
               className={`min-h-12 rounded-lg border text-sm font-medium ${current.result === option.value ? 'text-white border-transparent' : 'bg-white text-slate-800 border-slate-200'}`}
-              style={current.result === option.value ? { background: PACIFIC_RED } : undefined}
+              style={current.result === option.value ? { background: 'var(--om-brand)' } : undefined}
             >
               {option.label}
             </button>
@@ -583,7 +595,7 @@ function Control({
     const record = asRecord(value);
     return (
       <div className="space-y-2">
-        <SignaturePad value={String(record.dataUrl ?? '')} onChange={dataUrl => onChange({ ...record, dataUrl })} />
+        <SignaturePad value={String(record.dataUrl ?? '')} disabled={disabled} onChange={dataUrl => onChange({ ...record, dataUrl })} />
         <p className="text-xs text-slate-500">Drawn with a finger or mouse. Clear and sign again if needed. This is not a qualified digital signature.</p>
       </div>
     );

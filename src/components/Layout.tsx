@@ -4,7 +4,7 @@ import {
   LayoutDashboard, FolderOpen, Box, Menu, X, Plus, Plug,
   ChevronDown, ChevronRight,
   BookOpen, Cpu, Wifi, ClipboardCheck, ShieldAlert, Award, Download, Info,
-  FileText, Layers, LogOut, Building2, User, Users, ClipboardList, ScrollText,
+  FileText, Layers, LogOut, Building2, User, Users, ClipboardList, ScrollText, Pencil,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { deriveProjectSystems, getCategoryStyle, PROJECT_DEVICES_CHANGED_EVENT, type ProjectSystem } from '../lib/systems';
@@ -22,6 +22,7 @@ const PROJECT_MODULES = [
   { name: 'As Fitted',          slug: 'as-fitted-scope', icon: ClipboardList },
   { name: 'Technical Docs',     slug: 'technical',     icon: Wifi },
   { name: 'Commissioning',      slug: 'commissioning',  icon: ShieldAlert },
+  { name: 'Templates',          slug: 'templates',      icon: Pencil },
   { name: 'Handover',           slug: 'handover',       icon: Award },
   { name: 'As Fitted Drawings', slug: 'as-fitted',      icon: Layers },
   { name: 'Datasheets',         slug: 'datasheets',    icon: BookOpen },

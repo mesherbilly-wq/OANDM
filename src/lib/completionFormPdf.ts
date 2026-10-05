@@ -87,7 +87,7 @@ export async function buildCompletionPdf(opts: {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8);
       doc.setTextColor(ir, ig, ib);
-      doc.text(`${opts.schema.title}  ·  ${opts.documentRef}  ·  Rev ${opts.revisionNo}  ·  ${opts.status}`, 14, 287);
+      doc.text(`${theme.name}  ·  ${opts.schema.title}  ·  ${opts.documentRef}  ·  Rev ${opts.revisionNo}  ·  ${opts.status}`, 14, 287);
       doc.text(`Page ${page} of ${pages}`, pageWidth - 14, 287, { align: 'right' });
     }
   };

@@ -61,6 +61,29 @@ export function FormLetterhead({
   );
 }
 
+export function FormFooter({
+  brand,
+  documentTitle,
+  jobRef,
+}: {
+  brand: ContractorBrand | null;
+  documentTitle?: string;
+  jobRef?: string;
+}) {
+  const theme = resolveOmBrand(brand);
+  return (
+    <footer className="border-t px-6 py-3 flex items-start justify-between gap-4" style={{ borderColor: theme.primary }}>
+      <div>
+        <p className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: theme.primary }}>{theme.name}</p>
+        {theme.tagline ? <p className="text-[10px] mt-0.5" style={{ color: theme.ink }}>{theme.tagline}</p> : null}
+      </div>
+      <p className="text-right text-[10px] max-w-[16rem]" style={{ color: theme.ink }}>
+        {[documentTitle, jobRef].filter(Boolean).join(' · ')}
+      </p>
+    </footer>
+  );
+}
+
 export function WorksheetField({
   label,
   required,
