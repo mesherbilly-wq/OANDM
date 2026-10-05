@@ -65,22 +65,19 @@ async function extractPdf(file: File): Promise<{ text: string; images: PageImage
     parts.push(`--- Page ${i} of ${pdf.numPages} ---\n${lines.filter(Boolean).join('\n')}`);
   }
   const text = parts.join('\n\n');
-  const sparse = text.replace(/--- Page \d+ of \d+ ---/g, '').replace(/\s+/g, '').length < 800;
-  if (sparse) {
-    const imageLimit = Math.min(pdf.numPages, 16);
-    for (let i = 1; i <= imageLimit; i += 1) {
-      const page = await pdf.getPage(i);
-      const viewport = page.getViewport({ scale: 1.05 });
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.round(viewport.width);
-      canvas.height = Math.round(viewport.height);
-      const ctx = canvas.getContext('2d');
-      if (!ctx) continue;
-      await page.render({ canvasContext: ctx, canvas, viewport }).promise;
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.62);
-      const data = dataUrl.split(',')[1];
-      if (data) images.push({ media_type: 'image/jpeg', data });
-    }
+  const imageLimit = Math.min(pdf.numPages, 24);
+  for (let i = 1; i <= imageLimit; i += 1) {
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({ scale: 0.72 });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) continue;
+    await page.render({ canvasContext: ctx, canvas, viewport }).promise;
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.48);
+    const data = dataUrl.split(',')[1];
+    if (data) images.push({ media_type: 'image/jpeg', data });
   }
   return { text, images, pageCount: pdf.numPages };
 }
@@ -137,15 +134,9 @@ export async function extractCompletionTemplateFromFile(opts: {
     throw new Error('No readable content was found in that file.');
   }
 
-  if (looksLikeOmAccessControlForm(opts.file.name, text)) {
-    const builtIn = accessControlOmSchemaFor(opts.existingKey || 'access_control_om_handover', opts.existingTitle);
-    return {
-      title: builtIn.title,
-      statusNotice: builtIn.statusNotice,
-      sections: builtIn.sections,
-      reviewFlags: builtIn.reviewFlags,
-    };
-  }
+  const seed = looksLikeOmAccessControlForm(opts.file.name, text)
+    ? accessControlOmSchemaFor(opts.existingKey || 'access_control_om_handover', opts.existingTitle)
+    : undefined;
 
   const { data, error } = await supabase.functions.invoke('extract-form-template', {
     body: {
@@ -155,6 +146,9 @@ export async function extractCompletionTemplateFromFile(opts: {
       existing_title: opts.existingTitle ?? '',
       page_count: pageCount || undefined,
       images,
+      seed: seed
+        ? { title: seed.title, statusNotice: seed.statusNotice, sections: seed.sections, reviewFlags: seed.reviewFlags }
+        : undefined,
     },
   });
   if (error) throw new Error(error.message);

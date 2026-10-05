@@ -417,7 +417,7 @@ export function CompletionTemplateEditor({
       />
       <div className="p-5 space-y-4">
         <p className="text-sm text-slate-500">
-          Upload an existing PDF, Word file or picture onto this document. AI reads the questions and builds the template.
+          Upload an existing PDF, Word file or picture onto this document. AI scans every page (this takes about a minute, not instantly).
           Publishing creates a new version. Forms already issued keep the version they were created with.
         </p>
         {error && <p className="text-sm text-red-700">{error}</p>}
@@ -453,7 +453,7 @@ export function CompletionTemplateEditor({
             style={{ background: theme.primary }}
           >
             {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-            {importing ? 'Reading form…' : 'AI upload existing form'}
+            {importing ? 'Reading every page…' : 'AI upload existing form'}
           </button>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -593,7 +593,14 @@ export function CompletionTemplateEditor({
               status: 'in_progress',
               title: schema.title,
               schema,
-              answers: emptyAnswers(schema),
+              answers: (() => {
+                const answers = emptyAnswers(schema);
+                const system = answers.system && typeof answers.system === 'object' ? answers.system as Record<string, unknown> : null;
+                if (system && 'system_new_or_existing' in system) system.system_new_or_existing = 'New';
+                const training = answers.training && typeof answers.training === 'object' ? answers.training as Record<string, unknown> : null;
+                if (training && 'training_given' in training) training.training_given = 'Yes';
+                return answers;
+              })(),
               photos: [],
               revisionNo: 1,
               revisionLocked: false,

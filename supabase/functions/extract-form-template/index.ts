@@ -122,34 +122,45 @@ function splitPageChunks(text: string, pageCount: number): string[] {
   return chunks.filter(Boolean);
 }
 
-function asSections(value: unknown): Array<Record<string, unknown>> {
+function asRecords(value: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(value)) return [];
   return value.filter(item => item && typeof item === "object") as Array<Record<string, unknown>>;
 }
 
-function mergeExtracted(base: Extracted | null, next: Extracted): Extracted {
-  if (!base) return { ...next, sections: asSections(next.sections) };
-  const sections = [...asSections(base.sections)];
-  for (const incoming of asSections(next.sections)) {
-    const id = String(incoming.id ?? "");
-    const title = String(incoming.title ?? "");
-    const index = sections.findIndex(section =>
-      (id && String(section.id) === id) || String(section.title ?? "").toLowerCase() === title.toLowerCase(),
-    );
+function asSections(value: unknown): Array<Record<string, unknown>> {
+  return asRecords(value);
+}
+
+function recordKey(item: Record<string, unknown>): string {
+  return String(item.id ?? "").trim() || String(item.label ?? item.title ?? "").trim().toLowerCase();
+}
+
+function mergeRecordLists(base: unknown, incoming: unknown): Array<Record<string, unknown>> {
+  const out = [...asRecords(base)];
+  for (const next of asRecords(incoming)) {
+    const key = recordKey(next);
+    const index = key ? out.findIndex(item => recordKey(item) === key) : -1;
     if (index < 0) {
-      sections.push(incoming);
+      out.push(next);
       continue;
     }
-    const current = sections[index];
-    const fields = [...(Array.isArray(current.fields) ? current.fields : []), ...(Array.isArray(incoming.fields) ? incoming.fields : [])];
-    const groups = [...(Array.isArray(current.groups) ? current.groups : []), ...(Array.isArray(incoming.groups) ? incoming.groups : [])];
-    sections[index] = { ...current, ...incoming, fields, groups };
+    const current = out[index];
+    const merged: Record<string, unknown> = { ...current, ...next };
+    if (current.fields != null || next.fields != null) merged.fields = mergeRecordLists(current.fields, next.fields);
+    if (current.nested != null || next.nested != null) merged.nested = mergeRecordLists(current.nested, next.nested);
+    if (current.groups != null || next.groups != null) merged.groups = mergeRecordLists(current.groups, next.groups);
+    out[index] = merged;
   }
+  return out;
+}
+
+function mergeExtracted(base: Extracted | null, next: Extracted): Extracted {
+  if (!base) return { ...next, sections: asSections(next.sections) };
   return {
-    title: base.title || next.title,
-    statusNotice: base.statusNotice || next.statusNotice,
-    sections,
-    reviewFlags: [...(Array.isArray(base.reviewFlags) ? base.reviewFlags : []), ...(Array.isArray(next.reviewFlags) ? next.reviewFlags : [])],
+    title: next.title || base.title,
+    statusNotice: next.statusNotice || base.statusNotice,
+    sections: mergeRecordLists(base.sections, next.sections),
+    reviewFlags: mergeRecordLists(base.reviewFlags, next.reviewFlags),
   };
 }
 
@@ -174,13 +185,6 @@ function inventory(extracted: Extracted): string {
     }
   }
   return lines.join("\n") || "(empty)";
-}
-
-function lastPages(text: string, count = 8): string {
-  const matches = [...text.matchAll(/--- Page (\d+) of (\d+) ---/g)];
-  if (matches.length <= count) return text;
-  const start = matches[Math.max(0, matches.length - count)].index ?? 0;
-  return text.slice(start);
 }
 
 async function callClaude(
@@ -238,11 +242,12 @@ Deno.serve(async (req) => {
   const existingTitle = String(body.existing_title ?? "");
   const pageCount = Number(body.page_count ?? 0);
   const images = Array.isArray(body.images) ? body.images as Array<{ media_type?: string; data?: string }> : [];
+  const seed = body.seed && typeof body.seed === "object" ? body.seed as Extracted : null;
 
   if (!text && images.length === 0) return json({ error: "Upload a PDF, Word file or picture of the form." }, 400);
 
   const imageBlocks: unknown[] = [];
-  for (const image of images.slice(0, 8)) {
+  for (const image of images.slice(0, 22)) {
     const data = String(image.data ?? "").replace(/\s/g, "");
     const mediaType = String(image.media_type ?? "image/jpeg");
     if (!data) continue;
@@ -254,17 +259,25 @@ Deno.serve(async (req) => {
   const context = `System type: ${systemType || "not specified"}
 Existing title: ${existingTitle || "new document"}
 Source file: ${fileName}
-Page count: ${pageCount || chunks.length || "unknown"}`;
+Page count: ${pageCount || chunks.length || "unknown"}
+Attached page pictures: ${imageBlocks.length}. Treat pictures as the source of truth when they show a question that the text missed.`;
 
   try {
-    let merged: Extracted | null = null;
-    for (let i = 0; i < chunks.length; i += 1) {
-      const chunk = chunks[i];
-      const content: unknown[] = [];
-      if (i === 0) content.push(...imageBlocks);
-      content.push({
-        type: "text",
-        text: `You convert an existing commissioning / completion / handover form into a structured digital template.
+    let merged: Extracted | null = seed && asSections(seed.sections).length ? {
+      title: seed.title,
+      statusNotice: seed.statusNotice,
+      sections: asSections(seed.sections),
+      reviewFlags: Array.isArray(seed.reviewFlags) ? seed.reviewFlags : [],
+    } : null;
+
+    if (!merged) {
+      for (let i = 0; i < chunks.length; i += 1) {
+        const chunk = chunks[i];
+        const content: unknown[] = [];
+        if (i === 0) content.push(...imageBlocks.slice(0, 6));
+        content.push({
+          type: "text",
+          text: `You convert an existing commissioning / completion / handover form into a structured digital template.
 This is pass ${i + 1} of ${chunks.length}. Extract ONLY the questions on these pages. Later or earlier pages are handled in other passes.
 
 Return ONLY valid JSON. No markdown.
@@ -277,22 +290,25 @@ ${context}
 
 Source pages for this pass:
 ${chunk || "(no selectable text — read attached images)"}`,
-      });
-      const raw = await callClaude(apiKey, content, { maxTokens: 20000 });
-      merged = mergeExtracted(merged, parseJsonObject(raw));
+        });
+        const raw = await callClaude(apiKey, content, { maxTokens: 20000 });
+        merged = mergeExtracted(merged, parseJsonObject(raw));
+      }
     }
 
     if (!merged || asSections(merged.sections).length === 0) {
       return json({ error: "The AI could not read a usable form structure from that file." }, 422);
     }
 
-    const completeContent: unknown[] = [{
-      type: "text",
-      text: `You already converted most of a handover / commissioning form. Now finish the job.
+    const completeContent: unknown[] = [
+      ...imageBlocks,
+      {
+        type: "text",
+        text: `You already have a draft digital template. Now finish the job by looking at EVERY attached page picture and the full source text.
 
-Compare the source with the inventory. Add anything missing: later pages, checklists, training, extra works, repeatable Add-item groups, customer/engineer/project manager signatures, declarations, and "if Yes then…" questions.
+Add anything that is on the PDF but missing from the inventory: later pages, unlabeled Yes/No checks, extra works, training, door/reader/controller repeats, customer/engineer/project manager signatures and dates, declarations, AM/PM handover time, and "if Yes then…" questions.
 
-Do not remove existing sections. Merge new fields/groups into the right section, or add new sections for later pages.
+Do not remove existing sections unless they are duplicates. Merge new fields/groups into the right section, or add new sections.
 Keep the same JSON shape. Return the FULL completed template JSON only.
 
 ${SHAPE}
@@ -304,12 +320,10 @@ ${context}
 Inventory already extracted:
 ${inventory(merged)}
 
-Last pages of the source (must be represented):
-${lastPages(text || "(images only)", 10)}
-
-Full source (use this to find gaps):
-${text.slice(0, 160000) || "(no selectable text)"}`,
-    }];
+Full source text (every page). Page pictures are attached in order. Add anything the inventory missed:
+${text.slice(0, 160000) || "(no selectable text — use the page pictures)"}`,
+      },
+    ];
 
     try {
       const filledRaw = await callClaude(apiKey, completeContent, { maxTokens: 24000, think: true });
