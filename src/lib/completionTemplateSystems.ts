@@ -1,6 +1,7 @@
 import { FALLBACK_DOCUMENT_TYPES } from './handoverDocumentConfig';
 import { PROJECT_WIDE_SYSTEM_KEY, PROJECT_WIDE_SYSTEM_LABEL } from './documentProjectSystems';
 import type { CompletionTemplateSchema } from './completionFormTypes';
+import { standardJobCustomerSiteSection } from './standardJobSection';
 
 export { PROJECT_WIDE_SYSTEM_KEY, PROJECT_WIDE_SYSTEM_LABEL };
 
@@ -17,19 +18,7 @@ export function blankCompletionSchema(key: string, title: string): CompletionTem
     version: 1,
     title,
     statusNotice: 'Company form. This is not an official certificate.',
-    sections: [
-      {
-        id: 'job',
-        title: 'Job, customer and site',
-        summary: 'Upload an existing paper or Word form to fill this template, or add questions here.',
-        customerVisible: true,
-        fields: [
-          { id: 'job_number', label: 'Job number', type: 'text', required: true, customerVisible: true },
-          { id: 'client', label: 'Client', type: 'text', customerVisible: true },
-          { id: 'site_address', label: 'Site address', type: 'textarea', customerVisible: true },
-        ],
-      },
-    ],
+    sections: [standardJobCustomerSiteSection()],
     reviewFlags: [],
   };
 }

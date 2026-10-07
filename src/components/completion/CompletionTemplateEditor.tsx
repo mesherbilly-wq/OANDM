@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, Plus, Trash2, Upload } from 'lucide-react';
+import { Loader2, Plus, Sparkles, Trash2, Upload } from 'lucide-react';
+import { isLockedJobField, isStandardJobSection } from '../../lib/standardJobSection';
 import { FormLetterhead } from '../FormLetterhead';
 import { resolveOmBrand, type ContractorBrand } from '../../lib/contractorBrand';
 import { CompletionFormRunner } from './CompletionFormRunner';
@@ -183,12 +184,14 @@ function FieldEditor({
   onRemove,
   logicFields,
   rowFieldIds,
+  locked,
 }: {
   field: CompletionField;
   onChange: (field: CompletionField) => void;
   onRemove: () => void;
   logicFields: LogicField[];
   rowFieldIds?: string[];
+  locked?: boolean;
 }) {
   const needsOptions = field.type === 'select' || field.type === 'multiselect';
   const triggers = uniqueLogicFields(logicFields.filter(item => item.id !== field.id));
@@ -196,20 +199,29 @@ function FieldEditor({
     <div className="border border-slate-200 rounded-lg p-3 space-y-2 bg-white">
       <div className="flex items-start justify-between gap-2">
         <p className="text-xs font-medium text-slate-500 pt-1">Question</p>
-        <button
-          type="button"
-          onClick={onRemove}
-          className="inline-flex items-center gap-1 text-xs font-medium text-red-700 hover:bg-red-50 rounded-lg px-2 py-1.5"
-        >
-          <Trash2 className="w-4 h-4" />Delete field
-        </button>
+        {locked ? (
+          <p className="text-[11px] text-slate-500 pt-1">Same on every form</p>
+        ) : (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="inline-flex items-center gap-1 text-xs font-medium text-red-700 hover:bg-red-50 rounded-lg px-2 py-1.5"
+          >
+            <Trash2 className="w-4 h-4" />Delete field
+          </button>
+        )}
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
         <label className="text-xs text-slate-600">Label
           <input value={field.label} onChange={event => onChange({ ...field, label: event.target.value })} className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
         </label>
         <label className="text-xs text-slate-600">Type
-          <select value={field.type} onChange={event => onChange({ ...field, type: event.target.value as CompletionFieldType })} className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm">
+          <select
+            value={field.type}
+            disabled={locked}
+            onChange={event => onChange({ ...field, type: event.target.value as CompletionFieldType })}
+            className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm disabled:bg-slate-50"
+          >
             {FIELD_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
           </select>
         </label>
@@ -357,6 +369,12 @@ function GroupEditor({
   );
 }
 
+const ASSIST_EXAMPLES = [
+  'Add a Yes / No / N/A checklist for doors',
+  'Remove this page',
+  'Add Extra works. If Yes, show description and photos',
+];
+
 export function CompletionTemplateEditor({
   schema,
   onChange,
@@ -364,7 +382,9 @@ export function CompletionTemplateEditor({
   brand,
   sourceFileName,
   importing,
+  assisting,
   onImportFile,
+  onAssist,
   onSaveDraft,
   onPublish,
   onDelete,
@@ -377,7 +397,9 @@ export function CompletionTemplateEditor({
   brand: ContractorBrand | null;
   sourceFileName?: string | null;
   importing?: boolean;
+  assisting?: boolean;
   onImportFile: (file: File) => void;
+  onAssist: (instruction: string) => void;
   onSaveDraft: () => void;
   onPublish: () => void;
   onDelete?: () => void;
@@ -387,6 +409,7 @@ export function CompletionTemplateEditor({
   const theme = resolveOmBrand(brand);
   const fileRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState(false);
+  const [assistText, setAssistText] = useState('');
   const [sectionId, setSectionId] = useState(schema.sections[0]?.id ?? '');
 
   useEffect(() => {
@@ -407,6 +430,15 @@ export function CompletionTemplateEditor({
   const sectionLogicFields: LogicField[] = uniqueLogicFields(
     (section?.fields ?? []).map(field => ({ id: field.id, label: field.label, options: field.options })),
   );
+  const jobLocked = isStandardJobSection(section);
+  const busy = Boolean(importing || assisting);
+
+  const submitAssist = () => {
+    const instruction = assistText.trim();
+    if (!instruction || busy) return;
+    const page = section ? `Current page being edited: "${section.title}" (id ${section.id}).` : '';
+    onAssist([page, instruction].filter(Boolean).join('\n\n'));
+  };
 
   return (
     <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
@@ -417,7 +449,7 @@ export function CompletionTemplateEditor({
       />
       <div className="p-5 space-y-4">
         <p className="text-sm text-slate-500">
-          Upload an existing PDF, Word file or picture onto this document. AI scans every page (this takes about a minute, not instantly).
+          Every form starts with the same first page as CCTV: Job, customer and site. Upload a PDF for the rest, or use AI assist to add checklists and pages.
           Publishing creates a new version. Forms already issued keep the version they were created with.
         </p>
         {error && <p className="text-sm text-red-700">{error}</p>}
@@ -447,13 +479,58 @@ export function CompletionTemplateEditor({
           />
           <button
             type="button"
-            disabled={importing}
+            disabled={busy}
             onClick={() => fileRef.current?.click()}
             className="inline-flex items-center gap-2 min-h-11 px-4 rounded-lg text-white text-sm font-medium disabled:opacity-50"
             style={{ background: theme.primary }}
           >
             {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
             {importing ? 'Reading every page…' : 'AI upload existing form'}
+          </button>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+          <p className="text-sm font-semibold text-slate-800 inline-flex items-center gap-2">
+            <Sparkles className="w-4 h-4" style={{ color: theme.primary }} />
+            AI assist
+          </p>
+          <p className="text-xs text-slate-500">
+            Tell the builder what to change after the Job, customer and site page. It keeps that first page the same.
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {ASSIST_EXAMPLES.map(example => (
+              <button
+                key={example}
+                type="button"
+                disabled={busy}
+                onClick={() => setAssistText(example)}
+                className="px-2.5 py-1 rounded-full border border-slate-200 bg-white text-[11px] text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+              >
+                {example}
+              </button>
+            ))}
+          </div>
+          <textarea
+            value={assistText}
+            disabled={busy}
+            onChange={event => setAssistText(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                submitAssist();
+              }
+            }}
+            placeholder="Add a door checklist, remove this page, add Extra works equals Yes…"
+            className="w-full min-h-20 border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white disabled:bg-slate-100"
+          />
+          <button
+            type="button"
+            disabled={busy || !assistText.trim()}
+            onClick={submitAssist}
+            className="inline-flex items-center gap-2 min-h-11 px-4 rounded-lg text-white text-sm font-medium disabled:opacity-50"
+            style={{ background: theme.primary }}
+          >
+            {assisting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+            {assisting ? 'Updating template…' : 'Apply with AI'}
           </button>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -488,9 +565,16 @@ export function CompletionTemplateEditor({
           <div className="space-y-4">
             <div className="flex items-end gap-3">
               <label className="block text-sm flex-1">Section title
-                <input value={section.title} onChange={event => updateSection({ ...section, title: event.target.value })} className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+                <input
+                  value={section.title}
+                  disabled={jobLocked}
+                  onChange={event => updateSection({ ...section, title: event.target.value })}
+                  className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm disabled:bg-slate-50"
+                />
               </label>
-              {schema.sections.length > 1 && (
+              {jobLocked ? (
+                <p className="text-[11px] text-slate-500 pb-2 max-w-[14rem]">Fixed first page on every form.</p>
+              ) : schema.sections.length > 1 ? (
                 <button
                   type="button"
                   className="text-xs text-red-700 inline-flex items-center gap-1 pb-2"
@@ -502,7 +586,7 @@ export function CompletionTemplateEditor({
                 >
                   <Trash2 className="w-3.5 h-3.5" />Remove section
                 </button>
-              )}
+              ) : null}
             </div>
             <label className="block text-sm">Instructions
               <textarea value={section.summary} onChange={event => updateSection({ ...section, summary: event.target.value })} className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm min-h-20" />
@@ -515,6 +599,7 @@ export function CompletionTemplateEditor({
                   key={field.id}
                   field={field}
                   logicFields={sectionLogicFields}
+                  locked={jobLocked && isLockedJobField(field.id)}
                   onChange={next => {
                     const fields = [...(section.fields ?? [])];
                     fields[index] = next;
@@ -523,19 +608,22 @@ export function CompletionTemplateEditor({
                   onRemove={() => updateSection({ ...section, fields: (section.fields ?? []).filter((_, i) => i !== index) })}
                 />
               ))}
-              <button
-                type="button"
-                className="text-sm font-medium inline-flex items-center gap-1"
-                style={{ color: theme.primary }}
-                onClick={() => updateSection({
-                  ...section,
-                  fields: [...(section.fields ?? []), newField()],
-                })}
-              >
-                <Plus className="w-4 h-4" />Add field
-              </button>
+              {!jobLocked && (
+                <button
+                  type="button"
+                  className="text-sm font-medium inline-flex items-center gap-1"
+                  style={{ color: theme.primary }}
+                  onClick={() => updateSection({
+                    ...section,
+                    fields: [...(section.fields ?? []), newField()],
+                  })}
+                >
+                  <Plus className="w-4 h-4" />Add field
+                </button>
+              )}
             </div>
 
+            {!jobLocked && (
             <div className="space-y-3">
               <p className="text-sm font-semibold text-slate-800">Repeatable items</p>
               <p className="text-xs text-slate-500">
@@ -566,6 +654,7 @@ export function CompletionTemplateEditor({
                 <Plus className="w-4 h-4" />Add repeatable group
               </button>
             </div>
+            )}
           </div>
         )}
         <div className="flex flex-wrap gap-2">

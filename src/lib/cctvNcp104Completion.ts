@@ -6,6 +6,7 @@ import {
   type CompletionSection,
   type CompletionTemplateSchema,
 } from './completionFormTypes';
+import { standardJobCustomerSiteSection } from './standardJobSection';
 
 const STATUS_NOTICE =
   'Pacific CCTV completion and handover record. This company form is not an official NSI certificate. Signatures captured here are drawn electronic signatures with an audit record, not certificate-backed digital signatures. Offline completion is not available.';
@@ -379,30 +380,7 @@ export const CCTV_NCP104_GROUPS = {
 };
 
 const SECTIONS: CompletionSection[] = [
-  {
-    id: 'job',
-    title: 'Job, customer and site',
-    summary: 'Who the work is for and where it is.',
-    customerVisible: true,
-    source: 'PDF p1–4 Title page and Client and System Information',
-    note: 'The source PDF listed live Simpro jobs from a SafetyCulture picker. This form uses the project job number instead of that account-specific list.',
-    fields: [
-      field({ id: 'job_number', label: 'Job number', type: 'text', required: true, customerVisible: true, source: 'PDF p2 Job Number (picker replaced with the project job number)' }),
-      field({ id: 'site_address', label: 'Site address', type: 'textarea', required: true, customerVisible: true, source: 'PDF p2 Site Address' }),
-      field({ id: 'client', label: 'Client', type: 'text', required: true, customerVisible: true, source: 'PDF p2 Client' }),
-      field({ id: 'job_title', label: 'Job title', type: 'text', customerVisible: true, source: 'PDF p3 Job Title' }),
-      field({ id: 'project_manager', label: 'Project manager', type: 'text', source: 'PDF p3 Project Manager' }),
-      field({ id: 'engineer', label: 'Engineer', type: 'text', required: true, source: 'PDF p3 Engineer' }),
-      field({ id: 'date_of_install', label: 'Date of install', type: 'date', required: true, customerVisible: true, source: 'PDF p4 Date of Install' }),
-      field({ id: 'system_type', label: 'System type (make / model)', type: 'text', required: true, customerVisible: true, source: 'PDF p4 System Type (Make/Model)' }),
-      field({
-        id: 'scope_note',
-        label: 'Imported quote quantities are proposed scope only. Confirm what was actually installed and tested.',
-        type: 'note',
-        customerVisible: true,
-      }),
-    ],
-  },
+  standardJobCustomerSiteSection(),
   {
     id: 'cameras',
     title: 'Cameras and camera testing',

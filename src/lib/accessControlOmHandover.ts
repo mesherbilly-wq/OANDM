@@ -6,6 +6,7 @@ import {
   type CompletionSection,
   type CompletionTemplateSchema,
 } from './completionFormTypes';
+import { standardJobCustomerSiteSection } from './standardJobSection';
 
 const STATUS_NOTICE =
   'O and M Systems operational checks and handover for access control. This company form is not an official NSI certificate. Signatures captured here are drawn electronic signatures with an audit record, not certificate-backed digital signatures.';
@@ -190,21 +191,7 @@ export const ACCESS_CONTROL_OM_GROUPS: Record<string, CompletionGroup> = {
 };
 
 const SECTIONS: CompletionSection[] = [
-  {
-    id: 'job',
-    title: 'Job, customer and site',
-    summary: 'Who the work is for and where it is.',
-    customerVisible: true,
-    source: 'PDF p1–3 Client and System Information',
-    fields: [
-      field({ id: 'job_number', label: 'Job number', type: 'text', required: true, customerVisible: true, source: 'PDF p2 Job Number' }),
-      field({ id: 'site_address', label: 'Site address', type: 'textarea', required: true, customerVisible: true, source: 'PDF p2 Site Address' }),
-      field({ id: 'client', label: 'Client', type: 'text', required: true, customerVisible: true, source: 'PDF p2 Client' }),
-      field({ id: 'project_manager', label: 'Project manager', type: 'text', source: 'PDF p2 Project Manager' }),
-      field({ id: 'engineer', label: 'Engineer', type: 'text', required: true, source: 'PDF p3 Engineer' }),
-      field({ id: 'date_of_install', label: 'Date of install', type: 'date', required: true, customerVisible: true, source: 'PDF p3 Date of Install' }),
-    ],
-  },
+  standardJobCustomerSiteSection(),
   {
     id: 'system',
     title: 'System, servers, workstations and controllers',

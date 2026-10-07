@@ -51,6 +51,7 @@ Field types: text, textarea, number, date, tel, email, select, multiselect, test
 const RULES = `Rules:
 - Finish the whole form. Do not stop after the first pages.
 - Include every question, choice, instruction, repeatable group, checklist, training block, declaration and signature from the source pages you are given.
+- Do not recreate Job, customer and site. The app always uses a fixed first page (job number, site address, client, job title, project manager, engineer, date of install, system type). Extract and edit everything AFTER that page.
 - Convert "If answer is X Answer Question(s)" into showWhen.
 - Repeat sections become groups with an Add button (Add camera, Add door, Add controller, Add trainee).
 - Nested repeats (readers on a controller) become nested groups.
@@ -243,6 +244,55 @@ Deno.serve(async (req) => {
   const pageCount = Number(body.page_count ?? 0);
   const images = Array.isArray(body.images) ? body.images as Array<{ media_type?: string; data?: string }> : [];
   const seed = body.seed && typeof body.seed === "object" ? body.seed as Extracted : null;
+  const instruction = String(body.instruction ?? "").trim();
+  const currentSchema = body.schema && typeof body.schema === "object" ? body.schema as Extracted : null;
+
+  if (instruction && currentSchema && asSections(currentSchema.sections).length) {
+    try {
+      const content = [{
+        type: "text",
+        text: `You edit an existing digital handover / commissioning template from a short instruction.
+
+Keep section id "job" (Job, customer and site) EXACTLY as given. Do not add, remove, reorder or change its fields.
+
+Apply the instruction to the rest of the document: add or remove sections (pages), fields, checklists, repeatable groups, showWhen logic, signatures and training.
+
+If asked to remove a page, remove that section. If asked to add a checklist, add tick/select questions or a test_result list on a sensible page. If Extra works or similar, use showWhen.
+
+Return ONLY the FULL updated template JSON. Same shape. No markdown.
+
+${SHAPE}
+
+${RULES}
+
+System type: ${systemType || "not specified"}
+Existing title: ${existingTitle || String(currentSchema.title ?? "template")}
+
+Instruction:
+${instruction}
+
+Current template:
+${JSON.stringify({
+  title: currentSchema.title,
+  statusNotice: currentSchema.statusNotice,
+  sections: currentSchema.sections,
+  reviewFlags: currentSchema.reviewFlags,
+})}`,
+      }];
+      const raw = await callClaude(apiKey, content, { maxTokens: 24000 });
+      const filled = parseJsonObject(raw);
+      const sections = asSections(filled.sections);
+      if (!sections.length) return json({ error: "The AI could not apply that change." }, 422);
+      return json({
+        title: String(filled.title ?? currentSchema.title ?? existingTitle),
+        statusNotice: String(filled.statusNotice ?? currentSchema.statusNotice ?? "Company form. This is not an official certificate."),
+        sections,
+        reviewFlags: Array.isArray(filled.reviewFlags) ? filled.reviewFlags : (currentSchema.reviewFlags ?? []),
+      });
+    } catch (err) {
+      return json({ error: err instanceof Error ? err.message : "AI assist failed." }, 500);
+    }
+  }
 
   if (!text && images.length === 0) return json({ error: "Upload a PDF, Word file or picture of the form." }, 400);
 

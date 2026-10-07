@@ -5,6 +5,7 @@ import {
   looksLikeOmAccessControlForm,
 } from './accessControlOmHandover';
 import type { CompletionReviewFlag, CompletionSection, CompletionTemplateSchema } from './completionFormTypes';
+import { pinStandardJobSection } from './standardJobSection';
 
 type PageImage = { media_type: string; data: string };
 
@@ -156,24 +157,59 @@ export async function extractCompletionTemplateFromFile(opts: {
   if (!Array.isArray(data?.sections) || data.sections.length === 0) {
     throw new Error('The AI could not read a usable form from that file.');
   }
-  const extracted = {
+  return {
     title: String(data.title ?? opts.existingTitle ?? opts.file.name),
     statusNotice: String(data.statusNotice ?? 'Company form. This is not an official certificate.'),
     sections: data.sections as CompletionSection[],
     reviewFlags: Array.isArray(data.reviewFlags) ? data.reviewFlags as CompletionReviewFlag[] : [],
   };
-  return extracted;
+}
+
+function extractedToSchema(
+  current: CompletionTemplateSchema,
+  data: { title?: unknown; statusNotice?: unknown; sections?: unknown; reviewFlags?: unknown },
+  fallbackTitle: string,
+): CompletionTemplateSchema {
+  if (!Array.isArray(data?.sections) || data.sections.length === 0) {
+    throw new Error('The AI could not update that template.');
+  }
+  return pinStandardJobSection({
+    ...current,
+    title: String(data.title ?? fallbackTitle),
+    statusNotice: String(data.statusNotice ?? current.statusNotice),
+    sections: data.sections as CompletionSection[],
+    reviewFlags: Array.isArray(data.reviewFlags) ? data.reviewFlags as CompletionReviewFlag[] : current.reviewFlags,
+  });
+}
+
+export async function assistCompletionTemplate(opts: {
+  schema: CompletionTemplateSchema;
+  instruction: string;
+  systemType: string;
+}): Promise<CompletionTemplateSchema> {
+  const instruction = opts.instruction.trim();
+  if (!instruction) throw new Error('Say what to add or remove first.');
+  const { data, error } = await supabase.functions.invoke('extract-form-template', {
+    body: {
+      instruction,
+      system_type: opts.systemType,
+      existing_title: opts.schema.title,
+      schema: {
+        title: opts.schema.title,
+        statusNotice: opts.schema.statusNotice,
+        sections: opts.schema.sections,
+        reviewFlags: opts.schema.reviewFlags,
+      },
+    },
+  });
+  if (error) throw new Error(error.message);
+  if (data?.error) throw new Error(String(data.error));
+  return extractedToSchema(opts.schema, data, opts.schema.title);
 }
 
 export function applyExtractedTemplate(
   current: CompletionTemplateSchema,
   extracted: { title: string; statusNotice: string; sections: CompletionSection[]; reviewFlags: CompletionReviewFlag[] },
 ): CompletionTemplateSchema {
-  return {
-    ...current,
-    title: extracted.title || current.title,
-    statusNotice: extracted.statusNotice || current.statusNotice,
-    sections: extracted.sections,
-    reviewFlags: extracted.reviewFlags ?? [],
-  };
+  return extractedToSchema(current, extracted, current.title);
 }

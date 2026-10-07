@@ -25,7 +25,8 @@ import {
   saveDraftTemplate,
   unassignProjectCompletionDocument,
 } from '../lib/completionFormsApi';
-import { applyExtractedTemplate, extractCompletionTemplateFromFile } from '../lib/extractFormTemplate';
+import { applyExtractedTemplate, assistCompletionTemplate, extractCompletionTemplateFromFile } from '../lib/extractFormTemplate';
+import { pinStandardJobSection } from '../lib/standardJobSection';
 import { CompletionTemplateEditor } from '../components/completion/CompletionTemplateEditor';
 import type { CompletionTemplateSchema } from '../lib/completionFormTypes';
 
@@ -44,6 +45,7 @@ export default function CompletionTemplatesPage() {
   const [newTitle, setNewTitle] = useState('');
   const [savingType, setSavingType] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [assisting, setAssisting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -112,9 +114,9 @@ export default function CompletionTemplatesPage() {
       if (cancelled) return;
       setVersions(nextVersions);
       setSourceFileName(row?.source_file_name ?? null);
-      if (row?.schema) setSchema(row.schema);
-      else if (selectedKey === COMPLETION_TEMPLATE_KEY) setSchema(defaultTemplateSchema());
-      else if (selectedKey === ACCESS_CONTROL_OM_TEMPLATE_KEY) setSchema(accessControlOmSchemaFor(selectedKey));
+      if (row?.schema) setSchema(pinStandardJobSection(row.schema));
+      else if (selectedKey === COMPLETION_TEMPLATE_KEY) setSchema(pinStandardJobSection(defaultTemplateSchema()));
+      else if (selectedKey === ACCESS_CONTROL_OM_TEMPLATE_KEY) setSchema(pinStandardJobSection(accessControlOmSchemaFor(selectedKey)));
     }).catch(err => {
       if (!cancelled) setError(err instanceof Error ? err.message : 'Could not open that document.');
     });
@@ -185,8 +187,8 @@ export default function CompletionTemplatesPage() {
       const docs = await listCompletionDocuments(systemType);
       setDocuments(docs);
       await handleToggleAssigned(created.key, true);
-      setSchema(created);
-      setNotice('New document created as a draft. Upload an existing form or add questions.');
+      setSchema(pinStandardJobSection(created));
+      setNotice('New document created with the same Job, customer and site page as CCTV. Add the rest of the form, or use AI.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create the document.');
     }
@@ -212,11 +214,32 @@ export default function CompletionTemplatesPage() {
       setSourceFileName(file.name);
       await saveDraftTemplate(next, { systemType, sourceFileName: file.name });
       setVersions(await listTemplateVersions(next.key));
-      setNotice(`Read every page of ${file.name} and drafted the template, including later checklists and sign-off where they were on the form.`);
+      setNotice(`Read every page of ${file.name} and drafted the rest of the template after Job, customer and site.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not read that form.');
     } finally {
       setImporting(false);
+    }
+  };
+
+  const handleAssist = async (instruction: string) => {
+    if (!schema) {
+      setError('Create or select a document first.');
+      return;
+    }
+    setAssisting(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const next = await assistCompletionTemplate({ schema, instruction, systemType });
+      setSchema(next);
+      await saveDraftTemplate(next, { systemType, sourceFileName });
+      setVersions(await listTemplateVersions(next.key));
+      setNotice('AI updated the template. Check the pages, then publish when it looks right.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not apply that change.');
+    } finally {
+      setAssisting(false);
     }
   };
 
@@ -331,7 +354,9 @@ export default function CompletionTemplatesPage() {
           brand={brand}
           sourceFileName={sourceFileName}
           importing={importing}
+          assisting={assisting}
           onImportFile={file => void handleImport(file)}
+          onAssist={instruction => void handleAssist(instruction)}
           error={error}
           notice={notice}
           onSaveDraft={() => {
