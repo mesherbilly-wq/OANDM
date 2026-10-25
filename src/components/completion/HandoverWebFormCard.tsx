@@ -10,6 +10,7 @@ import {
 } from '../../lib/completionFormsApi';
 import { completionDocUiStatus, completionShouldAttachPdf, type CompletionFormSummary } from '../../lib/completionFormTypes';
 import { handoverDocumentIcon, type HandoverDocumentDefinition } from '../../lib/handoverDocumentConfig';
+import { CompulsoryLabel } from '../CompulsoryLabel';
 import type { Project } from '../../types';
 import { CompletionFormActions } from './CompletionOfficePanel';
 
@@ -126,7 +127,10 @@ export function HandoverWebFormCard({
           {status === 'completed' ? <CheckCircle className="w-5 h-5 text-emerald-600" /> : <Icon className="w-5 h-5 text-slate-500" />}
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-slate-800">{definition.title}</p>
+          <p className="text-sm font-semibold text-slate-800 flex items-center gap-2 flex-wrap">
+            <span className="min-w-0">{definition.title}</span>
+            <CompulsoryLabel show={definition.required} />
+          </p>
           <p className="text-xs text-slate-500 truncate mt-0.5">
             {form ? `${form.assigned_name || 'Unassigned'} · ${STATUS_LABEL[form.status] ?? form.status}` : (definition.description || 'Web form')}
           </p>

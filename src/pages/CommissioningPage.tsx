@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { CompletionOfficePanel } from '../components/completion/CompletionOfficePanel';
 import { ExternalFormLink } from '../components/ExternalFormLink';
+import { CompulsoryLabel } from '../components/CompulsoryLabel';
 import { loadDocumentProjectSystems } from '../lib/documentProjectSystems';
 import {
   applyHandoverTypeSelectionsToSystems,
@@ -261,7 +262,10 @@ export default function CommissioningPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {formLinks.map(def => (
               <div key={def.document_id} className="space-y-1.5">
-                <p className="text-sm font-medium text-slate-800">{def.title}</p>
+                <p className="text-sm font-medium text-slate-800 flex items-center gap-2 flex-wrap">
+                  <span>{def.title}</span>
+                  <CompulsoryLabel show={def.required} />
+                </p>
                 <ExternalFormLink url={def.external_form_url} />
               </div>
             ))}

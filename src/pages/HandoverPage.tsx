@@ -32,6 +32,7 @@ import { getCategoryStyle, type ProjectSystem } from '../lib/systems';
 import HandoverConfigPage from './HandoverConfigPage';
 import { HandoverWebFormCard } from '../components/completion/HandoverWebFormCard';
 import { ExternalFormLink } from '../components/ExternalFormLink';
+import { CompulsoryLabel } from '../components/CompulsoryLabel';
 import { fetchContractorForProject, type ContractorBrand } from '../lib/contractorBrand';
 import { ensureApprovedCompletionPdf, listCompletionForms } from '../lib/completionFormsApi';
 import { completionDocUiStatus, completionShouldAttachPdf, type CompletionFormSummary } from '../lib/completionFormTypes';
@@ -831,7 +832,10 @@ export default function HandoverPage() {
                     {['completed', 'imported', 'uploaded'].includes(status) ? <CheckCircle className="w-5 h-5 text-emerald-600" /> : <Icon className="w-5 h-5 text-slate-500" />}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-slate-800">{doc.title}</p>
+                    <p className="text-sm font-semibold text-slate-800 flex items-center gap-2 flex-wrap">
+                      <span className="min-w-0">{doc.title}</span>
+                      <CompulsoryLabel show={doc.required} />
+                    </p>
                     <p className="text-xs text-slate-500 truncate mt-0.5">{doc.description}</p>
                   </div>
                   <span className={`text-xs font-medium px-2.5 py-1 rounded-full border ${statusCfg.color}`}>
@@ -913,7 +917,10 @@ export default function HandoverPage() {
                       {uploads.length > 0 ? <CheckCircle className="w-5 h-5 text-emerald-600" /> : <Icon className="w-5 h-5 text-slate-500" />}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className={`text-sm font-semibold ${uploads.length > 0 ? 'text-emerald-900' : 'text-slate-800'}`}>{doc.title}</p>
+                      <p className={`text-sm font-semibold flex items-center gap-2 flex-wrap ${uploads.length > 0 ? 'text-emerald-900' : 'text-slate-800'}`}>
+                        <span className="min-w-0">{doc.title}</span>
+                        <CompulsoryLabel show={doc.required} />
+                      </p>
                       <p className="text-xs text-slate-500 mt-0.5">{doc.description}</p>
                     </div>
                     {uploads.length > 0 && <span className="text-xs font-semibold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">{uploads.length}</span>}
@@ -944,7 +951,10 @@ export default function HandoverPage() {
                     {upload ? <CheckCircle className="w-5 h-5 text-emerald-600" /> : <Icon className="w-5 h-5 text-slate-500" />}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className={`text-sm font-semibold ${upload ? 'text-emerald-900' : 'text-slate-800'}`}>{doc.title}</p>
+                    <p className={`text-sm font-semibold flex items-center gap-2 flex-wrap ${upload ? 'text-emerald-900' : 'text-slate-800'}`}>
+                      <span className="min-w-0">{doc.title}</span>
+                      <CompulsoryLabel show={doc.required} />
+                    </p>
                     <p className="text-xs text-slate-500 mt-0.5">{doc.description}</p>
                   </div>
                 </div>

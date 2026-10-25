@@ -29,6 +29,7 @@ import { invokeSafetyCulture } from '../lib/safetyCultureApi';
 import { listCompletionDocuments } from '../lib/completionFormsApi';
 import { supabase } from '../lib/supabase';
 import { ExternalFormLink } from '../components/ExternalFormLink';
+import { CompulsoryLabel } from '../components/CompulsoryLabel';
 import type { SCTemplateMapping } from '../types';
 import { useProject } from './ProjectLayout';
 import {
@@ -488,7 +489,10 @@ export default function HandoverConfigPage() {
               <div key={def.id} className={`bg-white rounded-xl border shadow-sm overflow-hidden ${def.is_active ? 'border-slate-200' : 'border-slate-100 opacity-70'}`}>
                 <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-slate-100 bg-slate-50">
                   <div>
-                    <p className="text-sm font-semibold text-slate-800">{def.title}</p>
+                    <p className="text-sm font-semibold text-slate-800 flex items-center gap-2 flex-wrap">
+                      <span>{def.title}</span>
+                      <CompulsoryLabel show={def.required} />
+                    </p>
                     <p className="text-xs text-slate-500 mt-0.5">{def.description}</p>
                     {handoverCaptureMethod(def) === 'upload' && (
                       <div className="mt-2 max-w-md">
@@ -498,7 +502,6 @@ export default function HandoverConfigPage() {
                     <p className="text-[11px] text-slate-400 font-mono mt-1">{def.document_id}</p>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    {def.required && <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">Required</span>}
                     {handoverCaptureMethod(def) === 'web_form' && <span className="text-[10px] font-semibold uppercase tracking-wide text-violet-700 bg-violet-50 px-2 py-0.5 rounded-full">Web form</span>}
                     {handoverCaptureMethod(def) === 'safetyculture' && <span className="text-[10px] font-semibold uppercase tracking-wide text-cyan-700 bg-cyan-50 px-2 py-0.5 rounded-full">SC</span>}
                     {handoverCaptureMethod(def) === 'upload' && <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">Upload</span>}
