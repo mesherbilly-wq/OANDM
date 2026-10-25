@@ -17,6 +17,7 @@ import {
   upsertHandoverDocumentType,
   deleteHandoverDocumentDefinition,
   isHandoverConfigLocalOnly,
+  bumpDocumentId,
   uniqueHandoverDocumentId,
   slugifyHandoverDocumentId,
   PROJECT_WIDE_DOCUMENT_TYPE_KEY,
@@ -146,8 +147,12 @@ export default function HandoverConfigPage() {
       setError('Enter a document title.');
       return;
     }
-    const documentId = (draftDef.document_id?.trim()
-      || uniqueHandoverDocumentId(draftDef.type_key ?? selectedTypeKey, title, definitions.map(def => def.document_id)));
+    const takenIds = definitions.map(def => def.document_id);
+    const preferredId = draftDef.document_id?.trim()
+      || uniqueHandoverDocumentId(draftDef.type_key ?? selectedTypeKey, title, takenIds);
+    const documentId = editingDefId === 'new'
+      ? bumpDocumentId(preferredId, takenIds)
+      : preferredId;
     if (!draftDef.type_key) {
       setError('Choose a document type.');
       return;
@@ -182,7 +187,8 @@ export default function HandoverConfigPage() {
     });
 
     setSaving(false);
-    if (saveError) {
+    const addedWithoutFormUrl = saveError?.startsWith('The document was added.');
+    if (saveError && !addedWithoutFormUrl) {
       setError(saveError);
       return;
     }
@@ -191,6 +197,7 @@ export default function HandoverConfigPage() {
     setDraftDef({});
     await load();
     setLocalConfigOnly(isHandoverConfigLocalOnly());
+    if (addedWithoutFormUrl) setError(saveError);
   };
 
   const removeDefinition = async (def: HandoverDocumentDefinition) => {

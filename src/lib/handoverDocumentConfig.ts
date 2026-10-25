@@ -323,8 +323,15 @@ export function slugifyHandoverDocumentId(value: string): string {
 
 export function uniqueHandoverDocumentId(typeKey: string, title: string, existingIds: string[]): string {
   const base = `${typeKey}_${slugifyHandoverDocumentId(title)}`;
+  return bumpDocumentId(base, existingIds);
+}
+
+/** Return documentId, or the next free documentId_2, documentId_3, … when it is already used. */
+export function bumpDocumentId(documentId: string, existingIds: string[]): string {
   const used = new Set(existingIds);
-  if (!used.has(base)) return base;
+  const trimmed = documentId.trim();
+  if (trimmed && !used.has(trimmed)) return trimmed;
+  const base = (trimmed || 'document').replace(/_(\d+)$/, '');
   let n = 2;
   while (used.has(`${base}_${n}`)) n += 1;
   return `${base}_${n}`;
@@ -710,23 +717,50 @@ export async function upsertHandoverDocumentDefinition(
   };
 
   let body: Record<string, unknown> = withMethod;
-  let { error } = await write(body);
+  if (!def.external_form_url?.trim()) {
+    const { external_form_url: _emptyUrl, ...withoutUrl } = body;
+    body = withoutUrl;
+  }
+
+  const isDocumentIdConflict = (message: string, code?: string) =>
+    code === '23505' || /duplicate key value violates unique constraint/i.test(message);
+
+  let documentId = payload.document_id;
+  let error: { message: string; code?: string } | null = null;
   let formUrlSkipped = false;
-  if (error && /external_form_url/i.test(error.message)) {
-    const { external_form_url: _ignored, ...rest } = body;
-    body = rest;
-    formUrlSkipped = true;
-    ({ error } = await write(body));
+  const attempts = def.id ? 1 : 5;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const row = { ...body, document_id: documentId };
+    let result = await write(row);
+    error = result.error;
+
+    if (error && /external_form_url/i.test(error.message)) {
+      const { external_form_url: _missingUrl, ...withoutUrl } = row;
+      body = withoutUrl;
+      formUrlSkipped = true;
+      result = await write({ ...withoutUrl, document_id: documentId });
+      error = result.error;
+    }
+    if (error && /capture_method|web_form_template_key/i.test(error.message)) {
+      result = await write({ ...payload, document_id: documentId });
+      error = result.error;
+      formUrlSkipped = Boolean(def.external_form_url?.trim());
+      body = { ...payload };
+    }
+    if (!error) break;
+    if (!def.id && isDocumentIdConflict(error.message, error.code) && attempt < attempts - 1) {
+      documentId = bumpDocumentId(documentId, [documentId]);
+      continue;
+    }
+    break;
   }
-  if (error && /capture_method|web_form_template_key/i.test(error.message)) {
-    ({ error } = await write(payload));
-    formUrlSkipped = Boolean(def.external_form_url?.trim());
-  }
+
   if (!error && formUrlSkipped && def.external_form_url?.trim()) {
-    return 'Paste 050 SQL in Supabase so the form web address is saved.';
+    return 'The document was added. Paste 050 SQL in Supabase, then edit it to save the form web address.';
   }
   if (!error) return null;
-  if (/duplicate|unique/i.test(error.message)) {
+  if (isDocumentIdConflict(error.message, error.code)) {
     return 'That Document ID already exists. Change it and save again.';
   }
   if (!isMissingSchemaError(error.message)) return error.message;
@@ -758,9 +792,8 @@ export async function upsertHandoverDocumentDefinition(
     if (index >= 0) store.definitions[index] = row;
     else store.definitions.push(row);
   } else {
-    if (store.definitions.some(existing => existing.document_id === row.document_id)) {
-      return 'That Document ID already exists. Change it and save again.';
-    }
+    const taken = store.definitions.map(existing => existing.document_id);
+    row.document_id = bumpDocumentId(row.document_id, taken);
     store.definitions.push(row);
   }
 
