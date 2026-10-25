@@ -10,7 +10,7 @@ import { supabase } from '../lib/supabase';
 import { deriveProjectSystems, getCategoryStyle, PROJECT_DEVICES_CHANGED_EVENT, type ProjectSystem } from '../lib/systems';
 import { fetchProjectSystems } from '../lib/projectSystemsDb';
 import type { Device, ProjectSystemRecord } from '../types';
-import { canAccessDocumentManagement, canAccessIntegrations, canEditOperations, canManageUsers, isEndUser, roleLabel } from '../lib/appRoles';
+import { canAccessDocumentManagement, canAccessIntegrations, canAccessTemplates, canEditOperations, canManageUsers, isEndUser, roleLabel } from '../lib/appRoles';
 import { useUserAccess } from '../lib/userAccess';
 
 const PROJECT_MODULES = [
@@ -44,10 +44,15 @@ export function Layout({ companyName, userEmail, onSignOut }: {
   const showUsers = canManageUsers(role);
   const endUser = isEndUser(role);
   const showDocumentManagement = canAccessDocumentManagement(role);
+  const showTemplates = canAccessTemplates(role);
   const populatedSystems = projectSystems.filter(system => system.deviceCount > 0);
   const visibleModules = endUser
     ? PROJECT_MODULES.filter(mod => mod.slug === 'om-builder').map(mod => ({ ...mod, name: 'O&M Pack' }))
-    : PROJECT_MODULES.filter(mod => mod.slug !== 'documents' || showDocumentManagement);
+    : PROJECT_MODULES.filter(mod => {
+        if (mod.slug === 'documents') return showDocumentManagement;
+        if (mod.slug === 'templates') return showTemplates;
+        return true;
+      });
 
   const projectMatch = location.pathname.match(/^\/projects\/(\d+)/);
   const currentProjectId = projectMatch?.[1] ?? null;

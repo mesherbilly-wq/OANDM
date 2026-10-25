@@ -8,7 +8,15 @@ import {
 } from '../lib/projectEndUserAccess';
 import migration029Sql from '../../supabase/migrations/20260916150000_029_project_end_user_invites.sql?raw';
 
-export function OmClientInvitePanel({ projectId }: { projectId: number }) {
+export function OmClientInvitePanel({
+  projectId,
+  locked = false,
+  lockedMessage,
+}: {
+  projectId: number;
+  locked?: boolean;
+  lockedMessage?: string;
+}) {
   const [email, setEmail] = useState('');
   const [invites, setInvites] = useState<ProjectEndUserInvite[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,6 +49,7 @@ export function OmClientInvitePanel({ projectId }: { projectId: number }) {
   };
 
   const invite = async () => {
+    if (locked) return;
     setSaving(true);
     setError(null);
     try {
@@ -69,7 +78,9 @@ export function OmClientInvitePanel({ projectId }: { projectId: number }) {
         <h3 className="text-sm font-semibold text-slate-900">Invite client to this O&amp;M pack</h3>
       </div>
       <p className="text-xs text-slate-500 mb-3">
-        They only see this project. Invite them to another project as well if they need that pack too.
+        {locked
+          ? (lockedMessage ?? 'The client link stays off until the compulsory documents are uploaded or filled in.')
+          : 'They only see this project. Invite them to another project as well if they need that pack too.'}
       </p>
 
       {needsMigration && (
@@ -88,12 +99,13 @@ export function OmClientInvitePanel({ projectId }: { projectId: number }) {
           onChange={e => setEmail(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && void invite()}
           placeholder="client@company.co.uk"
-          className="flex-1 min-w-[14rem] border border-slate-300 rounded-lg px-3 py-2 text-sm"
+          disabled={locked}
+          className="flex-1 min-w-[14rem] border border-slate-300 rounded-lg px-3 py-2 text-sm disabled:bg-slate-50"
         />
         <button
           type="button"
           onClick={() => void invite()}
-          disabled={saving || !email.trim() || needsMigration}
+          disabled={locked || saving || !email.trim() || needsMigration}
           className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50"
         >
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
@@ -103,7 +115,7 @@ export function OmClientInvitePanel({ projectId }: { projectId: number }) {
 
       {error && <p className="mt-2 text-xs text-red-700">{error}</p>}
 
-      {lastUrl && (
+      {lastUrl && !locked && (
         <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 space-y-2">
           <p className="text-xs font-mono text-slate-700 break-all">{lastUrl}</p>
           <div className="flex gap-2">

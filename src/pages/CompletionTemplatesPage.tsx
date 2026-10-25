@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Navigate } from 'react-router-dom';
 import { Loader2, Plus, Trash2 } from 'lucide-react';
+import { canAccessTemplates, defaultProjectPath } from '../lib/appRoles';
+import { useUserAccess } from '../lib/userAccess';
 import { useProject } from './ProjectLayout';
 import { supabase } from '../lib/supabase';
 import { getCategoryStyle, type ProjectSystem } from '../lib/systems';
@@ -32,6 +35,7 @@ import type { CompletionTemplateSchema } from '../lib/completionFormTypes';
 
 export default function CompletionTemplatesPage() {
   const { project } = useProject();
+  const { role, roleLoading } = useUserAccess();
   const pid = project.id;
   const [brand, setBrand] = useState<ContractorBrand | null>(null);
   const [projectSystems, setProjectSystems] = useState<ProjectSystem[]>([]);
@@ -243,6 +247,18 @@ export default function CompletionTemplatesPage() {
     }
   };
 
+  if (roleLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-64">
+        <div className="w-8 h-8 border-4 border-cyan-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!canAccessTemplates(role)) {
+    return <Navigate to={defaultProjectPath(pid, role)} replace />;
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
@@ -277,7 +293,7 @@ export default function CompletionTemplatesPage() {
         <div>
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Documents for {systemType}</p>
           <p className="text-xs text-slate-500 mt-1">
-            Tick every form this system should use. Open a row to edit it. Commissioning can issue any ticked document.
+            Tick every form this system should use. Once assigned, it stays on the system until an admin removes it. Commissioning can issue any ticked document.
           </p>
         </div>
         {documents.length === 0 ? (

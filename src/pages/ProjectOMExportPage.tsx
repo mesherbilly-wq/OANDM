@@ -11,7 +11,8 @@ import { fetchProjectSystems } from '../lib/projectSystemsDb';
 import { findLibraryDatasheetForDevice } from '../lib/datasheetMatching';
 import { selectProductPageIndexes } from '../lib/datasheetLookup';
 import { forgetDatasheet } from '../lib/datasheetLookup';
-import { FALLBACK_DOCUMENT_DEFINITIONS, titleForLegacyDocumentId } from '../lib/handoverDocumentConfig';
+import { FALLBACK_DOCUMENT_DEFINITIONS, fetchHandoverDocumentDefinitions, titleForLegacyDocumentId, type HandoverDocumentDefinition } from '../lib/handoverDocumentConfig';
+import { missingCompulsoryHandoverDocuments } from '../lib/compulsoryHandoverDocuments';
 import {
   DEFAULT_PRODUCT_WARRANTY_YEARS,
   resolveWarrantyYearsForPartNumber,
@@ -641,6 +642,7 @@ export function ProjectOMExportPage() {
   const [asFittedContent, setAsFittedContent] = useState('');
   const [asFittedSaving, setAsFittedSaving] = useState(false);
   const [scHandoverDocs, setScHandoverDocs] = useState<{ id?: number; document_type: string; title: string; status: string; file_url: string | null; file_name: string | null; sc_inspection_id: string | null; sc_result: string | null; system_type?: string | null; project_system_id?: number | null }[]>([]);
+  const [handoverDefinitions, setHandoverDefinitions] = useState<HandoverDocumentDefinition[]>([]);
   const [otherHandoverDocs, setOtherHandoverDocs] = useState<OtherHandoverDoc[]>([]);
   const [projectManuals, setProjectManuals] = useState<{ id: number; manual_id: number; manual: { title: string; description: string | null; manufacturer: string | null; model_number: string | null; file_name: string; file_url: string } }[]>([]);
   const [contractorProfile, setContractorProfile] = useState<any>(null);
@@ -699,6 +701,7 @@ export function ProjectOMExportPage() {
       techDocDocsRes,
       asFittedItemsRes,
       completionFormRows,
+      handoverDefinitionRows,
     ] = await Promise.all([
       supabase.from('devices').select('*').eq('project_id', pid).neq('status', 'pending_review').order('system_type').order('device_name'),
       supabase.from('project_documents').select('*').eq('project_id', pid),
@@ -717,6 +720,7 @@ export function ProjectOMExportPage() {
       supabase.from('tech_doc_documents').select(TECH_DOC_DOCUMENT_SELECT).eq('project_id', pid).order('created_at', { ascending: true }),
       supabase.from('as_fitted_items').select('id,quoted_description,quoted_quantity,installed_description,actual_installed_quantity,reconciliation_status,change_reason').eq('project_id', pid).order('created_at'),
       listCompletionForms(pid).catch(() => [] as CompletionFormSummary[]),
+      fetchHandoverDocumentDefinitions().catch(() => FALLBACK_DOCUMENT_DEFINITIONS),
     ]);
 
     let namedTechDocsRes = techDocDocsRes;
@@ -763,6 +767,7 @@ export function ProjectOMExportPage() {
     setAsFittedDrawings(afdData ?? []);
     setAsFittedItems((asFittedItemsRes.error ? [] : asFittedItemsRes.data ?? []) as AsFittedItemRow[]);
     setScHandoverDocs(scHandData ?? []);
+    setHandoverDefinitions(handoverDefinitionRows);
     setOtherHandoverDocs((otherHandData ?? []) as OtherHandoverDoc[]);
     setProjectManuals((manualData ?? []) as any);
     setContractorProfile(contrData ?? null);
@@ -1055,6 +1060,18 @@ export function ProjectOMExportPage() {
 
   const projectSystems = populatedProjectSystems(deriveProjectSystems(devices, systemRows));
   const documentSystems = projectSystems;
+  const compulsoryGaps = pid
+    ? missingCompulsoryHandoverDocuments({
+        projectId: pid,
+        projectWideTypeKey: project?.handover_project_wide_type_key,
+        systems: documentSystems,
+        definitions: handoverDefinitions,
+        handoverDocs: scHandoverDocs,
+        uploads: omUploads,
+        completionForms,
+      })
+    : [];
+  const releaseBlocked = compulsoryGaps.length > 0;
   const includedSystemNames = new Set(projectSystems.map(system => system.name));
   const importedTechSystems = systemsWithTechImport(documentSystems, techDocState);
   const namedTechBundles = techDocBundles.filter(bundle =>
@@ -1305,12 +1322,15 @@ export function ProjectOMExportPage() {
   }, [hUploads, includedScHandoverDocs, includedOtherHandoverDocs]);
   const printRendering = packPdfUrls.some(url => pdfPageImages[url]?.loading);
 
-  const handlePrint = () => window.print();
+  const handlePrint = () => {
+    if (releaseBlocked) return;
+    window.print();
+  };
 
   const [generatingPdf, setGeneratingPdf] = useState(false);
 
   const handleDownloadPdf = async (only?: Section[]) => {
-    if (generatingPdf || printRendering) return;
+    if (releaseBlocked || generatingPdf || printRendering) return;
     setGeneratingPdf(true);
     try {
       const { default: jsPDF } = await import('jspdf');
@@ -1692,7 +1712,9 @@ export function ProjectOMExportPage() {
         <div>
           <h2 className="text-lg font-semibold text-slate-900">{packReadOnly ? 'O&M Pack' : 'O&M Pack Builder'}</h2>
           <p className="text-sm text-slate-500 mt-0.5">
-            {packReadOnly
+            {releaseBlocked
+              ? 'Print, download, and the client link stay off until the compulsory documents are uploaded or filled in.'
+              : packReadOnly
               ? 'Read only. Tick sections, then download the full pack or the selected pages.'
               : `${completeSections}/${SECTIONS.length} sections complete · Ready to print and send to customer`}
           </p>
@@ -1704,13 +1726,13 @@ export function ProjectOMExportPage() {
             </span>
           )}
           {!packReadOnly && (
-            <button onClick={handlePrint} disabled={printRendering}
-              className="inline-flex items-center gap-2 bg-slate-700 text-white px-4 py-2.5 rounded-xl hover:bg-slate-600 transition-colors font-medium text-sm shadow-sm disabled:opacity-50 disabled:cursor-wait">
+            <button onClick={handlePrint} disabled={releaseBlocked || printRendering}
+              className="inline-flex items-center gap-2 bg-slate-700 text-white px-4 py-2.5 rounded-xl hover:bg-slate-600 transition-colors font-medium text-sm shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
               <Printer className="w-4 h-4" />Print
             </button>
           )}
-          <button onClick={() => void handleDownloadPdf()} disabled={printRendering || generatingPdf}
-            className="inline-flex items-center gap-2 bg-cyan-600 text-white px-5 py-2.5 rounded-xl hover:bg-cyan-700 transition-colors font-medium text-sm shadow-sm disabled:opacity-50 disabled:cursor-wait">
+          <button onClick={() => void handleDownloadPdf()} disabled={releaseBlocked || printRendering || generatingPdf}
+            className="inline-flex items-center gap-2 bg-cyan-600 text-white px-5 py-2.5 rounded-xl hover:bg-cyan-700 transition-colors font-medium text-sm shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
             {generatingPdf
               ? <><Loader2 className="w-4 h-4 animate-spin" />Generating PDF…</>
               : <><Download className="w-4 h-4" />{packReadOnly ? 'Download full PDF' : 'Download PDF'}</>
@@ -1719,7 +1741,7 @@ export function ProjectOMExportPage() {
           {packReadOnly && (
             <button
               onClick={() => void handleDownloadPdf(selectedSections)}
-              disabled={printRendering || generatingPdf || selectedSections.length === 0}
+              disabled={releaseBlocked || printRendering || generatingPdf || selectedSections.length === 0}
               className="inline-flex items-center gap-2 bg-slate-900 text-white px-4 py-2.5 rounded-xl hover:bg-slate-800 transition-colors font-medium text-sm shadow-sm disabled:opacity-50"
             >
               <Download className="w-4 h-4" />Download selected
@@ -1728,9 +1750,24 @@ export function ProjectOMExportPage() {
         </div>
       </div>
 
+      {releaseBlocked && (
+        <div className="mb-5 print:hidden rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <p className="text-sm font-semibold text-amber-950">Compulsory documents still needed</p>
+          <ul className="mt-2 space-y-1 text-sm text-amber-900">
+            {compulsoryGaps.map(gap => (
+              <li key={`${gap.systemLabel}:${gap.documentId}`}>{gap.systemLabel}: {gap.title}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {!packReadOnly && pid ? (
         <div className="mb-5 print:hidden">
-          <OmClientInvitePanel projectId={pid} />
+          <OmClientInvitePanel
+            projectId={pid}
+            locked={releaseBlocked}
+            lockedMessage="The client link stays off until the compulsory documents above are uploaded or filled in."
+          />
         </div>
       ) : null}
 
@@ -1892,7 +1929,7 @@ export function ProjectOMExportPage() {
                       );
                     })}
                   </div>
-                  {complete === contentSections.length && (
+                  {complete === contentSections.length && !releaseBlocked && (
                     <div className="px-6 py-4 bg-emerald-50 border-t border-emerald-100 flex items-center gap-3">
                       <CheckCircle className="w-5 h-5 text-emerald-600 flex-shrink-0" />
                       <p className="text-sm font-semibold text-emerald-800">All sections complete — your O&amp;M pack is ready to print.</p>
@@ -2002,7 +2039,12 @@ export function ProjectOMExportPage() {
       </div>
 
       {/* ══ PRINT VIEW — all sections rendered sequentially ══ */}
-      <div id="om-print-root" className="hidden print:block">
+      {releaseBlocked && (
+        <div className="hidden print:block p-8 text-sm">
+          This O&amp;M cannot be printed until the compulsory documents are uploaded or filled in.
+        </div>
+      )}
+      <div id="om-print-root" className={releaseBlocked ? 'hidden' : 'hidden print:block'}>
         {/* Cover page — page 1, @page :first suppresses footer */}
         <div id="print-section-cover">
           <PrintCoverPage project={project} devices={devices} systemGroups={systemGroups} contractor={contractorProfile} authority={docAuthority} />
