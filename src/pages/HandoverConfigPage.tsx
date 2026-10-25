@@ -28,6 +28,7 @@ import {
 import { invokeSafetyCulture } from '../lib/safetyCultureApi';
 import { listCompletionDocuments } from '../lib/completionFormsApi';
 import { supabase } from '../lib/supabase';
+import { ExternalFormLink } from '../components/ExternalFormLink';
 import type { SCTemplateMapping } from '../types';
 import { useProject } from './ProjectLayout';
 import {
@@ -489,6 +490,11 @@ export default function HandoverConfigPage() {
                   <div>
                     <p className="text-sm font-semibold text-slate-800">{def.title}</p>
                     <p className="text-xs text-slate-500 mt-0.5">{def.description}</p>
+                    {handoverCaptureMethod(def) === 'upload' && (
+                      <div className="mt-2 max-w-md">
+                        <ExternalFormLink url={def.external_form_url} />
+                      </div>
+                    )}
                     <p className="text-[11px] text-slate-400 font-mono mt-1">{def.document_id}</p>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
@@ -642,7 +648,7 @@ export default function HandoverConfigPage() {
                       className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2"
                     />
                     <p className="text-xs text-slate-500 mt-1">
-                      Optional. On Handover, this opens so the form can be filled in and downloaded, then uploaded here.
+                      Optional. On Handover and Commissioning this address is a link. Fill the form, download it, then upload the PDF.
                     </p>
                   </div>
                 </div>

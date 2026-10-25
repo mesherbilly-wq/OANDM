@@ -69,6 +69,43 @@ export function externalFormHref(value: string | null | undefined): string | nul
   return `https://${raw}`;
 }
 
+const EXTERNAL_FORM_URL_STORAGE_KEY = 'oandm.handover.externalFormUrls.v1';
+
+function readRememberedFormUrls(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(EXTERNAL_FORM_URL_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].trim().length > 0),
+    );
+  } catch {
+    return {};
+  }
+}
+
+/** Keep a form address available on Handover and Commissioning when the database column is not there yet. */
+export function rememberExternalFormUrl(documentId: string, url: string | null | undefined): void {
+  const id = documentId.trim();
+  if (!id) return;
+  const store = readRememberedFormUrls();
+  const href = externalFormHref(url);
+  if (href) store[id] = href;
+  else delete store[id];
+  localStorage.setItem(EXTERNAL_FORM_URL_STORAGE_KEY, JSON.stringify(store));
+}
+
+function withRememberedFormUrls(definitions: HandoverDocumentDefinition[]): HandoverDocumentDefinition[] {
+  const remembered = readRememberedFormUrls();
+  if (!Object.keys(remembered).length) return definitions;
+  return definitions.map(def => {
+    if (externalFormHref(def.external_form_url)) return def;
+    const url = remembered[def.document_id];
+    return url ? { ...def, external_form_url: url } : def;
+  });
+}
+
 export function handoverCaptureMethod(
   def: Pick<HandoverDocumentDefinition, 'capture_method' | 'sc_enabled' | 'upload_only'>,
 ): HandoverCaptureMethod {
@@ -214,14 +251,14 @@ export async function fetchHandoverDocumentDefinitions(): Promise<HandoverDocume
   if (error) {
     if (isMissingSchemaError(error.message)) {
       markHandoverConfigLocalOnly();
-      return readLocalHandoverConfig().definitions.map(row => ({
+      return withRememberedFormUrls(readLocalHandoverConfig().definitions.map(row => ({
         ...row,
         field_mappings: row.field_mappings ?? { ...DEFAULT_SC_FIELD_MAPPINGS },
-      }));
+      })));
     }
-    return FALLBACK_DOCUMENT_DEFINITIONS;
+    return withRememberedFormUrls(FALLBACK_DOCUMENT_DEFINITIONS);
   }
-  if (!data?.length) return FALLBACK_DOCUMENT_DEFINITIONS;
+  if (!data?.length) return withRememberedFormUrls(FALLBACK_DOCUMENT_DEFINITIONS);
 
   const definitions = (data as HandoverDocumentDefinition[]).map(row => ({
     ...row,
@@ -236,14 +273,14 @@ export async function fetchHandoverDocumentDefinitions(): Promise<HandoverDocume
       .order('display_order');
 
     if (!refreshError && refreshed?.length) {
-      return (refreshed as HandoverDocumentDefinition[]).map(row => ({
+      return withRememberedFormUrls((refreshed as HandoverDocumentDefinition[]).map(row => ({
         ...row,
         field_mappings: row.field_mappings ?? { ...DEFAULT_SC_FIELD_MAPPINGS },
-      }));
+      })));
     }
   }
 
-  return definitions;
+  return withRememberedFormUrls(definitions);
 }
 
 function mergeFallbackTypes(types: HandoverDocumentType[]): HandoverDocumentType[] {
@@ -287,6 +324,16 @@ export function definitionsForType(
   return definitions
     .filter(def => def.type_key === typeKey && def.is_active)
     .sort((a, b) => a.display_order - b.display_order || a.title.localeCompare(b.title));
+}
+
+/** Upload PDF documents that have a form address to open. */
+export function uploadDefinitionsWithFormLink(
+  definitions: HandoverDocumentDefinition[],
+  typeKey: string,
+): HandoverDocumentDefinition[] {
+  return definitionsForType(definitions, typeKey).filter(def =>
+    handoverCaptureMethod(def) === 'upload' && externalFormHref(def.external_form_url),
+  );
 }
 
 /** Include saved legacy docs even if definition was deactivated. Do not pull in documents from another type. */
@@ -756,6 +803,12 @@ export async function upsertHandoverDocumentDefinition(
     break;
   }
 
+  if (!error) {
+    rememberExternalFormUrl(
+      documentId,
+      method === 'upload' ? externalFormHref(def.external_form_url) : null,
+    );
+  }
   if (!error && formUrlSkipped && def.external_form_url?.trim()) {
     return 'The document was added. Paste 050 SQL in Supabase, then edit it to save the form web address.';
   }
@@ -797,6 +850,7 @@ export async function upsertHandoverDocumentDefinition(
     store.definitions.push(row);
   }
 
+  rememberExternalFormUrl(row.document_id, method === 'upload' ? row.external_form_url : null);
   writeLocalHandoverConfig(store);
   return null;
 }

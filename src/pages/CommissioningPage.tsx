@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useProject } from './ProjectLayout';
 import { supabase } from '../lib/supabase';
 import { CommissioningRecord } from '../types';
@@ -7,6 +7,17 @@ import {
   Plus, CheckCircle, XCircle, Circle, Save, Loader2,
 } from 'lucide-react';
 import { CompletionOfficePanel } from '../components/completion/CompletionOfficePanel';
+import { ExternalFormLink } from '../components/ExternalFormLink';
+import { loadDocumentProjectSystems } from '../lib/documentProjectSystems';
+import {
+  applyHandoverTypeSelectionsToSystems,
+  fetchHandoverDocumentDefinitions,
+  inferHandoverDocumentTypeKey,
+  resolveProjectWideHandoverTypeKey,
+  uploadDefinitionsWithFormLink,
+  type HandoverDocumentDefinition,
+} from '../lib/handoverDocumentConfig';
+import { legacySystemNameToCategory, type ProjectSystem } from '../lib/systems';
 
 const DEFAULT_TEMPLATES: Record<string, { sections: string[]; items: Array<{ section: string; test_description: string; expected_result: string }> }> = {
   CCTV: {
@@ -125,6 +136,8 @@ export default function CommissioningPage() {
   const [testDate, setTestDate] = useState(new Date().toISOString().split('T')[0]);
   const [signOffDialog, setSignOffDialog] = useState(false);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [formDefinitions, setFormDefinitions] = useState<HandoverDocumentDefinition[]>([]);
+  const [handoverSystems, setHandoverSystems] = useState<ProjectSystem[]>([]);
 
   const fetchRecords = useCallback(async () => {
     if (!pid) return;
@@ -147,8 +160,13 @@ export default function CommissioningPage() {
 
   useEffect(() => {
     if (!pid) return;
-    supabase.from('devices').select('*').eq('project_id', pid).then(({ data: devs }) => {
-      setDevices(devs ?? []);
+    void fetchHandoverDocumentDefinitions().then(setFormDefinitions);
+    supabase.from('devices').select('*').eq('project_id', pid).then(async ({ data: devs }) => {
+      const rows = (devs ?? []) as Device[];
+      setDevices(rows);
+      const systems = await loadDocumentProjectSystems(pid, rows);
+      applyHandoverTypeSelectionsToSystems(pid, systems);
+      setHandoverSystems(systems);
     });
   }, [pid]);
 
@@ -203,6 +221,24 @@ export default function CommissioningPage() {
   const totalCount = records.length;
   const status = totalCount === 0 ? 'NO DATA' : passCount === totalCount ? 'PASS' : failCount > 0 ? 'FAIL' : 'IN PROGRESS';
 
+  const formLinks = useMemo(() => {
+    if (!pid) return [];
+    const system = handoverSystems.find(item => item.name === activeTab);
+    const typeKey = system?.handoverDocumentTypeKey
+      || inferHandoverDocumentTypeKey(activeTab, system?.category ?? legacySystemNameToCategory(activeTab));
+    const projectWideKey = resolveProjectWideHandoverTypeKey(pid, project?.handover_project_wide_type_key);
+    const combined = [
+      ...uploadDefinitionsWithFormLink(formDefinitions, typeKey),
+      ...uploadDefinitionsWithFormLink(formDefinitions, projectWideKey),
+    ];
+    const seen = new Set<string>();
+    return combined.filter(def => {
+      if (seen.has(def.document_id)) return false;
+      seen.add(def.document_id);
+      return true;
+    });
+  }, [pid, project?.handover_project_wide_type_key, handoverSystems, activeTab, formDefinitions]);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -215,6 +251,23 @@ export default function CommissioningPage() {
           status === 'PASS' ? 'bg-emerald-100 text-emerald-700' : status === 'FAIL' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-600'
         }`}>{status}        </span>
       </div>
+
+      {formLinks.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-3">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900">Forms to fill</h3>
+            <p className="text-xs text-slate-500 mt-0.5">Open the form, download it, then upload the PDF on Handover.</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {formLinks.map(def => (
+              <div key={def.document_id} className="space-y-1.5">
+                <p className="text-sm font-medium text-slate-800">{def.title}</p>
+                <ExternalFormLink url={def.external_form_url} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {project && <CompletionOfficePanel project={project} />}
 
