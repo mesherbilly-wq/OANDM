@@ -58,6 +58,15 @@ export interface HandoverDocumentDefinition {
   is_active: boolean;
   capture_method?: HandoverCaptureMethod | null;
   web_form_template_key?: string | null;
+  /** External page where the form is filled in and downloaded before a manual upload. */
+  external_form_url?: string | null;
+}
+
+export function externalFormHref(value: string | null | undefined): string | null {
+  const raw = value?.trim() ?? '';
+  if (!raw) return null;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return `https://${raw}`;
 }
 
 export function handoverCaptureMethod(
@@ -137,6 +146,7 @@ function fallbackDefinition(
     is_active: opts.is_active ?? true,
     capture_method: opts.capture_method ?? (opts.upload_only ? 'upload' : opts.sc_enabled ? 'safetyculture' : 'upload'),
     web_form_template_key: opts.web_form_template_key ?? null,
+    external_form_url: opts.external_form_url ?? null,
   };
 }
 
@@ -463,6 +473,7 @@ function definitionsDiffer(
     || local.icon_key !== db.icon_key
     || (local.capture_method ?? null) !== (db.capture_method ?? null)
     || (local.web_form_template_key ?? null) !== (db.web_form_template_key ?? null)
+    || (local.external_form_url ?? null) !== (db.external_form_url ?? null)
   );
 }
 
@@ -494,6 +505,9 @@ async function syncLocalHandoverConfigToDatabase(
           multi: local.multi,
           display_order: local.display_order,
           is_active: local.is_active,
+          capture_method: local.capture_method,
+          web_form_template_key: local.web_form_template_key,
+          external_form_url: local.external_form_url ?? null,
         };
 
     if (db && !definitionsDiffer(local, db)) continue;
@@ -513,6 +527,7 @@ async function syncLocalHandoverConfigToDatabase(
           is_active: payload.is_active,
           capture_method: payload.capture_method,
           web_form_template_key: payload.web_form_template_key,
+          external_form_url: payload.external_form_url ?? null,
           updated_at: new Date().toISOString(),
         }).eq('id', db.id)
       : await supabase.from('handover_document_definitions').insert({
@@ -531,6 +546,7 @@ async function syncLocalHandoverConfigToDatabase(
           is_active: payload.is_active,
           capture_method: payload.capture_method,
           web_form_template_key: payload.web_form_template_key,
+          external_form_url: payload.external_form_url ?? null,
         });
 
     if (!error) changed = true;
@@ -679,6 +695,7 @@ export async function upsertHandoverDocumentDefinition(
     ...payload,
     capture_method: method,
     web_form_template_key: method === 'web_form' ? (def.web_form_template_key?.trim() || null) : null,
+    external_form_url: method === 'upload' ? externalFormHref(def.external_form_url) : null,
   };
 
   const write = async (body: Record<string, unknown>) => {
@@ -692,9 +709,21 @@ export async function upsertHandoverDocumentDefinition(
     });
   };
 
-  let { error } = await write(withMethod);
+  let body: Record<string, unknown> = withMethod;
+  let { error } = await write(body);
+  let formUrlSkipped = false;
+  if (error && /external_form_url/i.test(error.message)) {
+    const { external_form_url: _ignored, ...rest } = body;
+    body = rest;
+    formUrlSkipped = true;
+    ({ error } = await write(body));
+  }
   if (error && /capture_method|web_form_template_key/i.test(error.message)) {
     ({ error } = await write(payload));
+    formUrlSkipped = Boolean(def.external_form_url?.trim());
+  }
+  if (!error && formUrlSkipped && def.external_form_url?.trim()) {
+    return 'Paste 050 SQL in Supabase so the form web address is saved.';
   }
   if (!error) return null;
   if (/duplicate|unique/i.test(error.message)) {
@@ -721,6 +750,7 @@ export async function upsertHandoverDocumentDefinition(
     is_active: payload.is_active,
     capture_method: method,
     web_form_template_key: withMethod.web_form_template_key,
+    external_form_url: withMethod.external_form_url,
   };
 
   if (def.id) {

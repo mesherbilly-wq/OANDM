@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import migration024Sql from '../../supabase/migrations/20260626150000_024_handover_document_config.sql?raw';
 import migration038Sql from '../../supabase/migrations/20260916230000_038_restore_safetyculture_handover.sql?raw';
 import migration048Sql from '../../supabase/migrations/20261005200000_048_handover_capture_method.sql?raw';
+import migration050Sql from '../../supabase/migrations/20261025193000_050_handover_external_form_url.sql?raw';
 
 import {
   DEFAULT_SC_FIELD_MAPPINGS,
@@ -123,6 +124,7 @@ export default function HandoverConfigPage() {
       upload_only: false,
       capture_method: 'safetyculture',
       web_form_template_key: null,
+      external_form_url: null,
       multi: false,
       display_order: (typeDefinitions.at(-1)?.display_order ?? 0) + 10,
       is_active: true,
@@ -173,6 +175,7 @@ export default function HandoverConfigPage() {
       upload_only: flags.upload_only,
       capture_method: method,
       web_form_template_key: draftDef.web_form_template_key ?? null,
+      external_form_url: draftDef.external_form_url ?? null,
       multi: draftDef.multi ?? false,
       display_order: draftDef.display_order ?? 0,
       is_active: draftDef.is_active ?? true,
@@ -320,7 +323,7 @@ export default function HandoverConfigPage() {
         </p>
         <div className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-3 mt-3 space-y-2">
           <p>
-            Paste <strong>038</strong> then <strong>048</strong> in the Supabase SQL editor so SafetyCulture documents stay on and each card can use a web form, SafetyCulture, or upload.
+            Paste <strong>038</strong> then <strong>048</strong> in the Supabase SQL editor so SafetyCulture documents stay on and each card can use a web form, SafetyCulture, or upload. Paste <strong>050</strong> so an upload card can store a form web address.
           </p>
           <button
             type="button"
@@ -347,6 +350,19 @@ export default function HandoverConfigPage() {
           >
             {migrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
             Copy 048 SQL
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard.writeText(migration050Sql).then(() => {
+                setMigrationCopied(true);
+                window.setTimeout(() => setMigrationCopied(false), 2500);
+              }).catch(() => setError('Clipboard is blocked. Copy supabase/migrations/20261025193000_050_handover_external_form_url.sql manually.'));
+            }}
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-slate-800 text-white hover:bg-slate-700 ml-2"
+          >
+            {migrationCopied ? <Check className="w-3.5 h-3.5" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
+            Copy 050 SQL
           </button>
         </div>
         {!scConnected && (
@@ -604,10 +620,25 @@ export default function HandoverConfigPage() {
                 Show on the Handover tab
               </label>
               {handoverCaptureMethod(draftDef as HandoverDocumentDefinition) === 'upload' && (
-                <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input type="checkbox" checked={draftDef.multi ?? false} onChange={e => setDraftDef(current => ({ ...current, multi: e.target.checked }))} />
-                  Allow multiple uploads
-                </label>
+                <div className="space-y-3">
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input type="checkbox" checked={draftDef.multi ?? false} onChange={e => setDraftDef(current => ({ ...current, multi: e.target.checked }))} />
+                    Allow multiple uploads
+                  </label>
+                  <div>
+                    <label className="text-xs font-medium text-slate-700 mb-1 block">Form web address</label>
+                    <input
+                      type="url"
+                      value={draftDef.external_form_url ?? ''}
+                      onChange={e => setDraftDef(current => ({ ...current, external_form_url: e.target.value }))}
+                      placeholder="https://example.com/form"
+                      className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      Optional. On Handover, this opens so the form can be filled in and downloaded, then uploaded here.
+                    </p>
+                  </div>
+                </div>
               )}
               {handoverCaptureMethod(draftDef as HandoverDocumentDefinition) === 'web_form' && (
                 <div className="space-y-2">

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AlertCircle, FileText, Loader2 } from 'lucide-react';
 import { decodeEscapedHtml, looksLikeHtml, sanitizeSimproHtml } from '../integrations/connectors/simpro/simproImportHelpers';
 
@@ -65,6 +65,37 @@ export function renderDocumentHtml(content: string): string {
   if (looksLikeMarkdown(decoded)) return renderMarkdown(decoded);
   return renderPlainDocument(decoded);
 }
+
+const HtmlInPlaceEditor = memo(function HtmlInPlaceEditor({
+  html,
+  onChange,
+  className,
+}: {
+  html: string;
+  onChange: (value: string) => void;
+  className: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  useLayoutEffect(() => {
+    if (ref.current) ref.current.innerHTML = html;
+  }, [html]);
+
+  return (
+    <div
+      ref={ref}
+      contentEditable
+      suppressContentEditableWarning
+      role="textbox"
+      aria-multiline="true"
+      aria-label="Edit document"
+      className={`${className} cursor-text focus:outline-none focus:ring-2 focus:ring-cyan-500`}
+      onInput={() => onChangeRef.current(ref.current?.innerHTML ?? '')}
+    />
+  );
+}, () => true);
 
 export function documentPreviewClassName(content: string, extra = 'min-h-64'): string {
   const base = `p-4 border border-slate-200 rounded-lg max-w-none ${extra}`.trim();
@@ -134,7 +165,7 @@ export function MarkdownDocEditor({
               disabled={regenerating}
               className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1 rounded-lg border border-slate-200 hover:border-slate-300 transition-colors disabled:opacity-40"
             >
-              {preview ? 'Edit' : (htmlDoc ? 'View layout' : 'Preview')}
+              {preview ? 'Edit' : (htmlDoc ? 'Done' : 'Preview')}
             </button>
             <button
               type="button"
@@ -186,10 +217,20 @@ export function MarkdownDocEditor({
         </div>
       )}
 
+      {!preview && !readOnly && htmlDoc && (
+        <p className="mb-2 text-xs text-slate-500">Click the text and edit it as it will appear. Save when you are finished.</p>
+      )}
+
       {preview || readOnly ? (
         <div
           className={documentPreviewClassName(content)}
           dangerouslySetInnerHTML={{ __html: content ? renderDocumentHtml(content) : '<p class="text-slate-400 text-sm">Nothing to preview.</p>' }}
+        />
+      ) : htmlDoc ? (
+        <HtmlInPlaceEditor
+          html={renderDocumentHtml(content)}
+          onChange={onChange}
+          className={documentPreviewClassName(content)}
         />
       ) : (
         <textarea
@@ -198,7 +239,7 @@ export function MarkdownDocEditor({
           disabled={regenerating}
           rows={20}
           placeholder={placeholder}
-          className={`w-full border border-slate-300 rounded-lg px-4 py-3 text-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-none disabled:opacity-50 disabled:bg-slate-50 ${htmlDoc ? 'text-[11pt] leading-snug font-sans' : 'text-sm font-mono'}`}
+          className="w-full border border-slate-300 rounded-lg px-4 py-3 text-sm font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-none disabled:opacity-50 disabled:bg-slate-50"
         />
       )}
       {saving && (
