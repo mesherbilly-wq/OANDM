@@ -107,6 +107,31 @@ function toLine(device: AiExtractedDevice, page: AiSourcePage | undefined): Extr
   };
 }
 
+async function postExtract(body: unknown, token: string): Promise<AiExtractPayload> {
+  const base = import.meta.env.VITE_SUPABASE_URL;
+  const anon = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  const response = await fetch(`${base}/functions/v1/extract-project`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey: anon,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  let payload: AiExtractPayload & { error?: string } = {};
+  try {
+    payload = text ? JSON.parse(text) as AiExtractPayload & { error?: string } : {};
+  } catch {
+    throw new Error(text.trim() || `Extraction failed (${response.status}).`);
+  }
+  if (!response.ok || payload.error) {
+    throw new Error(payload.error || `Extraction failed (${response.status}).`);
+  }
+  return payload;
+}
+
 export async function extractAiPages(
   pages: AiSourcePage[],
   onProgress?: (message: string) => void,
@@ -123,24 +148,40 @@ export async function extractAiPages(
     const first = group[0];
     const last = group[group.length - 1];
     onProgress?.(`Extracting ${first.fileName}, pages ${first.page}–${last.page} (${index + 1} of ${groups.length})`);
-    const { data, error } = await supabase.functions.invoke('extract-project', {
-      body: {
-        pages: group.map(page => ({
-          file_name: page.fileName,
-          label: page.label,
-          page: page.page,
-          text: page.text,
-          image_base64: page.imageBase64,
-          media_type: page.mediaType,
-        })),
-      },
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (error) throw new Error(error.message);
-    if (data && typeof data === 'object' && 'error' in data && data.error) {
-      throw new Error(String(data.error));
+    const pageBody = {
+      pages: group.map(page => ({
+        file_name: page.fileName,
+        label: page.label,
+        page: page.page,
+        text: page.text,
+        image_base64: page.imageBase64,
+        media_type: page.mediaType,
+      })),
+    };
+    let part: AiExtractPayload;
+    try {
+      part = await postExtract(pageBody, token);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      if (!/documents array/i.test(message)) throw error;
+      const readable = group.map(page => page.text.trim()).filter(Boolean);
+      if (readable.length === 0) {
+        throw new Error('This file has no selectable text. Supabase is still running the previous extractor, which cannot read a scanned drawing. Redeploy extract-project and extract-drawing, then try again.');
+      }
+      part = await postExtract({
+        documents: [{
+          name: group.map(page => page.fileName).filter((name, nameIndex, all) => all.indexOf(name) === nameIndex).join(', '),
+          content: group.map(page => `--- ${page.fileName} page ${page.page} (${page.label}) ---\n${page.text.trim() || '[No selectable text on this page]'}`).join('\n\n'),
+        }],
+      }, token);
+      if (group.some(page => page.imageBase64 && page.text.trim().length < 80)) {
+        part.warnings = [
+          ...(part.warnings ?? []),
+          'Pages without selectable text were skipped. Redeploy extract-project and extract-drawing to read those drawing images.',
+        ];
+      }
     }
-    parts.push((data ?? {}) as AiExtractPayload);
+    parts.push(part);
   }
 
   const merged = mergePayloads(parts);
