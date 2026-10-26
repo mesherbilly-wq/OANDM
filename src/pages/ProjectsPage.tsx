@@ -364,20 +364,22 @@ function ProjectModal({
                   <Link to="/companies" className="text-cyan-700 hover:underline">Add a company first</Link>
                 </p>
               ) : (
-                <select
-                  value={companyId}
-                  onChange={e => setCompanyId(e.target.value)}
-                  className="w-full border border-slate-300 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-cyan-500 bg-white"
-                >
-                  {companies.map(company => (
-                    <option key={company.id} value={company.id}>
-                      {company.company_name}{company.is_default ? ' (default)' : ''}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-slate-500 mt-2">
-                  This company’s name, logo, colours, address and registration numbers are printed on the O&amp;M, completion templates, and the header and footer of this project’s documents.
-                </p>
+                <>
+                  <select
+                    value={companyId}
+                    onChange={e => setCompanyId(e.target.value)}
+                    className="w-full border border-slate-300 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-cyan-500 bg-white"
+                  >
+                    {companies.map(company => (
+                      <option key={company.id} value={company.id}>
+                        {company.company_name}{company.is_default ? ' (default)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-slate-500 mt-2">
+                    This company’s name, logo, colours, address and registration numbers are printed on the O&amp;M, completion templates, and the header and footer of this project’s documents.
+                  </p>
+                </>
               )}
             </div>
             <div>
