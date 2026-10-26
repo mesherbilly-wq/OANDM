@@ -5,6 +5,7 @@ import type { Project } from '../types';
 import { Plus, Search, FolderOpen, MoreVertical, Trash2, Edit3, X, Calendar, Building, User, ChevronRight } from 'lucide-react';
 import { canEditOperations, defaultProjectPath } from '../lib/appRoles';
 import { fetchDefaultContractorProfileId, listCompanyOptions } from '../lib/contractorBrand';
+import { requireOwnCompanyId } from '../lib/companyScope';
 import { useUserAccess } from '../lib/userAccess';
 
 export function ProjectsPage() {
@@ -73,13 +74,24 @@ export function ProjectsPage() {
       window.alert('Add a company on the Companies page before creating a project.');
       return;
     }
+    let companyId: string;
+    try {
+      companyId = await requireOwnCompanyId();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Sign in as a company admin or staff member.');
+      return;
+    }
     const { data, error } = await supabase
       .from('projects')
-      .insert({ ...project, contractor_profile_id: contractorProfileId })
+      .insert({ ...project, contractor_profile_id: contractorProfileId, company_id: companyId })
       .select()
       .single();
 
-    if (!error && data) {
+    if (error) {
+      window.alert(error.message);
+      return;
+    }
+    if (data) {
       setProjects([data, ...projects]);
       setShowCreateModal(false);
     }

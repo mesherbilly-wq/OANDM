@@ -12,3 +12,11 @@ export async function ownCompanyId(): Promise<string | null> {
   if (error || !data?.company_id) return null;
   return String(data.company_id);
 }
+
+export async function requireOwnCompanyId(): Promise<string> {
+  const companyId = await ownCompanyId();
+  if (!companyId) {
+    throw new Error('Sign in as a company admin or staff member. The platform owner cannot create projects.');
+  }
+  return companyId;
+}

@@ -10,6 +10,7 @@ import { clampLineQuantity } from './devicePersistConstants';
 import { IMPORT_LINE_NOTE_TAG } from './deviceGrouping';
 import { displayProjectJobNumber } from './projectJobNumber';
 import { fetchDefaultContractorProfileId } from './contractorBrand';
+import { requireOwnCompanyId } from './companyScope';
 import { appendProductFieldNotes } from './deviceProductFields';
 import { buildPrefixCounters } from './deviceProjectEdits';
 import { equipmentHasDatasheet } from './datasheetMatching';
@@ -186,6 +187,7 @@ export async function persistSimproImportReviewDraft(
   }
 
   const contractorProfileId = await fetchDefaultContractorProfileId();
+  const companyId = await requireOwnCompanyId();
   if (!projectId) {
     const { data: project, error: projectError } = await supabase
       .from('projects')
@@ -202,6 +204,7 @@ export async function persistSimproImportReviewDraft(
         project_notes: nullIfEmpty(draft.project.projectNotes),
         project_status: 'active',
         contractor_profile_id: contractorProfileId,
+        company_id: companyId,
       })
       .select()
       .single();
