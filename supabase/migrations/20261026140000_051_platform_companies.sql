@@ -470,6 +470,17 @@ BEGIN
     IF NEW.company_id IS NULL THEN
       NEW.company_id := public.current_company_id();
     END IF;
+    -- Keep this inside the projects branch. PL/pgSQL looks up NEW.contractor_profile_id
+    -- as soon as the statement runs, and child tables such as project_documents do not have it.
+    IF NEW.contractor_profile_id IS NOT NULL THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM public.contractor_profile profile
+        WHERE profile.id = NEW.contractor_profile_id
+          AND profile.company_id = NEW.company_id
+      ) THEN
+        RAISE EXCEPTION 'That branding profile belongs to another company';
+      END IF;
+    END IF;
   ELSE
     SELECT company_id INTO cid FROM public.projects WHERE id = NEW.project_id;
     IF NEW.company_id IS NULL THEN
@@ -490,16 +501,6 @@ BEGIN
 
     IF auth.uid() IS NOT NULL AND NEW.company_id IS DISTINCT FROM public.current_company_id() THEN
       RAISE EXCEPTION 'Cannot write another company''s records';
-    END IF;
-  END IF;
-
-  IF TG_TABLE_NAME = 'projects' AND NEW.contractor_profile_id IS NOT NULL THEN
-    IF NOT EXISTS (
-      SELECT 1 FROM public.contractor_profile profile
-      WHERE profile.id = NEW.contractor_profile_id
-        AND profile.company_id = NEW.company_id
-    ) THEN
-      RAISE EXCEPTION 'That branding profile belongs to another company';
     END IF;
   END IF;
 
