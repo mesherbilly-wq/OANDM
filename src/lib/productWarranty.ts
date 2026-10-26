@@ -1,19 +1,30 @@
 import type { ProductModel } from '../types';
-import { matchEquipmentInputToProduct } from '../integrations/core/productMatching';
 import { DEFAULT_PRODUCT_WARRANTY_YEARS } from './productDatabaseCsv';
 import { invalidateProductModelsCache } from './productDatabaseDb';
-import { buildProductPartIndex } from './productLookupIndex';
+import { buildProductPartIndex, type ProductPartIndex } from './productLookupIndex';
 import { supabase } from './supabase';
 
 export { DEFAULT_PRODUCT_WARRANTY_YEARS };
 
+let partIndexProducts: ProductModel[] | null = null;
+let partIndex: ProductPartIndex | null = null;
+
+function partIndexFor(products: ProductModel[], index?: ProductPartIndex): ProductPartIndex {
+  if (index) return index;
+  if (partIndex && partIndexProducts === products) return partIndex;
+  partIndex = buildProductPartIndex(products);
+  partIndexProducts = products;
+  return partIndex;
+}
+
 export function resolveWarrantyYearsForPartNumber(
   partNumber: string | null | undefined,
   products: ProductModel[],
+  index?: ProductPartIndex,
 ): number {
   const part = partNumber?.trim();
   if (!part) return DEFAULT_PRODUCT_WARRANTY_YEARS;
-  const match = buildProductPartIndex(products).findByPartNumber(part)[0];
+  const match = partIndexFor(products, index).findByPartNumber(part)[0];
   return match?.warranty_years ?? DEFAULT_PRODUCT_WARRANTY_YEARS;
 }
 
@@ -25,24 +36,9 @@ export function resolveWarrantyYearsForDevice(
     device_type?: string | null;
   },
   products: ProductModel[],
+  index?: ProductPartIndex,
 ): number {
-  const part = device.model_number?.trim();
-  if (part) {
-    const match = buildProductPartIndex(products).findByPartNumber(part)[0];
-    if (match) return match.warranty_years ?? DEFAULT_PRODUCT_WARRANTY_YEARS;
-  }
-
-  const matched = matchEquipmentInputToProduct(
-    {
-      manufacturer: device.manufacturer,
-      modelNumber: device.model_number,
-      modelName: device.model_name,
-      deviceType: device.device_type,
-    },
-    products,
-  ).matchedProduct;
-
-  return matched?.warranty_years ?? DEFAULT_PRODUCT_WARRANTY_YEARS;
+  return resolveWarrantyYearsForPartNumber(device.model_number, products, index);
 }
 
 /** Persist warranty against the Product Database row for this part number. */

@@ -1,5 +1,5 @@
 import { jsPDF } from 'jspdf';
-import { imageUrlToDataUrl, resolveOmBrand, type ContractorBrand } from './contractorBrand';
+import { applyCompanyName, imageUrlToDataUrl, resolveOmBrand, type ContractorBrand } from './contractorBrand';
 import {
   asRecord,
   asRows,
@@ -77,8 +77,14 @@ export async function buildCompletionPdf(opts: {
   const pageWidth = doc.internal.pageSize.getWidth();
   const answers = customerAnswers(opts.schema, opts.answers);
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  const logoUrl = theme.logoSrc.startsWith('http') ? theme.logoSrc : `${origin}${theme.logoSrc}`;
-  const logo = await imageUrlToDataUrl(logoUrl);
+  const documentTitle = applyCompanyName(opts.schema.title, theme.name);
+  const statusNotice = applyCompanyName(opts.schema.statusNotice, theme.name);
+  const logoUrl = !theme.logoSrc
+    ? ''
+    : theme.logoSrc.startsWith('http') || theme.logoSrc.startsWith('data:')
+      ? theme.logoSrc
+      : `${origin}${theme.logoSrc}`;
+  const logo = logoUrl ? await imageUrlToDataUrl(logoUrl) : null;
 
   const footer = () => {
     const pages = doc.getNumberOfPages();
@@ -87,7 +93,7 @@ export async function buildCompletionPdf(opts: {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8);
       doc.setTextColor(ir, ig, ib);
-      doc.text(`${theme.name}  ·  ${opts.schema.title}  ·  ${opts.documentRef}  ·  Rev ${opts.revisionNo}  ·  ${opts.status}`, 14, 287);
+      doc.text(`${theme.name}  ·  ${documentTitle}  ·  ${opts.documentRef}  ·  Rev ${opts.revisionNo}  ·  ${opts.status}`, 14, 287);
       doc.text(`Page ${page} of ${pages}`, pageWidth - 14, 287, { align: 'right' });
     }
   };
@@ -97,16 +103,21 @@ export async function buildCompletionPdf(opts: {
   doc.rect(pageWidth - 16, 0, 16, 36, 'F');
   if (logo) {
     try {
-      doc.addImage(logo, 'PNG', 14, 10, 58, 15);
+      doc.addImage(logo, /image\/jpe?g/i.test(logo) ? 'JPEG' : 'PNG', 14, 10, 58, 15);
     } catch {
       /* optional */
     }
+  } else {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.setTextColor(pr, pg, pb);
+    doc.text(theme.name, 14, 18);
   }
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
   doc.setTextColor(pr, pg, pb);
   y = 32;
-  doc.text(opts.schema.title.toUpperCase(), 14, y);
+  doc.text(documentTitle.toUpperCase(), 14, y);
   y += 6;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
@@ -117,7 +128,7 @@ export async function buildCompletionPdf(opts: {
   y += 6;
   doc.setFont('helvetica', 'italic');
   doc.setFontSize(8);
-  doc.text(doc.splitTextToSize(opts.schema.statusNotice, pageWidth - 28), 14, y);
+  doc.text(doc.splitTextToSize(statusNotice, pageWidth - 28), 14, y);
   y += 16;
 
   const ensure = (need: number) => {
@@ -257,7 +268,7 @@ export async function buildCompletionPdf(opts: {
   }
 
   footer();
-  const fileName = `Pacific_CCTV_Completion_R${opts.revisionNo}_${opts.documentRef.replace(/[^\w]+/g, '_')}.pdf`;
+  const fileName = `${documentTitle.replace(/[^\w]+/g, '_')}_R${opts.revisionNo}_${opts.documentRef.replace(/[^\w]+/g, '_')}.pdf`;
   const dataUri = doc.output('datauristring') as string;
   return { fileName, pdfBase64: dataUri.split(',')[1] ?? '' };
 }

@@ -57,17 +57,20 @@ export function ScheduleProductPicker({
 
   const query = openField === 'manufacturer' ? mfrDraft : openField === 'model' ? modelDraft : '';
   const suggestions = useMemo(
-    () => listClosestScheduleProducts(
-      {
-        manufacturer: mfrDraft || manufacturer,
-        modelNumber: modelDraft || modelNumber,
-        modelName,
-        deviceType,
-        query,
-      },
-      products,
-    ),
-    [deviceType, manufacturer, mfrDraft, modelDraft, modelName, modelNumber, products, query],
+    () => {
+      if (!openField) return [];
+      return listClosestScheduleProducts(
+        {
+          manufacturer: mfrDraft || manufacturer,
+          modelNumber: modelDraft || modelNumber,
+          modelName,
+          deviceType,
+          query,
+        },
+        products,
+      );
+    },
+    [deviceType, manufacturer, mfrDraft, modelDraft, modelName, modelNumber, openField, products, query],
   );
 
   const commitManual = () => {

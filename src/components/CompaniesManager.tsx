@@ -4,6 +4,7 @@ import {
   Award, Building2, Globe, Hash, Mail, Phone, Plus, Save, Trash2, Upload,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { FormFooter, FormLetterhead } from './FormLetterhead';
 import {
   DEFAULT_BRAND_INK,
   DEFAULT_BRAND_PRIMARY,
@@ -38,11 +39,17 @@ const BLANK: CompanyForm = {
   telephone: '', email: '', website: '', company_reg_number: '', vat_number: '',
   nsi_number: '', ssaib_number: '', other_certifications: '', logo_url: '',
   brand_primary: DEFAULT_BRAND_PRIMARY, brand_ink: DEFAULT_BRAND_INK,
-  tagline: DEFAULT_BRAND_TAGLINE, is_default: false,
+  tagline: '', is_default: false,
 };
 
 const ic = 'w-full border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-shadow';
 const label = 'block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5';
+
+function storedTagline(row: Partial<CompanyForm>): string {
+  const tagline = (row.tagline ?? '').trim();
+  if (tagline === DEFAULT_BRAND_TAGLINE && !/pacific/i.test(row.company_name ?? '')) return '';
+  return tagline;
+}
 
 function normalizeRow(row: Partial<CompanyForm>): CompanyForm {
   return {
@@ -50,7 +57,7 @@ function normalizeRow(row: Partial<CompanyForm>): CompanyForm {
     ...row,
     brand_primary: normalizeBrandHex(row.brand_primary, DEFAULT_BRAND_PRIMARY),
     brand_ink: normalizeBrandHex(row.brand_ink, DEFAULT_BRAND_INK),
-    tagline: row.tagline || DEFAULT_BRAND_TAGLINE,
+    tagline: storedTagline(row),
     is_default: Boolean(row.is_default),
   };
 }
@@ -71,21 +78,30 @@ export function CompaniesManager({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [logoUploading, setLogoUploading] = useState(false);
+  const [projectUse, setProjectUse] = useState<Record<number, number>>({});
+  const [applying, setApplying] = useState(false);
   const [toast, setToast] = useState('');
   const logoInputRef = useRef<HTMLInputElement>(null);
   const selectedCompanyIdRef = useRef<number | 'draft' | null>(null);
 
   const load = useCallback(async (opts?: { selectId?: number | 'draft' | null }) => {
-    const [{ data: contrData }, projectRow] = await Promise.all([
+    const [{ data: contrData }, projectRow, projectRows] = await Promise.all([
       supabase.from('contractor_profile').select('*').order('company_name'),
       projectId
         ? supabase.from('projects').select('contractor_profile_id').eq('id', projectId).maybeSingle()
         : Promise.resolve({ data: null }),
+      supabase.from('projects').select('contractor_profile_id'),
     ]);
     const rows = ((contrData ?? []) as CompanyForm[])
       .map(normalizeRow)
       .sort((a, b) => Number(b.is_default) - Number(a.is_default) || a.company_name.localeCompare(b.company_name));
     setCompanies(rows);
+    const counts: Record<number, number> = {};
+    for (const project of projectRows.data ?? []) {
+      const id = project.contractor_profile_id as number | null;
+      if (id) counts[id] = (counts[id] ?? 0) + 1;
+    }
+    setProjectUse(counts);
     const assignedId = projectRow.data?.contractor_profile_id ?? rows.find(row => row.is_default)?.id ?? rows[0]?.id ?? null;
     setProjectCompanyId(assignedId);
     const keepId = opts?.selectId !== undefined ? opts.selectId : selectedCompanyIdRef.current;
@@ -170,7 +186,34 @@ export function CompaniesManager({
     if (error) { alert(error.message); return; }
     setProjectCompanyId(id);
     onAssigned?.();
-    setToast('This project now uses this company on O&M packs');
+    setToast('This project now uses this company on the O&M, templates, headers and footers');
+  };
+
+  const useOnDocuments = async () => {
+    if (!contractor.id) {
+      alert('Save the company first, then use it on documents.');
+      return;
+    }
+    const name = contractor.company_name.trim() || 'This company';
+    if (!confirm(`${name} will be saved and used on O&M packs, completion templates, and the header and footer of this account's projects. Export an O&M again to refresh a pack that was already saved.`)) return;
+    setApplying(true);
+    const payload = {
+      ...contractor,
+      is_default: true,
+      brand_primary: normalizeBrandHex(contractor.brand_primary, DEFAULT_BRAND_PRIMARY),
+      brand_ink: normalizeBrandHex(contractor.brand_ink, DEFAULT_BRAND_INK),
+    };
+    const { id: contractorId, ...fields } = payload;
+    const cleared = await supabase.from('contractor_profile').update({ is_default: false }).neq('id', contractorId);
+    if (cleared.error) { setApplying(false); alert(cleared.error.message); return; }
+    const saved = await supabase.from('contractor_profile').update(fields).eq('id', contractorId);
+    if (saved.error) { setApplying(false); alert(saved.error.message); return; }
+    const assigned = await supabase.from('projects').update({ contractor_profile_id: contractorId }).not('id', 'is', null);
+    setApplying(false);
+    if (assigned.error) { alert(assigned.error.message); return; }
+    setContractor(current => ({ ...current, is_default: true }));
+    setToast(`${name} is now used on O&Ms, templates, headers and footers`);
+    await load({ selectId: contractorId });
   };
 
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -204,6 +247,25 @@ export function CompaniesManager({
   const isProjectCompany = Boolean(contractor.id && contractor.id === projectCompanyId);
   const primary = normalizeBrandHex(contractor.brand_primary, DEFAULT_BRAND_PRIMARY);
   const ink = normalizeBrandHex(contractor.brand_ink, DEFAULT_BRAND_INK);
+  const previewBrand = {
+    company_name: contractor.company_name,
+    logo_url: contractor.logo_url || null,
+    address_line1: contractor.address_line1 || null,
+    address_line2: contractor.address_line2 || null,
+    city: contractor.city || null,
+    postcode: contractor.postcode || null,
+    telephone: contractor.telephone || null,
+    email: contractor.email || null,
+    website: contractor.website || null,
+    nsi_number: contractor.nsi_number || null,
+    ssaib_number: contractor.ssaib_number || null,
+    brand_primary: contractor.brand_primary,
+    brand_ink: contractor.brand_ink,
+    tagline: contractor.tagline,
+  };
+  const otherDocumentCount = Object.entries(projectUse)
+    .filter(([id]) => Number(id) !== contractor.id)
+    .reduce((sum, [, count]) => sum + count, 0);
 
   if (loading) {
     return (
@@ -234,8 +296,8 @@ export function CompaniesManager({
           <h3 className="font-semibold text-slate-800">{isProject ? 'Project company' : 'Companies'}</h3>
           <p className="text-sm text-slate-500 mt-0.5">
             {isProject
-              ? 'Choose which company this project O&M uses. Add logos, colours and new companies on the Companies page first.'
-              : 'Add companies, logos and O&M colours here before you create a project. Save writes that company only — it does not replace the others.'}
+              ? 'The company you choose is printed on this project’s O&M, completion templates, and every header and footer.'
+              : 'Select a company to edit its logo, colours and details. Use it on documents to put that branding on O&Ms, templates, headers and footers.'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -271,6 +333,7 @@ export function CompaniesManager({
               >
                 {company.company_name || 'Untitled company'}
                 {company.is_default ? <span className="ml-1.5 text-[10px] uppercase tracking-wide text-slate-400">Default</span> : null}
+                {company.id && projectUse[company.id] ? <span className="ml-1.5 text-[10px] uppercase tracking-wide text-slate-400">{projectUse[company.id]} on documents</span> : null}
                 {isProject && company.id === projectCompanyId ? <span className="ml-1.5 text-[10px] uppercase tracking-wide text-emerald-600">This project</span> : null}
               </button>
             );
@@ -287,7 +350,13 @@ export function CompaniesManager({
         {isProject && (
           <button type="button" onClick={() => void assignToProject(contractor.id)} disabled={!contractor.id || isProjectCompany}
             className="inline-flex items-center gap-2 px-3 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 text-sm font-medium disabled:opacity-40">
-            Use this company on this project&apos;s O&amp;M
+            Use this company on this project&apos;s O&amp;M, templates, headers and footers
+          </button>
+        )}
+        {!isProject && contractor.id && (
+          <button type="button" onClick={() => void useOnDocuments()} disabled={applying}
+            className="inline-flex items-center gap-2 px-3 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 text-sm font-medium disabled:opacity-40">
+            {applying ? 'Applying…' : `Use ${contractor.company_name.trim() || 'this company'} on O&Ms, templates, headers and footers`}
           </button>
         )}
         {!isProject && (
@@ -297,6 +366,31 @@ export function CompaniesManager({
           </button>
         )}
       </div>
+
+      {contractor.company_name.trim() && (
+        <div className="rounded-xl border border-slate-200 overflow-hidden">
+          <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 text-sm text-slate-700">
+            <p className="font-semibold text-slate-900">{contractor.company_name.trim()}</p>
+            <p className="mt-1">
+              This name, logo, colours, address, phone and registration numbers are used on O&amp;M packs, completion templates, and the header and footer of each document.
+            </p>
+            {!isProject && contractor.id && (
+              <p className="mt-1 text-slate-500">
+                {(projectUse[contractor.id] ?? 0) === 0
+                  ? 'No projects are using this company yet.'
+                  : `${projectUse[contractor.id]} project${projectUse[contractor.id] === 1 ? '' : 's'} currently use this company.`}
+                {otherDocumentCount > 0 ? ` ${otherDocumentCount} still use another company until you apply this one.` : ''}
+              </p>
+            )}
+          </div>
+          <FormLetterhead
+            brand={previewBrand}
+            title="Operations & Maintenance Manual"
+            subtitle="Header preview"
+          />
+          <FormFooter brand={previewBrand} documentTitle="Document footer" />
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <div className="md:col-span-2">
@@ -384,7 +478,7 @@ export function CompaniesManager({
               onChange={e => setContractor({ ...contractor, is_default: e.target.checked })}
               className="rounded border-slate-300"
             />
-            Default company for new projects
+            Default company for new projects. Existing projects change when you use this company on documents.
           </label>
           <div className="rounded-lg border overflow-hidden" style={{ borderColor: primary }}>
             <div className="px-4 py-3 text-white text-sm font-semibold" style={{ background: primary }}>

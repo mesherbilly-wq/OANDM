@@ -52,7 +52,7 @@ export const SDP_SCHEMA = form('System Design Proposal (SDP)', [
     text('parent_revision', 'Previous signed revision (if any)'),
     select('work_type', 'Work type', WORK_TYPES),
     text('discipline', 'Discipline (intruder / CCTV / access control / mixed)'),
-    note('nsi_note', 'This SDP follows Pacific’s company template and the applicable NSI model-documentation headings. An imported Simpro scope does not automatically meet NSI requirements. Complete the gaps marked incomplete before treating this revision as agreed or as-fitted.'),
+    note('nsi_note', 'This SDP follows the selected company template and the applicable NSI model-documentation headings. An imported Simpro scope does not automatically meet NSI requirements. Complete the gaps marked incomplete before treating this revision as agreed or as-fitted.'),
   ]),
   section('project', 'PROJECT DETAILS', [
     text('customer_organisation', 'Customer organisation', true),

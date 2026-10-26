@@ -61,7 +61,7 @@ export function CompaniesPage() {
           <h1 className="text-2xl font-bold text-slate-900">Companies</h1>
         </div>
         <p className="text-sm text-slate-500 mt-1">
-          Logos and colours for this company only. New projects use the default letterhead unless you pick another.
+          Select a company to see its logo, colours and details. Those appear on O&amp;M packs, completion templates, and document headers and footers. Save keeps the details. Use the company on documents to switch existing projects.
         </p>
       </div>
       {canManageUsers(role) && companyId && (

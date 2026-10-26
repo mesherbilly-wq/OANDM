@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Loader2, Plus, Copy, Trash2 } from 'lucide-react';
 import { FormFooter, FormLetterhead } from '../FormLetterhead';
-import { resolveOmBrand, type ContractorBrand } from '../../lib/contractorBrand';
+import { applyCompanyName, resolveOmBrand, type ContractorBrand } from '../../lib/contractorBrand';
 import { SignaturePad } from '../SignaturePad';
 import {
   asRecord,
@@ -143,8 +143,8 @@ export function CompletionFormRunner({
   if (done) {
     return (
       <div className="max-w-xl mx-auto p-6 space-y-4">
-        <FormLetterhead brand={brand} title={form.title} jobRef={form.project.jobNumber} />
-        <FormFooter brand={brand} documentTitle={form.title} jobRef={form.project.jobNumber} />
+        <FormLetterhead brand={brand} title={applyCompanyName(form.title, theme.name)} jobRef={form.project.jobNumber} />
+        <FormFooter brand={brand} documentTitle={applyCompanyName(form.title, theme.name)} jobRef={form.project.jobNumber} />
         <div className="bg-white border border-slate-200 rounded-xl p-5">
           <h2 className="text-lg font-semibold text-slate-900">Received</h2>
           <p className="text-sm text-slate-600 mt-2">
@@ -160,7 +160,7 @@ export function CompletionFormRunner({
       <div className="max-w-3xl mx-auto pb-28">
         <FormLetterhead
           brand={brand}
-          title={form.title}
+          title={applyCompanyName(form.title, theme.name)}
           subtitle={`Revision ${form.revisionNo} · ${form.status.replace(/_/g, ' ')}`}
           jobRef={form.project.jobNumber || form.project.siteName}
         />
@@ -369,7 +369,7 @@ export function CompletionFormRunner({
             </div>
           )}
         </div>
-        <FormFooter brand={brand} documentTitle={form.title} jobRef={form.project.jobNumber || form.project.siteName} />
+        <FormFooter brand={brand} documentTitle={applyCompanyName(form.title, theme.name)} jobRef={form.project.jobNumber || form.project.siteName} />
       </div>
 
       <div className="fixed bottom-0 inset-x-0 bg-white border-t border-slate-200">

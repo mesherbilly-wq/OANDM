@@ -39,10 +39,16 @@ export function FormLetterhead({
       </div>
       <div className="flex items-start justify-between gap-4 px-6 py-5 pr-20">
         <div className="min-w-0">
-          <img src={theme.logoSrc} alt={theme.name} className="h-14 w-auto max-w-[16rem] object-contain" />
-          <p className="text-[10px] font-semibold tracking-[0.14em] uppercase mt-2" style={{ color: theme.primary }}>
-            {theme.tagline}
-          </p>
+          {theme.logoSrc ? (
+            <img src={theme.logoSrc} alt={theme.name} className="h-14 w-auto max-w-[16rem] object-contain" />
+          ) : (
+            <p className="text-xl font-bold leading-tight" style={{ color: theme.primary }}>{theme.name}</p>
+          )}
+          {theme.tagline ? (
+            <p className="text-[10px] font-semibold tracking-[0.14em] uppercase mt-2" style={{ color: theme.primary }}>
+              {theme.tagline}
+            </p>
+          ) : null}
           {address ? <p className="text-xs mt-1" style={{ color: theme.ink }}>{address}</p> : null}
           {contact ? <p className="text-[11px] mt-0.5" style={{ color: theme.ink, opacity: 0.8 }}>{contact}</p> : null}
         </div>

@@ -155,6 +155,8 @@ export async function sendCompletionPack(opts: {
   const settings = await getEmailSettings();
   const docs = relevantCompletionDocs(opts.systemCategories);
   const links: PackDocumentLink[] = [];
+  const companyLabel = opts.brand?.company_name?.trim() || opts.companyName?.trim() || 'the company';
+  const usePacificTemplate = !opts.brand?.company_name?.trim() || /pacific/i.test(opts.brand.company_name);
 
   for (const doc of docs) {
     const answers = doc.templateKey === 'sdp'
@@ -168,7 +170,7 @@ export async function sendCompletionPack(opts: {
     });
 
     let issuedPdfUrl: string | undefined;
-    if (PACIFIC_TEMPLATE_FILES[doc.documentId]) {
+    if (usePacificTemplate && PACIFIC_TEMPLATE_FILES[doc.documentId]) {
       issuedPdfUrl = await issuedTemplatePdf({
         documentId: doc.documentId,
         answers,
@@ -216,9 +218,9 @@ export async function sendCompletionPack(opts: {
     });
   }
 
-  const subject = `${opts.project.job_number || opts.project.project_name || 'Job'} — Pacific handover PDFs`;
+  const subject = `${opts.project.job_number || opts.project.project_name || 'Job'} — ${opts.brand?.company_name?.trim() || opts.companyName?.trim() || 'Company'} handover PDFs`;
   const body = [
-    `Please complete the attached Pacific PDF pack for ${opts.project.project_name || 'this job'}.`,
+    `Please complete the attached ${companyLabel} PDF pack for ${opts.project.project_name || 'this job'}.`,
     'Fill the PDF itself. Do not use a browser form.',
     '',
     ...links.flatMap(link => [

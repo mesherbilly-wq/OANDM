@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState, useTransition } from 'react';
 import { useParams } from 'react-router-dom';
 import { useProject } from './ProjectLayout';
 import { supabase } from '../lib/supabase';
@@ -99,6 +99,7 @@ export default function DeviceSchedulePage() {
   const [systemRows, setSystemRows] = useState<ProjectSystemRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'grouped' | 'individual'>('grouped');
+  const [viewPending, startViewTransition] = useTransition();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedSystemType, setSelectedSystemType] = useState<string>('All');
   const [selectedStatus, setSelectedStatus] = useState<'All' | 'Active' | 'Pending Review'>('All');
@@ -240,6 +241,8 @@ export default function DeviceSchedulePage() {
       return true;
     });
   }, [devices, searchTerm, selectedSystemType, selectedStatus, showComponents]);
+
+  const deviceIds = useMemo(() => new Set(devices.map(device => device.id)), [devices]);
 
   const hierarchyTree = useMemo(() => {
     return buildHierarchy(filteredDevices);
@@ -737,7 +740,7 @@ export default function DeviceSchedulePage() {
   const renderDeviceRow = (row: DeviceRow, depth: number = 0) => {
     const { device, children } = row;
     const isExpanded = expandedParents.has(device.id);
-    const isOrphan = device.parent_device_id && !devices.some((d) => d.id === device.parent_device_id);
+    const isOrphan = device.parent_device_id != null && !deviceIds.has(device.parent_device_id);
     const hasChildren = children.length > 0;
 
     return (
@@ -931,15 +934,15 @@ export default function DeviceSchedulePage() {
         <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm">
           <button
             type="button"
-            onClick={() => setViewMode('grouped')}
-            className={`px-3 py-2 transition-colors ${viewMode === 'grouped' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+            onClick={() => startViewTransition(() => setViewMode('grouped'))}
+            className={`px-3 py-2 transition-colors ${viewMode === 'grouped' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'} ${viewPending ? 'opacity-70' : ''}`}
           >
             Grouped View
           </button>
           <button
             type="button"
-            onClick={() => setViewMode('individual')}
-            className={`px-3 py-2 border-l border-gray-300 transition-colors ${viewMode === 'individual' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+            onClick={() => startViewTransition(() => setViewMode('individual'))}
+            className={`px-3 py-2 border-l border-gray-300 transition-colors ${viewMode === 'individual' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'} ${viewPending ? 'opacity-70' : ''}`}
           >
             Individual View
           </button>

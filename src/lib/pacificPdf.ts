@@ -1,5 +1,5 @@
 import { jsPDF } from 'jspdf';
-import { formatContractorAddress, formatContractorContact, imageUrlToDataUrl, resolveOmBrand, type ContractorBrand } from './contractorBrand';
+import { applyCompanyName, formatContractorAddress, formatContractorContact, imageUrlToDataUrl, resolveOmBrand, type ContractorBrand } from './contractorBrand';
 import { flattenAnswersForPdf, type FormAnswers, type SchemaCatalogue } from './schemaForm';
 import { supabase } from './supabase';
 
@@ -36,15 +36,22 @@ function drawLetterhead(
     } catch {
       /* logo optional */
     }
+  } else if (theme.name) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.setTextColor(pr, pg, pb);
+    doc.text(theme.name, 14, 18);
   }
 
   const textX = 14;
-  let infoY = logoDataUrl ? 30 : 16;
+  let infoY = logoDataUrl || theme.name ? 30 : 16;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
   doc.setTextColor(pr, pg, pb);
-  doc.text(theme.tagline.toUpperCase(), textX, infoY);
-  infoY += 4;
+  if (theme.tagline) {
+    doc.text(theme.tagline.toUpperCase(), textX, infoY);
+    infoY += 4;
+  }
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(ir, ig, ib);
@@ -142,9 +149,14 @@ export async function buildPacificPdf(opts: {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const theme = resolveOmBrand(opts.brand);
-  const logoUrl = theme.logoSrc.startsWith('http') ? theme.logoSrc : origin ? `${origin}${theme.logoSrc}` : theme.logoSrc;
-  const logoDataUrl = await imageUrlToDataUrl(logoUrl);
-  let y = drawLetterhead(doc, opts.brand, logoDataUrl, opts.title, opts.jobRef ?? '');
+  const logoUrl = !theme.logoSrc
+    ? ''
+    : theme.logoSrc.startsWith('http') || theme.logoSrc.startsWith('data:')
+      ? theme.logoSrc
+      : origin ? `${origin}${theme.logoSrc}` : theme.logoSrc;
+  const logoDataUrl = logoUrl ? await imageUrlToDataUrl(logoUrl) : null;
+  const title = applyCompanyName(opts.title, theme.name);
+  let y = drawLetterhead(doc, opts.brand, logoDataUrl, title, opts.jobRef ?? '');
 
   doc.setFont('helvetica', 'italic');
   doc.setFontSize(8);

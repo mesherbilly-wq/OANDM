@@ -375,6 +375,9 @@ function ProjectModal({
                     </option>
                   ))}
                 </select>
+                <p className="text-xs text-slate-500 mt-2">
+                  This company’s name, logo, colours, address and registration numbers are printed on the O&amp;M, completion templates, and the header and footer of this project’s documents.
+                </p>
               )}
             </div>
             <div>

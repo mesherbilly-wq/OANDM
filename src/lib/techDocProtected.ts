@@ -8,7 +8,7 @@ export const TECH_DOC_DOCUMENT_SELECT_BASE =
 export const TECH_DOC_DOCUMENT_SELECT = `${TECH_DOC_DOCUMENT_SELECT_BASE}, has_file_password`;
 
 export const PROTECTED_DOC_NOTICE =
-  'This document contains protected information and is available securely via your Client Portal. Please contact Pacific if you are unable to access the document.';
+  'This document contains protected information and is available securely via your Client Portal. Please contact the company named on this document if you are unable to access it.';
 
 export function missingProtectedColumns(error?: { message?: string } | null): boolean {
   return /is_protected|visible_in_portal|include_in_om|storage_path|storage_bucket|tech-docs-private|has_file_password|file_password_hash|set_tech_doc_file_password|unlock_tech_doc_file/i.test(error?.message ?? '');

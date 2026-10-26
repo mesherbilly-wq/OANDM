@@ -63,13 +63,30 @@ export function hexToRgbTuple(hex: string): [number, number, number] {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
+export function isPacificCompanyName(name: string | null | undefined): boolean {
+  return /pacific/i.test(name ?? '');
+}
+
+/** Document text that still says Pacific is shown under the company selected for that project. */
+export function applyCompanyName(text: string, companyName: string | null | undefined): string {
+  const name = companyName?.trim();
+  if (!name || isPacificCompanyName(name)) return text;
+  return text.replace(/\bPacific\b/g, name);
+}
+
 export function resolveOmBrand(contractor: ContractorBrand | null | undefined): OmBrandTheme {
   const primary = normalizeBrandHex(contractor?.brand_primary, DEFAULT_BRAND_PRIMARY);
   const ink = normalizeBrandHex(contractor?.brand_ink, DEFAULT_BRAND_INK);
+  const name = contractor?.company_name?.trim() || 'Operations & Maintenance';
+  const pacific = isPacificCompanyName(name);
+  const storedTagline = contractor?.tagline?.trim() || '';
+  const tagline = storedTagline === DEFAULT_BRAND_TAGLINE && !pacific
+    ? ''
+    : (storedTagline || (pacific ? DEFAULT_BRAND_TAGLINE : ''));
   return {
-    name: contractor?.company_name?.trim() || 'Operations & Maintenance',
-    tagline: contractor?.tagline?.trim() || DEFAULT_BRAND_TAGLINE,
-    logoSrc: contractor?.logo_url?.trim() || DEFAULT_BRAND_LOGO_SRC,
+    name,
+    tagline,
+    logoSrc: contractor?.logo_url?.trim() || (pacific ? DEFAULT_BRAND_LOGO_SRC : ''),
     primary,
     ink,
     primaryRgb: hexToRgbTuple(primary),

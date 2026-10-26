@@ -415,6 +415,7 @@ const TECH_DOC_PRINT_ROWS_LANDSCAPE = 12;
 const PRINT_LANDSCAPE_COL_THRESHOLD = 6;
 
 async function loadBrandLogoDataUrl(src: string): Promise<string | null> {
+  if (!src) return null;
   return imageUrlToDataUrl(src);
 }
 
@@ -1556,8 +1557,13 @@ export function ProjectOMExportPage() {
           try {
             pdf.addImage(logoDataUrl, /image\/jpe?g/i.test(logoDataUrl) ? 'JPEG' : 'PNG', metrics.mLeft, 5.2, 42, 11);
           } catch {
-            // Logo is optional if the PNG cannot be embedded.
+            // Logo is optional if the image cannot be embedded.
           }
+        } else {
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(9);
+          pdf.setTextColor(...omBrand.primaryRgb);
+          pdf.text(omBrand.name, metrics.mLeft, 12);
         }
         pdf.setFont('helvetica', 'bold');
         pdf.setFontSize(8);
@@ -3127,14 +3133,20 @@ function CoverSection({ project, devices, systemGroups, contractor, authority }:
       <div className="border-2 rounded-lg overflow-hidden relative" style={{ borderColor: brand.primary }}>
         <div className="absolute right-0 top-0 bottom-0 w-3" style={{ background: brand.primary }} aria-hidden />
         <div className="bg-white px-8 py-8 pr-10 border-b-2" style={{ borderColor: brand.primary }}>
-          <img
-            src={brand.logoSrc}
-            alt={brand.name}
-            className="h-12 object-contain mb-3"
-          />
-          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] mb-4" style={{ color: brand.primary }}>
-            {brand.tagline}
-          </p>
+          {brand.logoSrc ? (
+            <img
+              src={brand.logoSrc}
+              alt={brand.name}
+              className="h-12 object-contain mb-3"
+            />
+          ) : (
+            <p className="text-xl font-bold mb-3" style={{ color: brand.primary }}>{brand.name}</p>
+          )}
+          {brand.tagline ? (
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] mb-4" style={{ color: brand.primary }}>
+              {brand.tagline}
+            </p>
+          ) : null}
           {contractor?.company_name && (
             <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: brand.ink }}>{contractor.company_name}</p>
           )}
@@ -3262,9 +3274,7 @@ function ContractorSection({ contractor }: { contractor: any }) {
           <div className="text-white px-6 py-4 flex items-center gap-4" style={{ background: brand.primary }}>
             {contractor?.logo_url ? (
               <img src={contractor.logo_url} alt="" className="h-10 object-contain bg-white rounded px-2 py-1" />
-            ) : (
-              <img src={brand.logoSrc} alt="" className="h-10 object-contain bg-white rounded px-2 py-1" />
-            )}
+            ) : null}
             <div>
               <p className="text-lg font-semibold leading-tight">{contractor?.company_name || 'Contractor'}</p>
               {contractor?.website && <p className="text-xs text-white/80 mt-0.5">{contractor.website}</p>}
@@ -4416,11 +4426,9 @@ function PrintContractorInformation({ contractor }: { contractor: any }) {
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
-        {contractor?.logo_url ? (
-          <img src={contractor.logo_url} alt="" style={{ height: '3rem', objectFit: 'contain' }} />
-        ) : (
+        {brand.logoSrc ? (
           <img src={brand.logoSrc} alt="" style={{ height: '3rem', objectFit: 'contain' }} />
-        )}
+        ) : null}
         <div>
           <p style={{ fontSize: '1.15rem', fontWeight: 800, color: brand.ink, margin: 0 }}>
             {contractor?.company_name || 'Contractor'}
@@ -4450,14 +4458,20 @@ function PrintCoverPage({ project, devices, systemGroups, contractor, authority 
     <div className="om-cover-page" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, -apple-system, sans-serif', position: 'relative', color: brand.ink }}>
       <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: '14px', background: brand.primary }} aria-hidden />
       <div style={{ padding: '2.75rem 3.5rem 1.75rem', borderBottom: `3px solid ${brand.primary}`, flex: '0 0 auto', paddingRight: '4rem' }}>
-        <img
-          src={brand.logoSrc}
-          alt={brand.name}
-          style={{ height: '3.25rem', objectFit: 'contain', marginBottom: '0.85rem' }}
-        />
-        <p style={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.16em', textTransform: 'uppercase', color: brand.primary, margin: 0 }}>
-          {brand.tagline}
-        </p>
+        {brand.logoSrc ? (
+          <img
+            src={brand.logoSrc}
+            alt={brand.name}
+            style={{ height: '3.25rem', objectFit: 'contain', marginBottom: '0.85rem' }}
+          />
+        ) : (
+          <p style={{ fontSize: '1.35rem', fontWeight: 800, color: brand.primary, margin: '0 0 0.85rem' }}>{brand.name}</p>
+        )}
+        {brand.tagline ? (
+          <p style={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.16em', textTransform: 'uppercase', color: brand.primary, margin: 0 }}>
+            {brand.tagline}
+          </p>
+        ) : null}
         {contractor?.company_name && (
           <p style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: brand.ink, margin: '0.85rem 0 0' }}>
             {contractor.company_name}

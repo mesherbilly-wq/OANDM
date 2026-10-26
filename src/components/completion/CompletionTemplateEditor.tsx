@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Loader2, Plus, Sparkles, Trash2, Upload } from 'lucide-react';
 import { isLockedJobField, isStandardJobSection } from '../../lib/standardJobSection';
 import { FormLetterhead } from '../FormLetterhead';
-import { resolveOmBrand, type ContractorBrand } from '../../lib/contractorBrand';
+import { applyCompanyName, resolveOmBrand, type ContractorBrand } from '../../lib/contractorBrand';
 import { CompletionFormRunner } from './CompletionFormRunner';
 import { emptyAnswers } from '../../lib/completionFormEngine';
 import type {
@@ -444,7 +444,7 @@ export function CompletionTemplateEditor({
     <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
       <FormLetterhead
         brand={brand}
-        title={schema.title || 'Completion template'}
+        title={applyCompanyName(schema.title || 'Completion template', theme.name)}
         subtitle="Template editor — headers, footer colour and logo follow Companies"
       />
       <div className="p-5 space-y-4">
@@ -465,6 +465,9 @@ export function CompletionTemplateEditor({
               onChange={event => onChange({ ...schema, title: event.target.value })}
               className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
             />
+            {/\bPacific\b/.test(schema.title) && theme.name && !/pacific/i.test(theme.name) ? (
+              <span className="block mt-1 text-xs text-slate-500">On issued documents this title uses {theme.name}.</span>
+            ) : null}
           </label>
           <input
             ref={fileRef}
