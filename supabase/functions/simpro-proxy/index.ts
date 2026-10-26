@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { requireCompanyMember } from "../_shared/companyGate.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -11,11 +12,6 @@ const corsHeaders = {
 const SETTING_BASE_URL = "simpro_base_url";
 const SETTING_COMPANY_ID = "simpro_company_id";
 const SETTING_API_TOKEN = "simpro_api_token";
-
-/** Placeholder Edge Function secrets (set in Supabase dashboard when ready). */
-const ENV_BASE_URL = "SIMPRO_BASE_URL";
-const ENV_COMPANY_ID = "SIMPRO_COMPANY_ID";
-const ENV_API_TOKEN = "SIMPRO_API_TOKEN";
 
 interface SimproConfig {
   baseUrl: string;
@@ -87,10 +83,11 @@ function buildApiUrl(baseUrl: string, companyId: string, path: string, searchPar
   return `${url}?${searchParams.toString()}`;
 }
 
-async function loadSimproConfig(db: ReturnType<typeof createClient>): Promise<SimproConfig> {
+async function loadSimproConfig(db: ReturnType<typeof createClient>, companyId: string): Promise<SimproConfig> {
   const { data: rows } = await db
     .from("integration_settings")
     .select("key, value")
+    .eq("company_id", companyId)
     .in("key", [SETTING_BASE_URL, SETTING_COMPANY_ID, SETTING_API_TOKEN]);
 
   const settings: Record<string, string> = {};
@@ -98,10 +95,11 @@ async function loadSimproConfig(db: ReturnType<typeof createClient>): Promise<Si
     if (row?.key && row?.value) settings[row.key] = String(row.value);
   }
 
+  // Do not fall back to SIMPRO_* edge secrets. One server token would be shared by every company.
   return {
-    baseUrl: (settings[SETTING_BASE_URL] ?? Deno.env.get(ENV_BASE_URL) ?? "").trim(),
-    companyId: (settings[SETTING_COMPANY_ID] ?? Deno.env.get(ENV_COMPANY_ID) ?? "0").trim(),
-    apiToken: (settings[SETTING_API_TOKEN] ?? Deno.env.get(ENV_API_TOKEN) ?? "").trim(),
+    baseUrl: (settings[SETTING_BASE_URL] ?? "").trim(),
+    companyId: (settings[SETTING_COMPANY_ID] ?? "0").trim(),
+    apiToken: (settings[SETTING_API_TOKEN] ?? "").trim(),
   };
 }
 
@@ -394,7 +392,9 @@ Deno.serve(async (req: Request) => {
   const action = String(body.action ?? "");
   log(action, "invoked");
 
-  const storedConfig = await loadSimproConfig(db);
+  const access = await requireCompanyMember(req, db);
+  if ("response" in access) return access.response;
+  const storedConfig = await loadSimproConfig(db, access.caller.companyId);
 
   // ── test_connection ───────────────────────────────────────────────────────────
   // Accepts optional base_url, company_id, api_token in body (wizard session — not persisted).

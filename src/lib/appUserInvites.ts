@@ -77,7 +77,7 @@ export async function createAppUserInvite(
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalised)) {
     throw new Error('Enter a valid email address.');
   }
-  if (!isAppRole(role)) {
+  if (!isAppRole(role) || role === 'master') {
     throw new Error('Choose Admin, Staff, or End user.');
   }
 

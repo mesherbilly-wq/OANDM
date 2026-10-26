@@ -31,6 +31,67 @@ interface ProjectOption {
   label: string;
 }
 
+function FirstPlatformOwner() {
+  const { role } = useUserAccess();
+  const [visible, setVisible] = useState(false);
+  const [email, setEmail] = useState('');
+  const [url, setUrl] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (role !== 'admin') return;
+    void supabase.rpc('platform_owner_status').then(({ data, error }) => {
+      if (error) return;
+      const exists = Boolean((data as { exists?: boolean } | null)?.exists);
+      setVisible(!exists);
+    });
+  }, [role]);
+
+  if (!visible) return null;
+
+  const invite = async () => {
+    setBusy(true);
+    setMessage(null);
+    const { data, error } = await supabase.rpc('invite_platform_master', { owner_email: email.trim() });
+    setBusy(false);
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+    const token = String((data as { invite_token?: string } | null)?.invite_token ?? '');
+    if (token) setUrl(userInviteUrl(token));
+  };
+
+  return (
+    <div className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-2">
+      <h2 className="text-sm font-semibold text-slate-900">Create the platform owner</h2>
+      <p className="text-xs text-slate-500">
+        Use a separate email. That account manages companies and subscriptions, and it cannot open this company&apos;s projects, documents or credentials.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <input
+          type="email"
+          value={email}
+          onChange={event => setEmail(event.target.value)}
+          placeholder="owner@platform.co.uk"
+          className="flex-1 min-w-[14rem] border border-slate-300 rounded-lg px-3 py-2 text-sm"
+        />
+        <button
+          type="button"
+          onClick={() => void invite()}
+          disabled={busy || !email.trim()}
+          className="px-3 py-2 rounded-lg text-sm font-semibold bg-slate-900 text-white disabled:opacity-50"
+        >
+          {busy ? 'Creating…' : 'Create invite'}
+        </button>
+      </div>
+      {url && <p className="text-xs font-mono text-slate-700 break-all">{url}</p>}
+      {message && <p className="text-xs text-red-700">{message}</p>}
+    </div>
+  );
+}
+
 function projectLabel(project: { project_name?: string | null; site_name?: string | null; job_number?: string | null; id: number }): string {
   return project.project_name?.trim()
     || project.site_name?.trim()
@@ -257,9 +318,11 @@ export function UsersPage() {
           <h1 className="text-2xl font-bold text-slate-900">Users</h1>
         </div>
         <p className="text-slate-500 ml-[52px]">
-          Invite people here and set Admin, Staff, or End user. End users still need a project assigned.
+          Invite people into this company and set Admin, Staff, or End user. End users still need a project assigned. Staff can open every project in this company.
         </p>
       </div>
+
+      <FirstPlatformOwner />
 
       {needsMigration && (
         <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 space-y-2">
@@ -450,7 +513,7 @@ export function UsersPage() {
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mb-2">Project access</p>
                     {roleSeesAll ? (
                       <p className="text-xs text-slate-600">
-                        {roleLabel(profile.role)} can open every project.
+                        {roleLabel(profile.role)} can open every project in this company.
                       </p>
                     ) : grants.length === 0 ? (
                       <p className="text-xs text-slate-500">No project access yet.</p>

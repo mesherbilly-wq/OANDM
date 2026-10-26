@@ -32,12 +32,13 @@ import PublicCompletionFormPage from './pages/PublicCompletionFormPage';
 import SafetyCulturePage from './pages/SafetyCulturePage';
 import { UsersPage } from './pages/UsersPage';
 import { CompaniesPage } from './pages/CompaniesPage';
+import { PlatformPage } from './pages/PlatformPage';
 import { ProjectInvitePage } from './pages/ProjectInvitePage';
 import { UserInvitePage } from './pages/UserInvitePage';
 import SdpPage from './pages/SdpPage';
 import DocumentReturnPage from './pages/DocumentReturnPage';
 import { UserAccessProvider, useUserAccess } from './lib/userAccess';
-import { defaultHomePath, isEndUser } from './lib/appRoles';
+import { defaultHomePath, isEndUser, isPlatformMaster } from './lib/appRoles';
 import { RequireAccess } from './components/RequireAccess';
 
 function App() {
@@ -155,7 +156,8 @@ function AuthedApp({
   userEmail: string;
   onSignOut: () => void;
 }) {
-  const { role, roleLoading } = useUserAccess();
+  const { role, roleLoading, companyStatus, companyName: accountName } = useUserAccess();
+  const suspended = companyStatus === 'suspended' && !isPlatformMaster(role);
 
   return (
     <BrowserRouter>
@@ -170,9 +172,21 @@ function AuthedApp({
         <Route path="/r/:token" element={<DocumentReturnPage />} />
         <Route path="/i/:token" element={<ProjectInvitePage />} />
         <Route path="/u/:token" element={<UserInvitePage />} />
-        <Route path="/" element={<Layout companyName={companyName} userEmail={userEmail} onSignOut={onSignOut} />}>
+        <Route path="/" element={<Layout companyName={accountName || companyName} userEmail={userEmail} onSignOut={onSignOut} />}>
           <Route index element={<Navigate to={defaultHomePath(role)} replace />} />
+          {suspended ? (
+            <Route path="*" element={
+              <div className="max-w-lg mx-auto mt-16 bg-white border border-amber-200 rounded-xl p-6">
+                <h1 className="text-xl font-bold text-slate-900">This company is suspended</h1>
+                <p className="text-sm text-slate-600 mt-2">
+                  The platform owner has suspended this company account. Projects, documents and settings stay stored, and they are unavailable until the account is active again.
+                </p>
+              </div>
+            } />
+          ) : (
+          <>
           <Route path="dashboard" element={<RequireAccess><DashboardPage /></RequireAccess>} />
+          <Route path="platform" element={<RequireAccess><PlatformPage /></RequireAccess>} />
           <Route path="companies" element={<RequireAccess><CompaniesPage /></RequireAccess>} />
           <Route path="projects" element={<RequireAccess><ProjectsPage /></RequireAccess>} />
           <Route path="create-project" element={<RequireAccess><AIProjectBuilderPage /></RequireAccess>} />
@@ -210,6 +224,8 @@ function AuthedApp({
           <Route path="users" element={<RequireAccess><UsersPage /></RequireAccess>} />
           <Route path="import-review" element={<RequireAccess><ImportReviewPage /></RequireAccess>} />
           <Route path="om-preview" element={<RequireAccess><OMPreviewPage /></RequireAccess>} />
+          </>
+          )}
         </Route>
         <Route path="*" element={<Navigate to={defaultHomePath(role)} replace />} />
       </Routes>

@@ -278,12 +278,18 @@ export default function HandoverConfigPage() {
       field_mappings: { ...DEFAULT_SC_FIELD_MAPPINGS, ...result.field_mappings },
     }));
 
+    const { data: auth } = await supabase.auth.getUser();
+    const profile = auth.user
+      ? await supabase.from('app_profiles').select('company_id').eq('user_id', auth.user.id).maybeSingle()
+      : null;
+    const companyId = profile?.data?.company_id ? String(profile.data.company_id) : null;
     await supabase.from('sc_template_mappings').upsert({
       template_id: tid,
       template_name: selectedTemplateName || null,
       field_mappings: result.field_mappings,
       table_column_mappings: result.table_column_mappings,
-    }, { onConflict: 'template_id' });
+      ...(companyId ? { company_id: companyId } : {}),
+    }, { onConflict: companyId ? 'company_id,template_id' : 'template_id' });
 
     const { data: updated } = await supabase
       .from('sc_template_mappings')

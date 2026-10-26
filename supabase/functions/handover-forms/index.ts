@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { brandForProject, projectInCompany, requireCompanyMember } from "../_shared/companyGate.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -109,15 +110,11 @@ Deno.serve(async (req) => {
 
     const { data: project } = await db
       .from("projects")
-      .select("project_name, client_name, job_number, site_name, site_address, project_manager")
+      .select("project_name, client_name, job_number, site_name, site_address, project_manager, company_id")
       .eq("id", invite.project_id)
       .maybeSingle();
 
-    const { data: profile } = await db
-      .from("contractor_profile")
-      .select("company_name")
-      .limit(1)
-      .maybeSingle();
+    const profile = await brandForProject(db, Number(invite.project_id));
 
     const prefill = {
       job_number: project?.job_number ?? "",
@@ -163,7 +160,10 @@ Deno.serve(async (req) => {
       return json({ error: "This form has already been completed." }, 409);
     }
 
-    const path = `${invite.project_id}/${invite.document_id}/${fileName}`;
+    const profileForSave = await brandForProject(db, Number(invite.project_id));
+    const companyId = String(profileForSave?.company_id ?? "");
+    if (!companyId) return json({ error: "This form is not linked to a company." }, 422);
+    const path = `${companyId}/${invite.project_id}/handover/${invite.document_id}/${fileName}`;
     const bytes = decodePdf(pdfBase64);
     const { error: uploadError } = await db.storage.from("om-uploads").upload(path, bytes, {
       contentType: "application/pdf",
@@ -227,18 +227,21 @@ Deno.serve(async (req) => {
       return json({ error: "project_id, document_id, document_title and form_template_key are required." }, 400);
     }
 
+    const access = await requireCompanyMember(req, db);
+    if ("response" in access) return access.response;
+    if (!(await projectInCompany(db, projectId, access.caller.companyId))) {
+      return json({ error: "Project not found" }, 404);
+    }
+
     const token = randomToken();
-    const { data: profile } = await db
-      .from("contractor_profile")
-      .select("company_name")
-      .limit(1)
-      .maybeSingle();
+    const profile = await brandForProject(db, projectId);
     const company = profile?.company_name || "O&M Builder";
     const url = fillUrl(req, token);
 
     const { error } = await db.from("handover_form_invites").insert({
       token,
       project_id: projectId,
+      company_id: access.caller.companyId,
       document_id: documentId,
       document_title: documentTitle,
       form_template_key: formTemplateKey,
@@ -286,6 +289,8 @@ Deno.serve(async (req) => {
   }
 
   if (action === "send_pack") {
+    const access = await requireCompanyMember(req, db);
+    if ("response" in access) return access.response;
     const to = String(body.to ?? "").trim();
     const subject = String(body.subject ?? "Completion pack");
     const text = String(body.body ?? "");

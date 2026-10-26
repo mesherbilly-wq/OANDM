@@ -55,10 +55,25 @@ export default function PublicCompletionFormPage() {
         cancelled = true;
       };
     }
-    void Promise.all([getPublicCompletionForm(token), fetchPublicContractorBrand()]).then(([next, nextBrand]) => {
+    void getPublicCompletionForm(token).then(next => {
       if (cancelled) return;
       setForm(next);
-      setBrand(nextBrand);
+      setBrand(next.brand ? {
+        company_name: next.brand.company_name,
+        logo_url: next.brand.logo_url,
+        address_line1: null,
+        address_line2: null,
+        city: null,
+        postcode: null,
+        telephone: null,
+        email: null,
+        website: null,
+        nsi_number: null,
+        ssaib_number: null,
+        brand_primary: next.brand.brand_primary,
+        brand_ink: next.brand.brand_ink,
+        tagline: next.brand.tagline,
+      } : null);
     }).catch(err => {
       if (!cancelled) setError(err instanceof Error ? err.message : 'This form link is not valid.');
     });

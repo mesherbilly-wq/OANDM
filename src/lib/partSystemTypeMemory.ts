@@ -1,6 +1,7 @@
 import type { ImportEquipmentDraft, ImportReviewDraft } from '../integrations';
 import { categoryForSystemName } from './inferSystemType';
 import { normalizePart, pickMetadataString } from './equipmentMatchUtils';
+import { ownCompanyId } from './companyScope';
 import { supabase } from './supabase';
 
 export const SYSTEM_TYPE_SOURCE_KEY = 'systemTypeSource';
@@ -149,13 +150,15 @@ export async function rememberPartSystemType(args: {
   local[partKey] = systemType;
   writeLocalMemory(local);
 
+  const companyId = await ownCompanyId();
   const { error } = await supabase.from('part_system_types').upsert({
     part_key: partKey,
     part_number: partNumber || partKey,
     manufacturer: args.manufacturer?.trim() || null,
     system_type: systemType,
     updated_at: new Date().toISOString(),
-  }, { onConflict: 'part_key' });
+    ...(companyId ? { company_id: companyId } : {}),
+  }, { onConflict: companyId ? 'company_id,part_key' : 'part_key' });
 
   if (error && !/does not exist|schema cache/i.test(error.message)) {
     console.warn('[part-system-type] Could not save remembered system type:', error.message);

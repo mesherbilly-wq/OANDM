@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { projectInCompany, requireCompanyMember } from "../_shared/companyGate.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -539,29 +540,44 @@ Deno.serve(async (req: Request) => {
   const { action } = body;
   log(action, "invoked");
 
+  const access = await requireCompanyMember(req, db);
+  if ("response" in access) return access.response;
+  const companyId = access.caller.companyId;
+  if (body.project_id && !(await projectInCompany(db, Number(body.project_id), companyId))) {
+    return json({ error: "Project not found" }, 404);
+  }
+
   // ── save_token ────────────────────────────────────────────────────────────────
   if (action === "save_token") {
+    if (access.caller.role !== "admin") return json({ error: "Only a company admin can save integration credentials." }, 403);
     const { token } = body;
     const normalized = normalizeSafetyCultureToken(String(token ?? ""));
     if (!normalized) return json({ error: "token required" });
     const { error } = await db.from("integration_settings")
-      .upsert({ key: "safetyculture_api_token", value: normalized, updated_at: new Date().toISOString() }, { onConflict: "key" });
+      .upsert({
+        key: "safetyculture_api_token",
+        value: normalized,
+        company_id: companyId,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "company_id,key" });
     if (error) return json({ error: error.message });
     return json({ ok: true });
   }
 
   // ── delete_token ──────────────────────────────────────────────────────────────
   if (action === "delete_token") {
-    await db.from("integration_settings").delete().eq("key", "safetyculture_api_token");
+    if (access.caller.role !== "admin") return json({ error: "Only a company admin can remove integration credentials." }, 403);
+    await db.from("integration_settings").delete().eq("key", "safetyculture_api_token").eq("company_id", companyId);
     return json({ ok: true });
   }
 
-  // Remaining actions need the stored token
+  // Remaining actions need this company's stored token
   const { data: tokenRow } = await db
     .from("integration_settings")
     .select("value")
     .eq("key", "safetyculture_api_token")
-    .single();
+    .eq("company_id", companyId)
+    .maybeSingle();
 
   if (!tokenRow?.value) return json({ error: "SafetyCulture API token not configured" });
   const scToken = normalizeSafetyCultureToken(tokenRow.value as string);
@@ -1283,7 +1299,7 @@ Deno.serve(async (req: Request) => {
       return json({ error: "Could not export PDF from SafetyCulture. Ensure the inspection is completed and try again." });
     }
 
-    const storagePath = `${prefix}/${project_id}/sc_${inspection_id}_${Date.now()}.pdf`;
+    const storagePath = `${companyId}/handover/${project_id}/sc_${inspection_id}_${Date.now()}.pdf`;
     const { error: upErr } = await db.storage
       .from("om-uploads")
       .upload(storagePath, pdfBuf, { contentType: "application/pdf", upsert: false });
@@ -1370,7 +1386,7 @@ Deno.serve(async (req: Request) => {
         const pdfRes = await fetch(rawUrl).catch(() => null);
         if (pdfRes?.ok) {
           const buf = await pdfRes.arrayBuffer();
-          const path = `commissioning/${project_id}/sc_${inspection_id}_${Date.now()}.pdf`;
+          const path = `${companyId}/commissioning/${project_id}/sc_${inspection_id}_${Date.now()}.pdf`;
           const { error: upErr } = await db.storage
             .from("om-uploads")
             .upload(path, buf, { contentType: "application/pdf", upsert: false });
@@ -1451,7 +1467,7 @@ Deno.serve(async (req: Request) => {
             const ct = r.headers.get("content-type") ?? "";
             if (ct.includes("pdf") || ct.includes("octet")) {
               const buffer = await r.arrayBuffer();
-              const path = `handover/${project_id}/sc_${audit_id}_${Date.now()}.pdf`;
+              const path = `${companyId}/handover/${project_id}/sc_${audit_id}_${Date.now()}.pdf`;
               const { error: upErr } = await db.storage.from("om-uploads").upload(path, buffer, { contentType: "application/pdf", upsert: false });
               if (upErr) return json({ error: "Storage upload failed: " + upErr.message });
               const { data: { publicUrl } } = db.storage.from("om-uploads").getPublicUrl(path);
@@ -1470,7 +1486,7 @@ Deno.serve(async (req: Request) => {
     if (!pdfRes?.ok) return json({ error: "Failed to download exported PDF from SafetyCulture" });
     const pdfBuffer = await pdfRes.arrayBuffer();
 
-    const path = `handover/${project_id}/sc_${audit_id}_${Date.now()}.pdf`;
+    const path = `${companyId}/handover/${project_id}/sc_${audit_id}_${Date.now()}.pdf`;
     const { error: upErr } = await db.storage.from("om-uploads").upload(path, pdfBuffer, { contentType: "application/pdf", upsert: false });
     if (upErr) return json({ error: "Storage upload failed: " + upErr.message });
 

@@ -4,13 +4,13 @@ import {
   LayoutDashboard, FolderOpen, Box, Menu, X, Plus, Plug,
   ChevronDown, ChevronRight,
   BookOpen, Cpu, Wifi, ClipboardCheck, Award, Download, Info,
-  FileText, Layers, LogOut, Building2, User, Users, ClipboardList, ScrollText, Pencil,
+  FileText, Layers, LogOut, Building2, User, Users, ClipboardList, ScrollText, Pencil, Shield,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { deriveProjectSystems, getCategoryStyle, PROJECT_DEVICES_CHANGED_EVENT, type ProjectSystem } from '../lib/systems';
 import { fetchProjectSystems } from '../lib/projectSystemsDb';
 import type { Device, ProjectSystemRecord } from '../types';
-import { canAccessDocumentManagement, canAccessIntegrations, canAccessTemplates, canEditOperations, canManageUsers, isEndUser, roleLabel } from '../lib/appRoles';
+import { canAccessDocumentManagement, canAccessIntegrations, canAccessTemplates, canEditOperations, canManageUsers, isEndUser, isPlatformMaster, roleLabel } from '../lib/appRoles';
 import { useUserAccess } from '../lib/userAccess';
 
 const PROJECT_MODULES = [
@@ -38,7 +38,8 @@ export function Layout({ companyName, userEmail, onSignOut }: {
   const [systemsExpanded, setSystemsExpanded] = useState(true);
   const [projectSystems, setProjectSystems] = useState<ProjectSystem[]>([]);
   const location = useLocation();
-  const { role, profilesReady } = useUserAccess();
+  const { role, profilesReady, companyName: accountName } = useUserAccess();
+  const master = isPlatformMaster(role);
   const showOperations = canEditOperations(role);
   const showIntegrations = canAccessIntegrations(role);
   const showUsers = canManageUsers(role);
@@ -97,7 +98,7 @@ export function Layout({ companyName, userEmail, onSignOut }: {
       <aside className={`fixed top-0 left-0 z-50 h-full w-64 bg-slate-950 transform transition-transform duration-200 ease-in-out lg:translate-x-0 flex flex-col ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         {/* Brand */}
         <div className="flex items-center justify-between h-16 px-5 border-b border-slate-800 flex-shrink-0">
-          <Link to={endUser ? '/projects' : '/dashboard'} className="flex items-center gap-3">
+          <Link to={master ? '/platform' : endUser ? '/projects' : '/dashboard'} className="flex items-center gap-3">
             <img
               src="https://www.pacific-uk.co.uk/wp-content/uploads/2018/07/pacific-logo.png"
               alt="Pacific Fire and Security Systems"
@@ -111,6 +112,11 @@ export function Layout({ companyName, userEmail, onSignOut }: {
 
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-0.5">
+          {master && (
+            <NavLink href="/platform" icon={Shield} label="Platform"
+              active={isActive('/platform')} onClick={() => setSidebarOpen(false)} />
+          )}
+
           {showOperations && (
             <NavLink href="/dashboard" icon={LayoutDashboard} label="Dashboard"
               active={isActive('/dashboard')} onClick={() => setSidebarOpen(false)} />
@@ -121,8 +127,10 @@ export function Layout({ companyName, userEmail, onSignOut }: {
               active={isActive('/companies')} onClick={() => setSidebarOpen(false)} />
           )}
 
+          {!master && (
           <NavLink href="/projects" icon={FolderOpen} label="Projects"
             active={isProjectsActive} onClick={() => setSidebarOpen(false)} />
+          )}
 
           {/* Project sub-nav */}
           {currentProjectId && (
@@ -239,7 +247,7 @@ export function Layout({ companyName, userEmail, onSignOut }: {
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-xs font-semibold text-slate-300 truncate leading-tight">
-                {companyName || 'My Company'}
+                {accountName || companyName || (master ? 'Platform' : 'My Company')}
               </p>
               {userEmail && (
                 <p className="text-[10px] text-slate-600 truncate leading-tight">{userEmail}</p>

@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { brandForProject, requireCompanyMember } from "../_shared/companyGate.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -129,10 +130,13 @@ Deno.serve(async (req) => {
     const revision = await loadRevision(Number(form.id), Number(form.current_revision_no));
     const { data: project } = await db
       .from("projects")
-      .select("job_number, project_number, project_name, client_name, site_name, site_address, project_manager, engineer")
+      .select("job_number, project_number, project_name, client_name, site_name, site_address, project_manager, engineer, company_id")
       .eq("id", form.project_id)
       .maybeSingle();
-    const { data: profile } = await db.from("contractor_profile").select("company_name").limit(1).maybeSingle();
+    const profile = await brandForProject(db, Number(form.project_id));
+    if (project?.company_id && form.company_id && project.company_id !== form.company_id) {
+      return json({ error: "This form link is not valid." }, 404);
+    }
     return json({
       token,
       role: row.role,
@@ -152,7 +156,14 @@ Deno.serve(async (req) => {
         projectManager: project?.project_manager || "",
         engineer: project?.engineer || "",
       },
-      companyName: profile?.company_name || "Pacific",
+      companyName: profile?.company_name || "Operations & Maintenance",
+      brand: profile ? {
+        company_name: profile.company_name ?? null,
+        logo_url: profile.logo_url ?? null,
+        brand_primary: profile.brand_primary ?? null,
+        brand_ink: profile.brand_ink ?? null,
+        tagline: profile.tagline ?? null,
+      } : null,
       assignedName: form.assigned_name,
       expiresAt: form.expires_at,
       reviewNote: form.review_note,
@@ -189,7 +200,9 @@ Deno.serve(async (req) => {
     if (!fieldPath) return json({ error: "Missing photo field." }, 400);
     if (!/^image\/(jpeg|png|webp|gif)$/i.test(contentType)) return json({ error: "Only JPEG, PNG, WebP or GIF photos can be attached." }, 400);
     const revisionNo = Number(form.current_revision_no);
-    const path = `${form.id}/${revisionNo}/${crypto.randomUUID()}_${fileName}`;
+    const formCompany = String(form.company_id ?? "");
+    if (!formCompany) return json({ error: "This form is not linked to a company." }, 422);
+    const path = `${formCompany}/${form.id}/${revisionNo}/${crypto.randomUUID()}_${fileName}`;
     const { data: inserted, error } = await db.from("completion_form_assets").insert({
       form_id: form.id,
       revision_no: revisionNo,
@@ -311,6 +324,8 @@ Deno.serve(async (req) => {
   }
 
   if (action === "send_email") {
+    const access = await requireCompanyMember(req, db);
+    if ("response" in access) return access.response;
     const to = String(body.to ?? "").trim();
     const title = String(body.title ?? "CCTV completion form");
     const url = String(body.url ?? "");

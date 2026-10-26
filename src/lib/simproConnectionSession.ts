@@ -1,3 +1,4 @@
+import { ownCompanyId } from './companyScope';
 import { supabase } from './supabase';
 
 const SESSION_KEY = 'oandm.simpro.connection.v1';
@@ -115,13 +116,15 @@ export async function loadSimproConnection(): Promise<{
 }
 
 export async function saveSimproConnection(session: SimproConnectionSession): Promise<{ error: string | null; needsMigration: boolean }> {
+  const tenantId = await ownCompanyId();
   const { error } = await supabase.from('integration_settings').upsert(
     {
       key: SIMPRO_CONNECTION_KEY,
       value: JSON.stringify(session),
       updated_at: new Date().toISOString(),
+      ...(tenantId ? { company_id: tenantId } : {}),
     },
-    { onConflict: 'key' },
+    { onConflict: tenantId ? 'company_id,key' : 'key' },
   );
 
   if (error) {

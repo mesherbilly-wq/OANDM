@@ -1,3 +1,4 @@
+import { ownCompanyId } from './companyScope';
 import { supabase } from './supabase';
 
 export type EmailProvider = 'development' | 'resend' | 'mailto';
@@ -13,10 +14,14 @@ export async function getEmailSettings(): Promise<{ provider: EmailProvider; fro
 }
 
 export async function saveEmailSettings(provider: EmailProvider, from: string): Promise<void> {
-  const { error } = await supabase.from('integration_settings').upsert([
-    { key: 'email_provider', value: provider },
-    { key: 'email_from', value: from },
-  ], { onConflict: 'key' });
+  const companyId = await ownCompanyId();
+  const rows = [
+    { key: 'email_provider', value: provider, ...(companyId ? { company_id: companyId } : {}) },
+    { key: 'email_from', value: from, ...(companyId ? { company_id: companyId } : {}) },
+  ];
+  const { error } = await supabase.from('integration_settings').upsert(rows, {
+    onConflict: companyId ? 'company_id,key' : 'key',
+  });
   if (error) throw new Error(error.message);
 }
 

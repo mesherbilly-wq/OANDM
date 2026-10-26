@@ -14,6 +14,7 @@ import type {
 import { blankCompletionSchema, slugifyTemplateKey } from './completionTemplateSystems';
 import { buildCompletionPdf } from './completionFormPdf';
 import type { ContractorBrand } from './contractorBrand';
+import { ownCompanyId } from './companyScope';
 import { displayProjectJobNumber } from './projectJobNumber';
 
 function invoke<T>(action: string, payload: Record<string, unknown>): Promise<T> {
@@ -521,7 +522,10 @@ export async function saveApprovedPdf(opts: {
 }): Promise<string> {
   const raw = opts.pdfBase64.includes(',') ? opts.pdfBase64.split(',').pop()! : opts.pdfBase64;
   const bytes = Uint8Array.from(atob(raw), char => char.charCodeAt(0));
-  const path = `completion/${opts.projectId}/${opts.formId}/${opts.fileName}`;
+  const companyId = await ownCompanyId();
+  const path = companyId
+    ? `${companyId}/${opts.projectId}/completion/${opts.formId}/${opts.fileName}`
+    : `completion/${opts.projectId}/${opts.formId}/${opts.fileName}`;
   const { error } = await supabase.storage.from('om-uploads').upload(path, new Blob([bytes], { type: 'application/pdf' }), {
     contentType: 'application/pdf',
     upsert: true,

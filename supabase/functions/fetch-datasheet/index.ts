@@ -1,4 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { requireCompanyMember } from "../_shared/companyGate.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const corsHeaders = {
@@ -449,9 +450,11 @@ Deno.serve(async (req: Request) => {
       : fromAi
       ? `ai-placed-${Math.round(hitScore)}_${safeMfr || "manufacturer"}_${safeMdl || "model"}_datasheet.pdf`
       : `${safeMfr || "manufacturer"}_${safeMdl || "model"}_datasheet.pdf`;
-    const storagePath = `${safeMfr || "manufacturer"}/${safeMdl || "model"}/${Date.now()}_${fileName}`;
-
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
+    const access = await requireCompanyMember(req, supabase);
+    if ("response" in access) return access.response;
+    const companyId = access.caller.companyId;
+    const storagePath = `${companyId}/${safeMfr || "manufacturer"}/${safeMdl || "model"}/${Date.now()}_${fileName}`;
     const { error: uploadError } = await supabase.storage
       .from("user-datasheets")
       .upload(storagePath, new Blob([pdfBytes], { type: "application/pdf" }), {
@@ -470,11 +473,13 @@ Deno.serve(async (req: Request) => {
       model_number: modelNumber,
       file_name: fileName,
       datasheet_url: publicUrl,
+      company_id: companyId,
     };
 
     const { data: existing } = await supabase
       .from("datasheets")
       .select("id")
+      .eq("company_id", companyId)
       .ilike("manufacturer", escapeIlike(manufacturerName))
       .ilike("model_number", escapeIlike(modelNumber))
       .limit(1)

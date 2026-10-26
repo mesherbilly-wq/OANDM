@@ -200,6 +200,13 @@ export interface CompletionPublicForm {
     engineer: string;
   };
   companyName: string;
+  brand?: {
+    company_name: string | null;
+    logo_url: string | null;
+    brand_primary?: string | null;
+    brand_ink?: string | null;
+    tagline?: string | null;
+  } | null;
   assignedName: string | null;
   expiresAt: string | null;
   reviewNote: string | null;

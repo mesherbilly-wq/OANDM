@@ -1,4 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { requireCompanyMember } from "../_shared/companyGate.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const corsHeaders = {
@@ -58,10 +59,14 @@ Deno.serve(async (req: Request) => {
     );
   }
 
+  const access = await requireCompanyMember(req, supabase);
+  if ("response" in access) return access.response;
+
   const { data: drawing, error: drawingErr } = await supabase
     .from("drawings")
     .select("*")
     .eq("id", drawing_id)
+    .eq("company_id", access.caller.companyId)
     .single();
 
   if (drawingErr || !drawing) {

@@ -1,11 +1,45 @@
+import { useEffect, useState } from 'react';
 import { Building2 } from 'lucide-react';
 import { Navigate } from 'react-router-dom';
 import { CompaniesManager } from '../components/CompaniesManager';
-import { canEditOperations, defaultHomePath } from '../lib/appRoles';
+import { canEditOperations, canManageUsers, defaultHomePath } from '../lib/appRoles';
 import { useUserAccess } from '../lib/userAccess';
+import { supabase } from '../lib/supabase';
 
 export function CompaniesPage() {
-  const { role, roleLoading } = useUserAccess();
+  const { role, roleLoading, companyId, companyName, companyStatus, subscriptionPlan, refreshRole } = useUserAccess();
+  const [accountName, setAccountName] = useState(companyName);
+  const [contactEmail, setContactEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [accountMessage, setAccountMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    setAccountName(companyName);
+    if (!companyId) return;
+    void supabase.from('platform_companies').select('name, contact_email, phone').eq('id', companyId).maybeSingle()
+      .then(({ data }) => {
+        if (!data) return;
+        setAccountName(String(data.name ?? ''));
+        setContactEmail(String(data.contact_email ?? ''));
+        setPhone(String(data.phone ?? ''));
+      });
+  }, [companyId, companyName]);
+
+  const saveAccount = async () => {
+    if (!companyId) return;
+    setAccountMessage(null);
+    const { error } = await supabase.from('platform_companies').update({
+      name: accountName.trim(),
+      contact_email: contactEmail.trim() || null,
+      phone: phone.trim() || null,
+    }).eq('id', companyId);
+    if (error) {
+      setAccountMessage(error.message);
+      return;
+    }
+    setAccountMessage('Company profile saved.');
+    await refreshRole();
+  };
 
   if (roleLoading) {
     return (
@@ -27,9 +61,26 @@ export function CompaniesPage() {
           <h1 className="text-2xl font-bold text-slate-900">Companies</h1>
         </div>
         <p className="text-sm text-slate-500 mt-1">
-          Set up companies, logos and O&amp;M colours here before you start a project. New projects use the default company unless you pick another.
+          Logos and colours for this company only. New projects use the default letterhead unless you pick another.
         </p>
       </div>
+      {canManageUsers(role) && companyId && (
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-5 space-y-3">
+          <h2 className="text-sm font-semibold text-slate-900">Company profile</h2>
+          <p className="text-xs text-slate-500">
+            Plan: {subscriptionPlan || 'standard'}. Status: {companyStatus || 'active'}. Subscription and suspension are changed by the platform owner.
+          </p>
+          <div className="grid sm:grid-cols-3 gap-2">
+            <input value={accountName} onChange={event => setAccountName(event.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="Company name" />
+            <input value={contactEmail} onChange={event => setContactEmail(event.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="Account email" />
+            <input value={phone} onChange={event => setPhone(event.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="Phone" />
+          </div>
+          <button type="button" onClick={() => void saveAccount()} className="px-3 py-2 rounded-lg text-sm font-semibold bg-slate-900 text-white">
+            Save profile
+          </button>
+          {accountMessage && <p className="text-xs text-slate-600">{accountMessage}</p>}
+        </div>
+      )}
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
         <CompaniesManager />
       </div>
