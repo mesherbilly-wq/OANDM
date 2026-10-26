@@ -129,7 +129,7 @@ function buildDeviceRows(
     if (!system.selected) continue;
 
     for (const item of system.equipment) {
-      if (!item.selected) continue;
+      if (!item.selected || item.metadata?.quantityUnstated === true) continue;
 
       const systemName = persistNameForImportEquipment(system, item, persistSystemNames);
       const category = categoryForSystemName(systemName);
@@ -304,7 +304,7 @@ export async function persistSimproImportReviewDraft(
     for (const system of draft.systems) {
       if (!system.selected) continue;
       for (const item of system.equipment) {
-        if (!item.selected) continue;
+        if (!item.selected || item.metadata?.quantityUnstated === true) continue;
         const persistName = persistNameForImportEquipment(system, item, persistSystemNames);
         const evidence = typeof item.metadata?.evidenceClass === 'string' ? item.metadata.evidenceClass : null;
         const confirmedInstalled = evidence === 'installed';

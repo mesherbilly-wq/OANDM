@@ -51,6 +51,13 @@ export interface AiExtractedProject {
   sections?: { kind?: string | null; text?: string | null; source_file?: string | null; source_page?: number | null }[];
   missing?: string[] | null;
   warnings?: string[] | null;
+  quantity_summary?: {
+    statedTotal: number | null;
+    countedTotal: number | null;
+    classified?: { label: string; quantity: number }[];
+    difference: string | null;
+    unresolved: string | null;
+  } | null;
 }
 
 export interface NormalizeAiExtractOptions {
@@ -90,10 +97,10 @@ function resolveScopeHtml(extracted: AiExtractedProject, fallback: string | null
   );
 }
 
-function quantityOf(value: unknown): number {
+function quantityOf(value: unknown): { quantity: number; unstated: boolean } {
   const parsed = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(parsed) || parsed < 1) return 1;
-  return Math.round(parsed);
+  if (!Number.isFinite(parsed) || parsed < 1) return { quantity: 0, unstated: true };
+  return { quantity: Math.round(parsed), unstated: false };
 }
 
 function systemNameOf(device: AiExtractedDevice): string {
@@ -142,6 +149,7 @@ export function normalizeAiExtract(
     const equipment = rows.map((row, index) => {
       const deviceType = nullIfEmpty(row.device_type) ?? nullIfEmpty(row.model_name);
       const modelName = nullIfEmpty(row.model_name) ?? deviceType;
+      const quantity = quantityOf(row.quantity);
       const confidence = typeof row.confidence === 'number' ? row.confidence : null;
       const sourceFile = nullIfEmpty(row.source_file);
       const sourcePage = typeof row.source_page === 'number' ? row.source_page : null;
@@ -158,7 +166,7 @@ export function normalizeAiExtract(
         manufacturer: nullIfEmpty(row.manufacturer),
         modelNumber: nullIfEmpty(row.model_number),
         modelName,
-        quantity: quantityOf(row.quantity),
+        quantity: quantity.quantity,
         location: nullIfEmpty(row.location),
         notes: notes || null,
         category: suggestedSystemType ? categoryForSystemName(suggestedSystemType) : null,
@@ -168,7 +176,7 @@ export function normalizeAiExtract(
         matched: false,
         matchedProductId: null,
         confidence,
-        selected: row.conflict ? false : true,
+        selected: row.conflict || quantity.unstated ? false : true,
         sourceLineRef: source || `ai-${index + 1}`,
         metadata: {
           aiSystemType: row.system_type ?? null,
@@ -179,6 +187,7 @@ export function normalizeAiExtract(
           sourcePage,
           evidenceText: nullIfEmpty(row.evidence_text),
           conflict: nullIfEmpty(row.conflict),
+          quantityUnstated: quantity.unstated,
         },
       });
     });
@@ -266,9 +275,35 @@ export function normalizeAiExtract(
     });
   }
 
+  const summary = extracted.quantity_summary;
+  if (summary && typeof summary === 'object') {
+    const lines = [
+      summary.statedTotal != null ? `Stated camera total: ${summary.statedTotal}` : 'Stated camera total: not found',
+      summary.countedTotal != null ? `Counted drawing total: ${summary.countedTotal}` : 'Counted drawing total: not established',
+      summary.classified?.length
+        ? `Classified quantities: ${summary.classified.map(item => `${item.label} ${item.quantity}`).join(', ')}`
+        : 'Classified quantities: not established',
+      summary.difference,
+      summary.unresolved,
+    ].filter((line): line is string => Boolean(line));
+    issues.unshift({
+      code: 'ai.quantity',
+      message: lines.join('\n'),
+      severity: summary.unresolved || (summary.statedTotal != null && summary.countedTotal != null && summary.statedTotal !== summary.countedTotal) ? 'warning' : 'info',
+    });
+  }
+
+  if (devices.some(device => !nullIfEmpty(device.model_number))) {
+    issues.push({
+      code: 'ai.product_lookup',
+      message: 'No part number is stated, so product lookup did not create or remove devices. Model, resolution and frame rate stay blank until reviewed.',
+      severity: 'info',
+    });
+  }
+
   for (const warning of extracted.warnings ?? []) {
     const message = warning.trim();
-    if (!message) continue;
+    if (!message || message.startsWith('Part numbers are not stated')) continue;
     issues.push({ code: 'ai.warning', message, severity: 'warning' });
   }
 

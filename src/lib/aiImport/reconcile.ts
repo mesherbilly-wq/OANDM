@@ -16,6 +16,7 @@ export interface ExtractedDeviceLine {
   sourcePage: number | null;
   evidenceText: string | null;
   confidence: number | null;
+  quantityKnown?: boolean;
 }
 
 export interface ReconciledDeviceLine extends ExtractedDeviceLine {
@@ -66,7 +67,10 @@ export function reconcileDeviceLines(lines: ExtractedDeviceLine[]): ReconcileRes
   const devices: ReconciledDeviceLine[] = [];
   const groups = new Map<string, ExtractedDeviceLine[]>();
 
-  for (const line of lines) {
+  const unknown = lines.filter(line => line.quantityKnown === false);
+  const knownLines = lines.filter(line => line.quantityKnown !== false);
+
+  for (const line of knownLines) {
     if (!line.deviceType && !line.modelName && !line.modelNumber) continue;
     const key = identity(line);
     const group = groups.get(key) ?? [];
@@ -156,6 +160,12 @@ export function reconcileDeviceLines(lines: ExtractedDeviceLine[]): ReconcileRes
         quantityBasis: chosen.quantityBasis === 'unknown' ? 'counted' : chosen.quantityBasis,
       }, pageTotals.size > 1 ? 'The same count is repeated on more than one view, so it was kept once.' : null));
     }
+  }
+
+  for (const line of unknown) {
+    if (!line.deviceType && !line.modelName && !line.modelNumber) continue;
+    devices.push(withConflict(line, 'Quantity was not stated and was not defaulted to 1.'));
+    issues.push(`${line.deviceType ?? line.modelName ?? 'Device'}: quantity was not stated.`);
   }
 
   return { devices, issues };

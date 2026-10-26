@@ -27,7 +27,7 @@ Use this shape:
       "manufacturer": null,
       "model_number": null,
       "model_name": null,
-      "quantity": 1,
+      "quantity": null,
       "location": null,
       "zone": null,
       "notes": null,
@@ -47,10 +47,14 @@ Use this shape:
 }
 
 quantity_basis is "stated" when a schedule or note gives a number, or "counted" when you count symbols on a drawing.
+Set quantity to null when the page does not give a number. A camera type such as "bullet" or "dome" is not a quantity of 1.
+Do not use 1 as a placeholder. A design proposal is evidence_class "proposed", never "installed" or as-fitted.
 evidence_class is "quoted" for a quote or price list, "proposed" for a design drawing, or "installed" only when the page explicitly says installed or as-fitted.
 view_kind is overview, detail, schedule, legend, revision, or unknown.
 system_type should be CCTV, Access Control, Intercom, Intruder, Fire, or Networking when that is clear.
-Count each visible device symbol once on this page. Do not copy a legend total and also count the same symbols.
+Count each device symbol once on the plan. Do not count the same symbol in the legend, a coverage cone, or a repeated crop.
+A title-block total and a counted symbol total are separate. Do not add them together.
+The company that drew the sheet is not the customer.
 A quote is not installed equipment.
 sections.kind may be installation, operating, maintenance, or commissioning. Copy only wording that is present.
 missing lists evidence that is absent, such as manuals, test results or signatures. Do not say they exist.`;
@@ -61,6 +65,7 @@ interface IncomingPage {
   page?: number;
   text?: string;
   image_base64?: string;
+  image_crops?: string[];
   media_type?: string;
 }
 
@@ -109,6 +114,13 @@ export async function handleAiExtract(req: Request): Promise<Response> {
       content.push({
         type: "image",
         source: { type: "base64", media_type: page.media_type, data: page.image_base64 },
+      });
+    }
+    for (const crop of (page.image_crops ?? []).slice(0, 4)) {
+      if (!crop) continue;
+      content.push({
+        type: "image",
+        source: { type: "base64", media_type: "image/jpeg", data: crop },
       });
     }
   }

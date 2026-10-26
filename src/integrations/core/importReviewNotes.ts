@@ -99,9 +99,10 @@ export function getImportReviewBlockingIssues(draft: ImportReviewDraft): ImportR
   }
 
   if (selectedSystems(draft).length === 0) {
+    const drawingImport = draft.source.connectorId === 'ai_drawings' || draft.source.connectorId === 'ai_documents';
     add({
       code: 'persist.no_systems',
-      message: 'Select at least one cost centre/system to import.',
+      message: drawingImport ? 'Select at least one system to import.' : 'Select at least one cost centre/system to import.',
       severity: 'error',
     });
   }

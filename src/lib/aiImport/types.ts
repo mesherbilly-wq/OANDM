@@ -8,7 +8,29 @@ export interface AiSourcePage {
   page: number;
   text: string;
   imageBase64?: string;
+  imageCrops?: string[];
   mediaType?: string;
+  symbolCount?: {
+    internalDome: number;
+    externalDome: number;
+    externalBullet: number;
+    legendExcluded: number;
+    countedTotal: number;
+  } | null;
+}
+
+export interface AiQuantityClass {
+  label: string;
+  quantity: number;
+}
+
+export interface AiQuantitySummary {
+  statedTotal: number | null;
+  countedTotal: number | null;
+  classified: AiQuantityClass[];
+  difference: string | null;
+  unresolved: string | null;
+  legendExcluded: number;
 }
 
 export interface AiExtractedDevice {
@@ -56,6 +78,7 @@ export interface AiExtractPayload {
   sections?: AiExtractedSection[] | null;
   missing?: string[] | null;
   warnings?: string[] | null;
+  quantity_summary?: AiQuantitySummary | null;
 }
 
 export interface AiImportStoredFile {

@@ -81,12 +81,6 @@ function isSimproDraft(draft: ImportReviewDraft): boolean {
   return draft.source.connectorId === 'simpro';
 }
 
-function normalizeQuantity(value: string): number {
-  const parsed = parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed < 1) return 1;
-  return Math.min(parsed, MAX_DEVICES_PER_LINE);
-}
-
 function cellInputClass(disabled: boolean, isMissing = false): string {
   return `w-full min-w-[7rem] rounded-lg border px-2 py-1.5 text-sm ${
     disabled
@@ -408,7 +402,13 @@ export function ImportReviewPage() {
             equipment: system.equipment.map(item => {
               if (item.draftId !== equipmentDraftId) return item;
               if (field === 'quantity') {
-                return { ...item, quantity: normalizeQuantity(value) };
+                const parsed = parseInt(value, 10);
+                const known = Number.isFinite(parsed) && parsed > 0;
+                return {
+                  ...item,
+                  quantity: known ? Math.min(parsed, MAX_DEVICES_PER_LINE) : 0,
+                  metadata: { ...item.metadata, quantityUnstated: !known },
+                };
               }
               if (field === 'warrantyYears') {
                 const parsed = parseInt(value, 10);
@@ -588,11 +588,19 @@ export function ImportReviewPage() {
 
       <div className="mb-5 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
         <p className="font-semibold">Before you proceed</p>
-        <p className="mt-1">
-          Delete any lines from the cost model you do not want the customer to see — uncheck labour,
-          prelims, extras, sundries, and similar commercial lines. Then set each remaining system to
-          CCTV, Access Control, Intruder or Fire before you create the project.
-        </p>
+        {isAiDraft(draft) ? (
+          <p className="mt-1">
+            This is a drawing import. Check the stated total, the counted symbols and any difference before
+            creating the project. Blank model numbers, resolution and test results were left for review.
+            Equipment from a design proposal is not marked as installed.
+          </p>
+        ) : (
+          <p className="mt-1">
+            Delete any lines from the cost model you do not want the customer to see — uncheck labour,
+            prelims, extras, sundries, and similar commercial lines. Then set each remaining system to
+            CCTV, Access Control, Intruder or Fire before you create the project.
+          </p>
+        )}
       </div>
 
       <div className="mb-5 rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm text-cyan-900">
@@ -632,10 +640,9 @@ export function ImportReviewPage() {
           <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
           <div>
             <p>
-              Loaded {productDatabaseStatus.productCount.toLocaleString()} Product Database rows but no blank fields
-              were filled. {productDatabaseEnrichment.unmatchedLines} of {productDatabaseEnrichment.equipmentLines}{' '}
-              equipment lines had no Part Number match — check that the imported Part Number matches{' '}
-              <strong>Manufacturers Part Number</strong> in your CSV.
+              {isAiDraft(draft)
+                ? `Loaded ${productDatabaseStatus.productCount.toLocaleString()} Product Database rows. Product lookup is separate from extraction: this drawing has no part numbers to match, so model numbers were not filled in and no devices were removed.`
+                : `Loaded ${productDatabaseStatus.productCount.toLocaleString()} Product Database rows but no blank fields were filled. ${productDatabaseEnrichment.unmatchedLines} of ${productDatabaseEnrichment.equipmentLines} equipment lines had no Part Number match — check that the imported Part Number matches Manufacturers Part Number in your CSV.`}
             </p>
             <button
               type="button"
@@ -668,6 +675,18 @@ export function ImportReviewPage() {
             {productDatabaseEnrichment.suggestedLines === 1 ? '' : 's'} have closest (non-exact) Product Database
             matches — use <strong>Use this</strong> or <strong>Skip</strong> on the Systems tab.
           </span>
+        </div>
+      )}
+
+      {isAiDraft(draft) && draft.issues.some(issue => issue.code === 'ai.quantity' || issue.code === 'ai.product_lookup') && (
+        <div className="mb-5 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 space-y-2">
+          <p className="font-semibold">Drawing quantities</p>
+          {draft.issues
+            .filter(issue => issue.code === 'ai.quantity' || issue.code === 'ai.product_lookup')
+            .map(issue => (
+              <p key={issue.code} className="whitespace-pre-wrap">{issue.message}</p>
+            ))}
+          <p className="text-slate-500">Each device line shows the source page and the text or symbol count that supports it. Blank model, resolution, frame rate and switch size still need review.</p>
         </div>
       )}
 
@@ -761,8 +780,9 @@ export function ImportReviewPage() {
       {tab === 'systems' && (
         <div className="space-y-4">
           <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-            Uncheck any cost-model line the customer should not see, then confirm CCTV, Access Control,
-            Intruder or Fire on each remaining system.
+            {isAiDraft(draft)
+              ? 'Uncheck a device only if it should not be saved. Confirm CCTV, Access Control, Intruder or Fire on each system. A missing part number does not remove the device.'
+              : 'Uncheck any cost-model line the customer should not see, then confirm CCTV, Access Control, Intruder or Fire on each remaining system.'}{' '}
             {summary.selectedSystems} of {summary.totalSystems} systems ·{' '}
             {summary.selectedLines} of {summary.totalLines} equipment lines ·{' '}
             {summary.deviceUnits} device units selected.
@@ -793,7 +813,7 @@ export function ImportReviewPage() {
                         />
                         <div className="min-w-0 flex-1">
                           <label className="block text-[11px] font-medium text-slate-500 mb-1">
-                            Cost centre name
+                            {isAiDraft(draft) ? 'System name' : 'Cost centre name'}
                           </label>
                           <input
                             type="text"
@@ -870,7 +890,8 @@ export function ImportReviewPage() {
                           {system.equipment.map(item => {
                             const lineDisabled = rowDisabled || !item.selected;
                             const lineSystemType = resolvedEquipmentInstallType(system, item);
-                            const missingRequired = getEquipmentMissingRequiredFields(item);
+                            const missingRequired = getEquipmentMissingRequiredFields(item)
+                              .filter(field => !(isAiDraft(draft) && field === 'modelNumber'));
                             const ambiguousManufacturer = isAmbiguousManufacturerLookup(item);
                             const showProductPicker =
                               (hasProductDatabaseSuggestion(item) || ambiguousManufacturer) &&
@@ -985,9 +1006,10 @@ export function ImportReviewPage() {
                                 <td className="px-3 py-2">
                                   <input
                                     type="number"
-                                    min={1}
+                                    min={0}
                                     max={MAX_DEVICES_PER_LINE}
-                                    value={item.quantity}
+                                    value={item.metadata?.quantityUnstated ? '' : item.quantity}
+                                    placeholder={item.metadata?.quantityUnstated ? 'Not stated' : undefined}
                                     disabled={lineDisabled}
                                     onChange={event =>
                                       updateEquipmentField(system.draftId, item.draftId, 'quantity', event.target.value)
@@ -1016,7 +1038,7 @@ export function ImportReviewPage() {
                                       updateEquipmentField(system.draftId, item.draftId, 'notes', event.target.value)
                                     }
                                     className={cellInputClass(lineDisabled)}
-                                    placeholder={simproItemGroup ? `Simpro: ${simproItemGroup}` : 'Notes'}
+                                    placeholder={isAiDraft(draft) ? 'Notes' : simproItemGroup ? `Simpro: ${simproItemGroup}` : 'Notes'}
                                   />
                                 </td>
                                 <td className="px-3 py-2 text-slate-500 font-mono text-xs">

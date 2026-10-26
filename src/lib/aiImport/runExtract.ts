@@ -1,5 +1,6 @@
 import { supabase } from '../supabase';
 import { reconcileDeviceLines, type ExtractedDeviceLine } from './reconcile';
+import { resolveDrawingExtraction, sumSymbolCounts } from './resolveDrawing';
 import type { AiExtractPayload, AiExtractedDevice, AiSourcePage, EvidenceClass, QuantityBasis, ViewKind } from './types';
 import { verifyExtractedEvidence } from './verifyEvidence';
 
@@ -32,8 +33,8 @@ function batches(pages: AiSourcePage[]): AiSourcePage[][] {
   let images = 0;
   let chars = 0;
   for (const page of pages) {
-    const image = page.imageBase64 ? 1 : 0;
-    const overflow = current.length > 0 && (images + image > 2 || current.length >= 4 || chars + page.text.length > 24000);
+    const image = (page.imageBase64 ? 1 : 0) + (page.imageCrops?.length ?? 0);
+    const overflow = current.length > 0 && (images + image > 4 || current.length >= 4 || chars + page.text.length > 24000);
     if (overflow) {
       groups.push(current);
       current = [];
@@ -94,7 +95,8 @@ function toLine(device: AiExtractedDevice, page: AiSourcePage | undefined): Extr
     manufacturer: device.manufacturer?.trim() || null,
     modelNumber: device.model_number?.trim() || null,
     modelName: device.model_name?.trim() || device.device_type?.trim() || null,
-    quantity: Number.isFinite(quantity) && quantity > 0 ? Math.round(quantity) : 1,
+    quantity: Number.isFinite(quantity) && quantity > 0 ? Math.round(quantity) : 0,
+    quantityKnown: Number.isFinite(quantity) && quantity > 0,
     location: device.location?.trim() || device.zone?.trim() || null,
     notes: device.notes?.trim() || null,
     quantityBasis: basis,
@@ -155,6 +157,7 @@ export async function extractAiPages(
         page: page.page,
         text: page.text,
         image_base64: page.imageBase64,
+        image_crops: page.imageCrops,
         media_type: page.mediaType,
       })),
     };
@@ -185,14 +188,23 @@ export async function extractAiPages(
   }
 
   const merged = mergePayloads(parts);
-  const verified = verifyExtractedEvidence(merged, pages.map(page => page.text).join('\n'));
+  const pageText = pages.map(page => page.text).join('\n');
+  const verified = verifyExtractedEvidence(merged, pageText);
+  const symbolCounts = pages.flatMap(page => page.symbolCount ? [page.symbolCount] : []);
+  const symbols = symbolCounts.length > 0 ? sumSymbolCounts(symbolCounts) : null;
+  const resolved = resolveDrawingExtraction({
+    fileName: pages[0]?.fileName ?? 'drawing',
+    text: pageText,
+    symbols: symbols && (symbols.countedTotal > 0 || symbols.legendExcluded > 0) ? symbols : null,
+    model: verified,
+  });
   const pageByKey = new Map(pages.map(page => [`${page.fileName}:${page.page}`, page]));
-  const lines = (verified.devices ?? []).map(device => {
+  const lines = (resolved.devices ?? []).map(device => {
     const page = pageByKey.get(`${device.source_file ?? ''}:${device.source_page ?? ''}`);
     return toLine(device, page);
   });
   const reconciled = reconcileDeviceLines(lines);
-  verified.devices = reconciled.devices.map(device => ({
+  resolved.devices = reconciled.devices.map(device => ({
     system_type: device.systemType,
     device_type: device.deviceType,
     manufacturer: device.manufacturer,
@@ -210,7 +222,7 @@ export async function extractAiPages(
     confidence: device.confidence,
     conflict: device.conflict,
   }));
-  verified.warnings = [...(verified.warnings ?? []), ...reconciled.issues];
+  resolved.warnings = [...(resolved.warnings ?? []), ...reconciled.issues];
   onProgress?.('Preparing the review');
-  return verified;
+  return resolved;
 }

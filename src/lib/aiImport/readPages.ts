@@ -1,5 +1,7 @@
 import type { PDFPageProxy } from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { countCameraSymbols } from './countSymbols';
+import { transcriptFromPdf, type PdfAnnotation, type PdfTextItem } from './resolveDrawing';
 import type { AiSourcePage } from './types';
 
 const SPARSE_TEXT = 80;
@@ -36,16 +38,52 @@ function jpegFromCanvas(canvas: HTMLCanvasElement): string {
 
 async function renderPdfPage(page: PDFPageProxy): Promise<string | undefined> {
   if (typeof document === 'undefined') return undefined;
+  const canvas = await renderViewport(page, 1400);
+  return canvas ? jpegFromCanvas(canvas) : undefined;
+}
+
+async function renderViewport(page: PDFPageProxy, longEdge: number): Promise<HTMLCanvasElement | null> {
+  if (typeof document === 'undefined') return null;
   const base = page.getViewport({ scale: 1 });
-  const scale = Math.min(1.4, 1400 / Math.max(base.width, 1));
+  const scale = Math.min(1.8, longEdge / Math.max(base.width, base.height, 1));
   const viewport = page.getViewport({ scale });
   const canvas = document.createElement('canvas');
   canvas.width = Math.ceil(viewport.width);
   canvas.height = Math.ceil(viewport.height);
   const context = canvas.getContext('2d');
-  if (!context) return undefined;
+  if (!context) return null;
   await page.render({ canvasContext: context, viewport, canvas }).promise;
-  return jpegFromCanvas(canvas);
+  return canvas;
+}
+
+function cropCanvas(source: HTMLCanvasElement, x0: number, y0: number, x1: number, y1: number): string | null {
+  const sx = Math.round(x0 * source.width);
+  const sy = Math.round(y0 * source.height);
+  const sw = Math.max(1, Math.round((x1 - x0) * source.width));
+  const sh = Math.max(1, Math.round((y1 - y0) * source.height));
+  const tile = document.createElement('canvas');
+  const fitted = Math.min(1, 1100 / Math.max(sw, sh));
+  tile.width = Math.max(1, Math.round(sw * fitted));
+  tile.height = Math.max(1, Math.round(sh * fitted));
+  const context = tile.getContext('2d');
+  if (!context) return null;
+  context.drawImage(source, sx, sy, sw, sh, 0, 0, tile.width, tile.height);
+  return jpegFromCanvas(tile);
+}
+
+/** Legend crop plus overlapping plan tiles. Coverage cones and the legend are still excluded by the symbol count. */
+async function renderPlanCrops(page: PDFPageProxy): Promise<string[]> {
+  const canvas = await renderViewport(page, 1800);
+  if (!canvas) return [];
+  const regions: [number, number, number, number][] = [
+    [0.76, 0.32, 1, 0.84],
+    [0.01, 0.05, 0.55, 0.52],
+    [0.28, 0.22, 0.8, 0.68],
+    [0.01, 0.42, 0.8, 0.82],
+  ];
+  return regions
+    .map(region => cropCanvas(canvas, region[0], region[1], region[2], region[3]))
+    .filter((crop): crop is string => Boolean(crop));
 }
 
 export async function readDocumentPages(
@@ -90,14 +128,22 @@ async function readPdfPages(
     onPage?.(`Reading ${file.name}, page ${pageNumber} of ${pdf.numPages}`);
     const page = await pdf.getPage(pageNumber);
     const content = await page.getTextContent();
-    const text = content.items.map(item => ('str' in item ? item.str : '')).join(' ').replace(/\s+/g, ' ').trim();
+    const annotations = await page.getAnnotations() as PdfAnnotation[];
+    const text = transcriptFromPdf(content.items as PdfTextItem[], annotations);
+    let symbolCount: AiSourcePage['symbolCount'] = null;
+    try {
+      symbolCount = await countCameraSymbols(page);
+    } catch {
+      symbolCount = null;
+    }
     let imageBase64: string | undefined;
-    if (text.length < SPARSE_TEXT) {
-      try {
-        imageBase64 = await renderPdfPage(page);
-      } catch {
-        imageBase64 = undefined;
-      }
+    let imageCrops: string[] | undefined;
+    try {
+      if (text.length < SPARSE_TEXT) imageBase64 = await renderPdfPage(page);
+      const crops = await renderPlanCrops(page);
+      imageCrops = crops.length > 0 ? crops : undefined;
+    } catch {
+      imageCrops = undefined;
     }
     pages.push({
       fileName: file.name,
@@ -105,7 +151,9 @@ async function readPdfPages(
       page: pageNumber,
       text,
       imageBase64,
-      mediaType: imageBase64 ? 'image/jpeg' : undefined,
+      imageCrops,
+      mediaType: imageBase64 || imageCrops ? 'image/jpeg' : undefined,
+      symbolCount,
     });
   }
   return pages;
