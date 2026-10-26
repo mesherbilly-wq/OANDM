@@ -143,52 +143,11 @@ AS $$
   END
 $$;
 
-CREATE OR REPLACE FUNCTION public.can_access_project(pid bigint)
-RETURNS boolean
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-  SELECT CASE
-    WHEN pid IS NULL THEN false
-    WHEN NOT public.company_is_active() THEN false
-    WHEN NOT EXISTS (
-      SELECT 1 FROM public.projects p
-      WHERE p.id = pid
-        AND p.company_id = public.current_company_id()
-    ) THEN false
-    WHEN public.app_role() = 'admin' THEN true
-    WHEN public.app_role() = 'staff' THEN true
-    WHEN public.app_role() = 'end_user' THEN EXISTS (
-      SELECT 1
-      FROM public.project_end_user_access a
-      WHERE a.project_id = pid
-        AND a.accepted_at IS NOT NULL
-        AND a.user_id = auth.uid()
-    )
-    ELSE false
-  END
-$$;
-
-CREATE OR REPLACE FUNCTION public.can_edit_project(pid bigint)
-RETURNS boolean
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-  SELECT public.can_access_project(pid)
-    AND public.app_role() IN ('admin', 'staff')
-$$;
-
 GRANT EXECUTE ON FUNCTION public.app_role() TO authenticated, anon;
 GRANT EXECUTE ON FUNCTION public.is_platform_master() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.current_company_id() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.company_is_active() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.sole_active_company_id() TO authenticated;
-GRANT EXECUTE ON FUNCTION public.can_access_project(bigint) TO authenticated, anon;
-GRANT EXECUTE ON FUNCTION public.can_edit_project(bigint) TO authenticated;
 
 -- Add company_id to every company-owned table that exists in this database.
 CREATE OR REPLACE FUNCTION public._add_company_column(target text)
@@ -258,6 +217,49 @@ SELECT public._add_company_column(target) FROM unnest(ARRAY[
   'sdp_revisions',
   'project_end_user_access'
 ]) AS target;
+
+-- Created after projects.company_id exists. SQL functions are checked at creation time.
+CREATE OR REPLACE FUNCTION public.can_access_project(pid bigint)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT CASE
+    WHEN pid IS NULL THEN false
+    WHEN NOT public.company_is_active() THEN false
+    WHEN NOT EXISTS (
+      SELECT 1 FROM public.projects p
+      WHERE p.id = pid
+        AND p.company_id = public.current_company_id()
+    ) THEN false
+    WHEN public.app_role() = 'admin' THEN true
+    WHEN public.app_role() = 'staff' THEN true
+    WHEN public.app_role() = 'end_user' THEN EXISTS (
+      SELECT 1
+      FROM public.project_end_user_access a
+      WHERE a.project_id = pid
+        AND a.accepted_at IS NOT NULL
+        AND a.user_id = auth.uid()
+    )
+    ELSE false
+  END
+$$;
+
+CREATE OR REPLACE FUNCTION public.can_edit_project(pid bigint)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT public.can_access_project(pid)
+    AND public.app_role() IN ('admin', 'staff')
+$$;
+
+GRANT EXECUTE ON FUNCTION public.can_access_project(bigint) TO authenticated, anon;
+GRANT EXECUTE ON FUNCTION public.can_edit_project(bigint) TO authenticated;
 
 -- Letterhead and catalogue rows belong to the original company.
 DO $$
@@ -374,19 +376,19 @@ DO $$
 DECLARE
   r record;
 BEGIN
-  IF to_regclass('public.handover_document_definitions') IS NOT NULL THEN
+  IF to_regclass('public.handover_document_types') IS NOT NULL THEN
     FOR r IN
-      SELECT con.conname
+      SELECT con.conname, rel.relname
       FROM pg_constraint con
       JOIN pg_class rel ON rel.oid = con.conrelid
-      WHERE rel.relname = 'handover_document_definitions' AND con.contype = 'f'
-        AND pg_get_constraintdef(con.oid) ILIKE '%handover_document_types%'
+      JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+      WHERE con.contype = 'f'
+        AND con.confrelid = 'public.handover_document_types'::regclass
+        AND nsp.nspname = 'public'
     LOOP
-      EXECUTE format('ALTER TABLE public.handover_document_definitions DROP CONSTRAINT %I', r.conname);
+      EXECUTE format('ALTER TABLE public.%I DROP CONSTRAINT %I', r.relname, r.conname);
     END LOOP;
-  END IF;
 
-  IF to_regclass('public.handover_document_types') IS NOT NULL THEN
     ALTER TABLE public.handover_document_types DROP CONSTRAINT IF EXISTS handover_document_types_key_key;
     CREATE UNIQUE INDEX IF NOT EXISTS handover_document_types_company_key_uq
       ON public.handover_document_types (company_id, key);
@@ -401,6 +403,26 @@ BEGIN
     ALTER TABLE public.handover_document_definitions
       ADD CONSTRAINT handover_document_definitions_company_type_fk
       FOREIGN KEY (company_id, type_key)
+      REFERENCES public.handover_document_types (company_id, key)
+      ON UPDATE CASCADE;
+  END IF;
+
+  IF to_regclass('public.project_systems') IS NOT NULL THEN
+    ALTER TABLE public.project_systems
+      DROP CONSTRAINT IF EXISTS project_systems_company_handover_type_fk;
+    ALTER TABLE public.project_systems
+      ADD CONSTRAINT project_systems_company_handover_type_fk
+      FOREIGN KEY (company_id, handover_document_type_key)
+      REFERENCES public.handover_document_types (company_id, key)
+      ON UPDATE CASCADE;
+  END IF;
+
+  IF to_regclass('public.projects') IS NOT NULL THEN
+    ALTER TABLE public.projects
+      DROP CONSTRAINT IF EXISTS projects_company_handover_type_fk;
+    ALTER TABLE public.projects
+      ADD CONSTRAINT projects_company_handover_type_fk
+      FOREIGN KEY (company_id, handover_project_wide_type_key)
       REFERENCES public.handover_document_types (company_id, key)
       ON UPDATE CASCADE;
   END IF;
@@ -2058,3 +2080,40 @@ DROP FUNCTION IF EXISTS public._add_company_column(text);
 DROP FUNCTION IF EXISTS public._bind_company_trigger(text, text);
 DROP FUNCTION IF EXISTS public._install_project_policies(text, boolean);
 DROP FUNCTION IF EXISTS public._install_catalog_policies(text, text);
+
+-- Appoint the platform owner. An existing login is detached from its company.
+DO $$
+DECLARE
+  owner_email text := 'william@pacific-uk.co.uk';
+  uid uuid;
+  token text;
+BEGIN
+  SELECT u.id INTO uid
+  FROM auth.users u
+  WHERE lower(u.email) = owner_email
+  LIMIT 1;
+
+  IF uid IS NOT NULL THEN
+    PERFORM set_config('app.allow_profile_write', '1', true);
+    INSERT INTO public.app_profiles (user_id, email, role, company_id)
+    VALUES (uid, owner_email, 'master', NULL)
+    ON CONFLICT (user_id) DO UPDATE
+      SET email = EXCLUDED.email,
+          role = 'master',
+          company_id = NULL,
+          updated_at = now();
+    RETURN;
+  END IF;
+
+  token := replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '');
+  PERFORM set_config('app.allow_master_invite', '1', true);
+  INSERT INTO public.app_user_invites (email, role, token, company_id)
+  VALUES (owner_email, 'master', token, NULL)
+  ON CONFLICT (email) DO UPDATE
+    SET role = 'master',
+        company_id = NULL,
+        accepted_at = NULL,
+        user_id = NULL,
+        token = EXCLUDED.token,
+        invited_at = now();
+END $$;
