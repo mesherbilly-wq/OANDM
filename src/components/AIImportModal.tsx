@@ -1,8 +1,11 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { ownCompanyId } from '../lib/companyScope';
+import { readDocumentPages } from '../lib/aiImport/readPages';
+import { extractAiPages } from '../lib/aiImport/runExtract';
 import {
-  X, Upload, Sparkles, Loader2, AlertCircle, CheckCircle,
-  ChevronDown, ChevronUp, FileText, MapPin, Tag, Package,
+  X, Sparkles, Loader2, AlertCircle, CheckCircle,
+  ChevronDown, ChevronUp, MapPin, Package,
   Minus, Plus, Check, FileSearch,
 } from 'lucide-react';
 import type { SystemType } from '../types';
@@ -61,6 +64,7 @@ export function AIImportModal({
   const [showOther, setShowOther] = useState(false);
   const [sourceFileUrl, setSourceFileUrl] = useState<string | null>(null);
   const [sourceMediaType, setSourceMediaType] = useState<string>('application/pdf');
+  const [progress, setProgress] = useState('Reading the file');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const matchingCount = devices.filter(d => d.system_type === systemType && d.selected).length;
@@ -79,40 +83,46 @@ export function AIImportModal({
 
     setError(null);
     setFileName(file.name);
+    setProgress('Reading the file');
     setStage('processing');
 
     try {
-      // Upload to storage
+      const companyId = await ownCompanyId();
+      if (!companyId) throw new Error('Sign in as a company admin or staff member before importing.');
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const path = `ai-imports/${projectId}/${Date.now()}_${safeName}`;
+      const path = `${companyId}/${projectId}/ai-import/${Date.now()}_${safeName}`;
+      const mediaType = file.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream');
       const { error: upErr } = await supabase.storage
         .from('om-uploads')
-        .upload(path, file, { contentType: file.type || 'application/pdf', upsert: false });
+        .upload(path, file, { contentType: mediaType, upsert: false });
       if (upErr) throw new Error('Upload failed: ' + upErr.message);
 
       const { data: { publicUrl } } = supabase.storage.from('om-uploads').getPublicUrl(path);
-
-      // Remember the source file for scope regeneration
       setSourceFileUrl(publicUrl);
-      setSourceMediaType(file.type || 'application/pdf');
+      setSourceMediaType(mediaType);
 
-      // Call extraction function
-      const { data, error: fnErr } = await supabase.functions.invoke('extract-drawing', {
-        body: { file_url: publicUrl, media_type: file.type || 'application/pdf' },
-      });
-      if (fnErr) throw new Error(fnErr.message);
-      if (data?.error) throw new Error(data.error);
+      const pages = await readDocumentPages(file, 'Drawing', setProgress);
+      const extracted = await extractAiPages(pages, setProgress);
+      const devicesFound: ExtractedDevice[] = (extracted.devices ?? []).map(device => ({
+        system_type: device.system_type || 'Other',
+        device_type: device.device_type || device.model_name || 'Device',
+        manufacturer: device.manufacturer ?? null,
+        model_number: device.model_number ?? null,
+        quantity: Math.max(1, device.quantity ?? 1),
+        location: device.location ?? null,
+        notes: [device.notes, device.conflict, device.quantity_basis, device.evidence_class, device.evidence_text]
+          .filter(Boolean)
+          .join(' · '),
+        confidence: device.confidence ?? 0.5,
+      }));
 
-      const extracted: ExtractedDevice[] = data?.devices ?? [];
-
-      if (extracted.length === 0) {
+      if (devicesFound.length === 0) {
         setError('No devices were found in this document. Try a drawing, schedule, or specification sheet.');
         setStage('upload');
         return;
       }
 
-      // Build selectable list — pre-select matching system type
-      const selectable: SelectableDevice[] = extracted.map((d, i) => ({
+      const selectable: SelectableDevice[] = devicesFound.map((d, i) => ({
         ...d,
         key: `${i}_${d.system_type}_${d.device_type}`,
         selected: d.system_type === systemType,
@@ -121,8 +131,8 @@ export function AIImportModal({
 
       setDevices(selectable);
       setStage('results');
-    } catch (e: any) {
-      setError(e.message ?? 'Something went wrong');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Something went wrong');
       setStage('upload');
     }
   };
@@ -306,7 +316,7 @@ export function AIImportModal({
               </div>
               <div className="text-center">
                 <p className="text-sm font-semibold text-slate-800 mb-1">Analysing document…</p>
-                <p className="text-xs text-slate-400">Claude is reading "{fileName}"</p>
+                <p className="text-xs text-slate-400">{progress}</p>
               </div>
               <div className="flex gap-1">
                 {[0, 1, 2].map(i => (

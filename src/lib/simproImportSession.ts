@@ -1,4 +1,5 @@
 import type { ImportReviewDraft } from '../integrations';
+import type { AiImportStoredFile } from './aiImport/types';
 
 const SESSION_KEY = 'oandm.simpro.importReview.v1';
 
@@ -6,6 +7,8 @@ export interface SimproImportSession {
   draft: ImportReviewDraft;
   rawJob: unknown;
   savedAt: string;
+  sourceFiles?: AiImportStoredFile[];
+  createdProjectId?: number;
 }
 
 export function setSimproImportSession(session: Omit<SimproImportSession, 'savedAt'>): void {

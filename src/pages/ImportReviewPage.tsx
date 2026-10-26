@@ -42,6 +42,8 @@ import {
 import type { ImportEquipmentDraft } from '../integrations';
 import type { ProductLookupRecord } from '../lib/productLookupIndex';
 import { INSTALL_SYSTEM_TYPE_NAMES, categoryForSystemName } from '../lib/inferSystemType';
+import { createDraftId } from '../integrations/core/draftHelpers';
+import { createEquipmentDraft } from '../integrations/models/ImportEquipmentDraft';
 import { applyManualSystemTypeToMatchingParts, getSystemTypeSource } from '../lib/partSystemTypeMemory';
 
 type ReviewTab = 'project' | 'systems' | 'debug';
@@ -69,6 +71,10 @@ function importSourceLabel(draft: ImportReviewDraft): string {
   if (id === 'ai_drawings') return 'AI Drawings';
   if (id === 'simpro') return 'Simpro';
   return 'Import';
+}
+
+function isAiDraft(draft: ImportReviewDraft): boolean {
+  return draft.source.connectorId === 'ai_documents' || draft.source.connectorId === 'ai_drawings';
 }
 
 function isSimproDraft(draft: ImportReviewDraft): boolean {
@@ -426,6 +432,60 @@ export function ImportReviewPage() {
     });
   };
 
+  const updateProjectField = (field: keyof ImportReviewDraft['project'], value: string) => {
+    updateDraft(current => ({
+      ...current,
+      project: { ...current.project, [field]: value.trim() ? value : null },
+    }));
+  };
+
+  const addEquipmentLine = (systemDraftId: string) => {
+    updateDraft(current => ({
+      ...current,
+      systems: current.systems.map(system => {
+        if (system.draftId !== systemDraftId) return system;
+        return {
+          ...system,
+          equipment: [
+            ...system.equipment,
+            createEquipmentDraft({
+              draftId: createDraftId('equip'),
+              systemDraftId,
+              deviceType: null,
+              manufacturer: null,
+              modelNumber: null,
+              modelName: null,
+              quantity: 1,
+              location: null,
+              notes: null,
+              category: null,
+              productCategory: null,
+              warrantyYears: null,
+              matchedProductId: null,
+              matched: false,
+              confidence: null,
+              selected: true,
+              sourceLineRef: 'added in review',
+            }),
+          ],
+        };
+      }),
+    }));
+  };
+
+  const removeEquipmentLine = (systemDraftId: string, equipmentDraftId: string) => {
+    updateDraft(current => ({
+      ...current,
+      systems: current.systems.map(system => {
+        if (system.draftId !== systemDraftId) return system;
+        return {
+          ...system,
+          equipment: system.equipment.filter(item => item.draftId !== equipmentDraftId),
+        };
+      }),
+    }));
+  };
+
   const applyProductDatabaseMatch = (
     systemDraftId: string,
     equipmentDraftId: string,
@@ -484,7 +544,13 @@ export function ImportReviewPage() {
       if (!latestSession) {
         throw new Error('Import session expired. Please run the import again.');
       }
-      const { projectId } = await persistSimproImportReviewDraft(latestSession.draft);
+      const { projectId } = await persistSimproImportReviewDraft(latestSession.draft, {
+        existingProjectId: latestSession.createdProjectId,
+        sourceFiles: latestSession.sourceFiles,
+        onProjectCreated: id => {
+          updateSimproImportSession(current => ({ ...current, createdProjectId: id }));
+        },
+      });
       clearSimproImportSession();
       navigate(`/projects/${projectId}`);
     } catch (error: unknown) {
@@ -605,6 +671,21 @@ export function ImportReviewPage() {
         </div>
       )}
 
+      {isAiDraft(draft) && draft.issues.some(issue => issue.code === 'ai.conflict' || issue.code === 'ai.warning' || issue.code.startsWith('ai.section.')) && (
+        <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 space-y-2">
+          <p className="font-semibold">Check these before creating the project</p>
+          <ul className="list-disc pl-5 space-y-1">
+            {draft.issues
+              .filter(issue => issue.code === 'ai.conflict' || issue.code === 'ai.warning' || issue.code.startsWith('ai.section.'))
+              .slice(0, 8)
+              .map(issue => (
+                <li key={`${issue.code}-${issue.message.slice(0, 40)}`} className="whitespace-pre-wrap">{issue.message}</li>
+              ))}
+          </ul>
+          <p>Conflicting lines are unchecked. Quoted equipment is not treated as installed. Blank fields were not filled in.</p>
+        </div>
+      )}
+
       <div className="flex flex-wrap gap-1 bg-slate-100 p-1 rounded-xl w-fit mb-5">
         {([
           ['project', 'Project'],
@@ -630,6 +711,32 @@ export function ImportReviewPage() {
             <h2 className="text-base font-semibold text-slate-800">Project Details</h2>
           </div>
           <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+            {isAiDraft(draft) ? (
+              <>
+                <label className="md:col-span-2 text-sm text-slate-600">Project name
+                  <input className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-slate-900" value={draft.project.projectName ?? ''} onChange={event => updateProjectField('projectName', event.target.value)} />
+                </label>
+                <label className="text-sm text-slate-600">Customer
+                  <input className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2" value={draft.project.clientName ?? ''} onChange={event => updateProjectField('clientName', event.target.value)} />
+                </label>
+                <label className="text-sm text-slate-600">Site
+                  <input className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2" value={draft.project.siteName ?? ''} onChange={event => updateProjectField('siteName', event.target.value)} />
+                </label>
+                <label className="md:col-span-2 text-sm text-slate-600">Site address
+                  <input className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2" value={draft.project.siteAddress ?? ''} onChange={event => updateProjectField('siteAddress', event.target.value)} />
+                </label>
+                <label className="text-sm text-slate-600">Job reference
+                  <input className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2" value={draft.project.jobNumber ?? ''} onChange={event => updateProjectField('jobNumber', event.target.value)} />
+                </label>
+                <label className="text-sm text-slate-600">Quote number
+                  <input className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2" value={draft.project.quoteNumber ?? ''} onChange={event => updateProjectField('quoteNumber', event.target.value)} />
+                </label>
+                <label className="md:col-span-2 text-sm text-slate-600">Notes
+                  <textarea className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 min-h-24" value={draft.project.projectNotes ?? ''} onChange={event => updateProjectField('projectNotes', event.target.value)} />
+                </label>
+              </>
+            ) : (
+              <>
             <div className="md:col-span-2">
               <ReadOnlyField label="Project Name" value={draft.project.projectName} />
             </div>
@@ -645,6 +752,8 @@ export function ImportReviewPage() {
             <div className="md:col-span-2">
               <ReadOnlyMultilineField label="Project Notes" value={draft.project.projectNotes} />
             </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -911,7 +1020,27 @@ export function ImportReviewPage() {
                                   />
                                 </td>
                                 <td className="px-3 py-2 text-slate-500 font-mono text-xs">
-                                  {displayValue(item.sourceLineRef)}
+                                  <div>{displayValue(item.sourceLineRef)}</div>
+                                  {typeof item.metadata?.quantityBasis === 'string' && (
+                                    <div className="mt-1 normal-case font-sans text-[11px] text-slate-500">
+                                      {item.metadata.quantityBasis} · {String(item.metadata.evidenceClass ?? 'unconfirmed')}
+                                    </div>
+                                  )}
+                                  {typeof item.metadata?.evidenceText === 'string' && item.metadata.evidenceText && (
+                                    <div className="mt-1 normal-case font-sans text-[11px] text-slate-500">{item.metadata.evidenceText}</div>
+                                  )}
+                                  {typeof item.metadata?.conflict === 'string' && item.metadata.conflict && (
+                                    <div className="mt-1 normal-case font-sans text-[11px] text-amber-700">{item.metadata.conflict}</div>
+                                  )}
+                                  {isAiDraft(draft) && (
+                                    <button
+                                      type="button"
+                                      className="mt-1 text-[11px] text-red-600 hover:underline"
+                                      onClick={() => removeEquipmentLine(system.draftId, item.draftId)}
+                                    >
+                                      Remove
+                                    </button>
+                                  )}
                                 </td>
                               </tr>
                               {showProductPicker && enrichmentContextRef.current ? (
@@ -936,6 +1065,17 @@ export function ImportReviewPage() {
                           })}
                         </tbody>
                       </table>
+                    </div>
+                  )}
+                  {isAiDraft(draft) && system.selected && (
+                    <div className="px-5 py-3 border-t border-slate-100">
+                      <button
+                        type="button"
+                        onClick={() => addEquipmentLine(system.draftId)}
+                        className="text-sm font-semibold text-cyan-700 hover:underline"
+                      >
+                        Add device
+                      </button>
                     </div>
                   )}
                 </details>

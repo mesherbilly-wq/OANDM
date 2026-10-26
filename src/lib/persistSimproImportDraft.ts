@@ -28,6 +28,7 @@ import {
 } from './autoManufacturerLookup';
 import { rememberManualSystemTypesFromDraft } from './partSystemTypeMemory';
 import { buildSdpAnswers, buildSdpSnapshot } from './sdpAnswers';
+import type { AiImportStoredFile } from './aiImport/types';
 
 const DEVICE_INSERT_BATCH = 100;
 
@@ -172,56 +173,85 @@ function buildDeviceRows(
 
 export async function persistSimproImportReviewDraft(
   draft: ImportReviewDraft,
+  options: {
+    existingProjectId?: number | null;
+    sourceFiles?: AiImportStoredFile[];
+    onProjectCreated?: (projectId: number) => void;
+  } = {},
 ): Promise<{ projectId: number }> {
-  const contractorProfileId = await fetchDefaultContractorProfileId();
-  const { data: project, error: projectError } = await supabase
-    .from('projects')
-    .insert({
-      project_name: nullIfEmpty(draft.project.projectName),
-      client_name: nullIfEmpty(draft.project.clientName),
-      site_name: nullIfEmpty(draft.project.siteName),
-      site_address: nullIfEmpty(draft.project.siteAddress),
-      job_number: nullIfEmpty(displayProjectJobNumber(draft.project.jobNumber, draft.project.projectNumber)),
-      quote_number: nullIfEmpty(draft.project.quoteNumber),
-      project_number: nullIfEmpty(draft.project.projectNumber),
-      project_manager: nullIfEmpty(draft.project.projectManager),
-      engineer: nullIfEmpty(draft.project.engineer),
-      project_notes: nullIfEmpty(draft.project.projectNotes),
-      project_status: 'active',
-      contractor_profile_id: contractorProfileId,
-    })
-    .select()
-    .single();
-
-  if (projectError || !project) {
-    throw new Error(projectError?.message ?? 'Failed to create project.');
+  let projectId = options.existingProjectId ?? null;
+  if (projectId) {
+    const { data: existing } = await supabase.from('projects').select('id').eq('id', projectId).maybeSingle();
+    if (!existing) projectId = null;
   }
+
+  const contractorProfileId = await fetchDefaultContractorProfileId();
+  if (!projectId) {
+    const { data: project, error: projectError } = await supabase
+      .from('projects')
+      .insert({
+        project_name: nullIfEmpty(draft.project.projectName),
+        client_name: nullIfEmpty(draft.project.clientName),
+        site_name: nullIfEmpty(draft.project.siteName),
+        site_address: nullIfEmpty(draft.project.siteAddress),
+        job_number: nullIfEmpty(displayProjectJobNumber(draft.project.jobNumber, draft.project.projectNumber)),
+        quote_number: nullIfEmpty(draft.project.quoteNumber),
+        project_number: nullIfEmpty(draft.project.projectNumber),
+        project_manager: nullIfEmpty(draft.project.projectManager),
+        engineer: nullIfEmpty(draft.project.engineer),
+        project_notes: nullIfEmpty(draft.project.projectNotes),
+        project_status: 'active',
+        contractor_profile_id: contractorProfileId,
+      })
+      .select()
+      .single();
+
+    if (projectError || !project) {
+      throw new Error(projectError?.message ?? 'Failed to create project.');
+    }
+    projectId = project.id as number;
+    options.onProjectCreated?.(projectId);
+  }
+
+  const project = { id: projectId };
 
   const scopeContent = nullIfEmpty(prepareCustomerScopeHtml(draft.project.projectSummary));
   if (scopeContent) {
-    const { error: scopeError } = await supabase.from('project_documents').insert({
-      project_id: project.id,
-      document_type: 'scope_of_works',
-      title: 'Scope of Works',
-      content: scopeContent,
-      status: 'draft',
-      generated_by: 'manual',
-    });
-    if (scopeError) {
-      throw new Error(`Project created but Scope of Works failed to save: ${scopeError.message}`);
+    const { data: existingScope } = await supabase
+      .from('project_documents')
+      .select('id')
+      .eq('project_id', project.id)
+      .eq('document_type', 'scope_of_works')
+      .limit(1);
+    if (!existingScope || existingScope.length === 0) {
+      const { error: scopeError } = await supabase.from('project_documents').insert({
+        project_id: project.id,
+        document_type: 'scope_of_works',
+        title: 'Scope of Works',
+        content: scopeContent,
+        status: 'draft',
+        generated_by: 'manual',
+      });
+      if (scopeError) {
+        throw new Error(`Project created but Scope of Works failed to save: ${scopeError.message}`);
+      }
     }
   }
 
-  const { data: existingDevices, error: existingError } = await supabase
+  const { count: existingDeviceCount, error: existingError } = await supabase
     .from('devices')
-    .select('device_name')
+    .select('id', { count: 'exact', head: true })
     .eq('project_id', project.id);
 
   if (existingError) {
     throw new Error(`Project created but devices could not be prepared: ${existingError.message}`);
   }
 
-  const prefixCounters = buildPrefixCounters(existingDevices ?? []);
+  const alreadyImported = (existingDeviceCount ?? 0) > 0;
+  const { data: existingDeviceNames } = alreadyImported
+    ? { data: [] as { device_name: string | null }[] }
+    : await supabase.from('devices').select('device_name').eq('project_id', project.id);
+  const prefixCounters = buildPrefixCounters(existingDeviceNames ?? []);
   const persistSystemNames = buildPersistSystemNameMap(draft.systems);
 
   const [{ data: productModels }, { data: datasheets }] = await Promise.all([
@@ -259,7 +289,7 @@ export async function persistSimproImportReviewDraft(
     console.info('[Simpro persist quantity audit]', quantityAudit);
   }
 
-  if (deviceRows.length > 0) {
+  if (!alreadyImported && deviceRows.length > 0) {
     for (let offset = 0; offset < deviceRows.length; offset += DEVICE_INSERT_BATCH) {
       const batch = deviceRows.slice(offset, offset + DEVICE_INSERT_BATCH);
       const { error: deviceError } = await supabase.from('devices').insert(batch);
@@ -270,21 +300,33 @@ export async function persistSimproImportReviewDraft(
   }
 
   const asFittedRows: Record<string, unknown>[] = [];
-  for (const system of draft.systems) {
-    if (!system.selected) continue;
-    for (const item of system.equipment) {
-      if (!item.selected) continue;
-      const persistName = persistNameForImportEquipment(system, item, persistSystemNames);
-      asFittedRows.push({
-        project_id: project.id,
-        project_system_id: systemIdByName.get(persistName) ?? null,
-        source_quote_line_id: item.sourceLineRef,
-        quoted_description: item.modelName || item.deviceType,
-        quoted_quantity: item.quantity,
-        installed_description: item.modelName || item.deviceType,
-        actual_installed_quantity: item.quantity,
-        reconciliation_status: 'awaiting_verification',
-      });
+  if (!alreadyImported) {
+    for (const system of draft.systems) {
+      if (!system.selected) continue;
+      for (const item of system.equipment) {
+        if (!item.selected) continue;
+        const persistName = persistNameForImportEquipment(system, item, persistSystemNames);
+        const evidence = typeof item.metadata?.evidenceClass === 'string' ? item.metadata.evidenceClass : null;
+        const confirmedInstalled = evidence === 'installed';
+        const trackedEvidence = Boolean(evidence);
+        asFittedRows.push({
+          project_id: project.id,
+          project_system_id: systemIdByName.get(persistName) ?? null,
+          source_quote_line_id: item.sourceLineRef,
+          quoted_description: item.modelName || item.deviceType,
+          quoted_quantity: item.quantity,
+          installed_description: trackedEvidence
+            ? (confirmedInstalled ? (item.modelName || item.deviceType) : null)
+            : (item.modelName || item.deviceType),
+          actual_installed_quantity: trackedEvidence
+            ? (confirmedInstalled ? item.quantity : null)
+            : item.quantity,
+          reconciliation_status: 'awaiting_verification',
+          change_reason: evidence
+            ? `${evidence}${item.metadata?.conflict ? `: ${item.metadata.conflict}` : ''}`
+            : null,
+        });
+      }
     }
   }
   if (asFittedRows.length > 0) {
@@ -294,7 +336,8 @@ export async function persistSimproImportReviewDraft(
     }
   }
 
-  try {
+  if (!alreadyImported) {
+    try {
     const sdpAnswers = buildSdpAnswers({
       project: {
         project_name: draft.project.projectName,
@@ -339,9 +382,68 @@ export async function persistSimproImportReviewDraft(
       workflow_status: 'draft',
       revision_no: 1,
     }, { onConflict: 'project_id,document_type,system_type' });
-  } catch {
-    /* SDP tables are created by migration 036 */
+    } catch {
+      /* SDP tables are created by migration 036 */
+    }
   }
 
+  await attachAiSources(project.id, options.sourceFiles ?? []);
+  await saveAiDraftSections(project.id, draft);
+
   return { projectId: project.id as number };
+}
+
+const DRAFT_SECTION_TITLES: Record<string, string> = {
+  installation: 'Installation notes (draft)',
+  operating: 'Operating instructions (draft)',
+  maintenance: 'Maintenance requirements (draft)',
+  commissioning: 'Commissioning information (draft)',
+  missing: 'Missing evidence',
+};
+
+async function attachAiSources(projectId: number, files: AiImportStoredFile[]): Promise<void> {
+  if (files.length === 0) return;
+  const { data: existing } = await supabase.from('project_source_docs').select('file_url').eq('project_id', projectId);
+  const known = new Set((existing ?? []).map(row => row.file_url));
+  for (const file of files) {
+    const { data: urlData } = supabase.storage.from('om-uploads').getPublicUrl(file.storagePath);
+    const fileUrl = urlData.publicUrl;
+    if (known.has(fileUrl)) continue;
+    await supabase.from('project_source_docs').insert({
+      project_id: projectId,
+      file_name: file.fileName,
+      file_url: fileUrl,
+      media_type: file.mediaType,
+    });
+    if (/drawing|schedule/i.test(file.label) || file.mediaType === 'application/pdf' || file.mediaType.startsWith('image/')) {
+      await supabase.from('drawings').insert({
+        project_id: projectId,
+        file_name: file.fileName,
+        file_url: fileUrl,
+        file_type: file.mediaType,
+        processing_status: 'complete',
+        notes: `Imported ${file.label}. Draft until reviewed.`,
+      });
+    }
+  }
+}
+
+async function saveAiDraftSections(projectId: number, draft: ImportReviewDraft): Promise<void> {
+  const sections = draft.issues.filter(issue => issue.code.startsWith('ai.section.') && issue.message.trim());
+  if (sections.length === 0) return;
+  const { data: existing } = await supabase.from('project_documents').select('title').eq('project_id', projectId);
+  const titles = new Set((existing ?? []).map(row => row.title));
+  for (const section of sections) {
+    const kind = section.code.replace('ai.section.', '');
+    const title = DRAFT_SECTION_TITLES[kind] ?? `${kind} (draft)`;
+    if (titles.has(title)) continue;
+    await supabase.from('project_documents').insert({
+      project_id: projectId,
+      document_type: `ai_${kind}`,
+      title,
+      content: section.message,
+      status: 'draft',
+      generated_by: 'manual',
+    });
+  }
 }

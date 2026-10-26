@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Sparkles, Upload, FileText, X, CheckCircle, AlertCircle, Plus,
@@ -13,86 +13,20 @@ import { setSimproImportSession } from '../lib/simproImportSession';
 import { fetchAllProductModels } from '../lib/productDatabaseDb';
 import { enrichImportReviewDraftWithMemory } from '../lib/importEquipmentValidation';
 import { htmlFromScopeImportFile } from '../lib/scopeOfWorksImport';
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { ownCompanyId } from '../lib/companyScope';
+import { readDocumentPages } from '../lib/aiImport/readPages';
+import { extractAiPages } from '../lib/aiImport/runExtract';
+import type { AiImportStoredFile, AiSourcePage } from '../lib/aiImport/types';
 
 type Step = 'source' | 'upload' | 'analyzing' | 'simpro';
 
 interface UploadedDoc {
   id: string;
   file: File;
-  label: 'Quote' | 'Proposal' | 'Scope of Works' | 'Design Specification' | 'Other';
+  label: (typeof DOC_LABELS)[number];
 }
 
-const DOC_LABELS = ['Quote', 'Proposal', 'Scope of Works', 'Design Specification', 'Other'] as const;
-
-async function extractPdfText(file: File): Promise<string> {
-  const pdfjsLib = await import('pdfjs-dist');
-  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-  const data = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data }).promise;
-  const parts: string[] = [];
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const content = await page.getTextContent();
-    parts.push(content.items.map((item: { str?: string }) => item.str ?? '').join(' '));
-  }
-  return parts.join('\n');
-}
-
-function isZipDocx(bytes: Uint8Array): boolean {
-  return bytes.length >= 2 && bytes[0] === 0x50 && bytes[1] === 0x4b;
-}
-
-function isLegacyDoc(bytes: Uint8Array): boolean {
-  return bytes.length >= 4 && bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0;
-}
-
-function isWordFile(file: File): boolean {
-  const name = file.name.toLowerCase();
-  const type = file.type;
-  return name.endsWith('.docx')
-    || name.endsWith('.doc')
-    || type.includes('wordprocessingml')
-    || type === 'application/msword'
-    || type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-}
-
-async function extractWordText(file: File): Promise<string> {
-  const buffer = await file.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-  if ((file.name.toLowerCase().endsWith('.doc') || file.type === 'application/msword') && !isZipDocx(bytes) && isLegacyDoc(bytes)) {
-    throw new Error('Older Word .doc files are not supported. Save as .docx or PDF and import again.');
-  }
-  const mammothModule = await import('mammoth') as unknown as {
-    extractRawText: (input: { arrayBuffer: ArrayBuffer }) => Promise<{ value: string }>;
-    default?: { extractRawText: (input: { arrayBuffer: ArrayBuffer }) => Promise<{ value: string }> };
-  };
-  const mammoth = mammothModule.default ?? mammothModule;
-  const result = await mammoth.extractRawText({ arrayBuffer: buffer });
-  const text = result.value?.trim() ?? '';
-  if (!text) throw new Error(`No text could be read from ${file.name}.`);
-  return text;
-}
-
-async function extractDocPayload(doc: UploadedDoc): Promise<{ name: string; content: string; html?: string }> {
-  const { file, label } = doc;
-  const name = `${label}: ${file.name}`;
-  let html: string | undefined;
-  try {
-    html = await htmlFromScopeImportFile(file);
-  } catch {
-    html = undefined;
-  }
-
-  if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
-    try { return { name, content: await extractPdfText(file), html }; }
-    catch { return { name, content: html ? html.replace(/<[^>]+>/g, ' ') : `[PDF extraction failed for ${file.name}]`, html }; }
-  }
-  if (isWordFile(file)) {
-    return { name, content: await extractWordText(file), html };
-  }
-  return { name, content: await file.text(), html };
-}
+const DOC_LABELS = ['Quote', 'Proposal', 'Scope of Works', 'Design Specification', 'Drawing', 'Schedule', 'Equipment list', 'Other'] as const;
 
 function preferScopeHtml(documents: { name: string; html?: string }[]): string | null {
   const scoped = documents.filter(doc => /scope of works/i.test(doc.name) && doc.html);
@@ -111,19 +45,26 @@ export function AIProjectBuilderPage() {
   const [drawingFile, setDrawingFile] = useState<File | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+  const [progress, setProgress] = useState('Reading the upload');
+  const importIdRef = useRef(crypto.randomUUID());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const drawingInputRef = useRef<HTMLInputElement>(null);
 
   const addFiles = useCallback((files: FileList | File[]) => {
     const arr = Array.from(files).filter(f => {
       const ext = f.name.split('.').pop()?.toLowerCase() ?? '';
-      return ['pdf', 'txt', 'csv', 'md', 'doc', 'docx'].includes(ext)
+      return ['pdf', 'txt', 'csv', 'md', 'doc', 'docx', 'png', 'jpg', 'jpeg', 'webp'].includes(ext)
         || f.type.startsWith('text/')
+        || f.type.startsWith('image/')
         || f.type.includes('wordprocessingml')
         || f.type === 'application/msword';
     });
-    setDocs(prev => [...prev, ...arr.map(f => ({ id: crypto.randomUUID(), file: f, label: 'Other' as const }))]);
-  }, []);
+    setDocs(prev => [...prev, ...arr.map(f => ({
+      id: crypto.randomUUID(),
+      file: f,
+      label: (sourceMode === 'drawing' ? 'Drawing' : 'Other') as UploadedDoc['label'],
+    }))]);
+  }, [sourceMode]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -155,51 +96,55 @@ export function AIProjectBuilderPage() {
 
   const analyze = async () => {
     setAnalyzeError(null);
+    setProgress('Checking the company account');
     setStep('analyzing');
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const authHeader = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
-      const connectorId = sourceMode === 'drawing' ? 'ai_drawings' : 'ai_documents';
-      let extracted: unknown;
-      let displayReference: string | null = null;
-      let scopeHtmlFallback: string | null = null;
+      const companyId = await ownCompanyId();
+      if (!companyId) {
+        throw new Error('Sign in as a company admin or staff member. The platform owner cannot import company documents.');
+      }
+      const selected = sourceMode === 'drawing' && drawingFile
+        ? [{ id: 'drawing', file: drawingFile, label: 'Drawing' as const }]
+        : docs;
+      if (selected.length === 0) throw new Error('Add a drawing or document first.');
 
-      if (sourceMode === 'drawing' && drawingFile) {
-        const safeName = drawingFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-        const path = `drawings-ai/${Date.now()}_${safeName}`;
-        const { error: upErr } = await supabase.storage
-          .from('om-pack-uploads')
-          .upload(path, drawingFile, { contentType: 'application/pdf', upsert: false });
-        if (upErr) throw upErr;
-
-        const { data: { publicUrl } } = supabase.storage.from('om-pack-uploads').getPublicUrl(path);
-        const extractRes = await supabase.functions.invoke('extract-drawing', {
-          body: { file_url: publicUrl, media_type: 'application/pdf' },
-          headers: authHeader,
+      const stored: AiImportStoredFile[] = [];
+      const pages: AiSourcePage[] = [];
+      for (const doc of selected) {
+        const safeName = doc.file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const path = `${companyId}/ai-import/${importIdRef.current}/${safeName}`;
+        const mediaType = doc.file.type || (doc.file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream');
+        const { error: uploadError } = await supabase.storage.from('om-uploads').upload(path, doc.file, {
+          contentType: mediaType,
+          upsert: true,
         });
-        if (extractRes.error) throw new Error(extractRes.error.message);
-        extracted = extractRes.data;
-        if (extracted && typeof extracted === 'object' && 'error' in extracted && (extracted as { error?: string }).error) {
-          throw new Error(String((extracted as { error: string }).error));
+        if (uploadError) {
+          throw new Error(`Could not store ${doc.file.name} in this company: ${uploadError.message}`);
         }
-        displayReference = drawingFile.name;
-        try { scopeHtmlFallback = await htmlFromScopeImportFile(drawingFile); } catch { /* optional */ }
-      } else {
-        const documents = await Promise.all(docs.map(extractDocPayload));
-        scopeHtmlFallback = preferScopeHtml(documents);
-        const extractRes = await supabase.functions.invoke('extract-project', {
-          body: { documents: documents.map(({ name, content, html }) => ({ name, content, html })) },
-          headers: authHeader,
-        });
-        if (extractRes.error) throw new Error(extractRes.error.message);
-        extracted = extractRes.data;
-        if (extracted && typeof extracted === 'object' && 'error' in extracted && (extracted as { error?: string }).error) {
-          throw new Error(String((extracted as { error: string }).error));
-        }
-        displayReference = docs.map(doc => doc.file.name).join(', ') || null;
+        stored.push({ fileName: doc.file.name, storagePath: path, mediaType, label: doc.label });
+        pages.push(...await readDocumentPages(doc.file, doc.label, setProgress));
       }
 
-      const draft = normalizeAiExtract(extracted, { connectorId, displayReference, scopeHtmlFallback });
+      const readable = pages.filter(page => page.text.trim() || page.imageBase64);
+      if (readable.length === 0) {
+        throw new Error('No text or drawing image could be read. Try a PDF with selectable text, or a clearer scan.');
+      }
+      const extracted = await extractAiPages(readable, setProgress);
+      const connectorId = sourceMode === 'drawing' ? 'ai_drawings' : 'ai_documents';
+      let scopeHtmlFallback: string | null = null;
+      try {
+        scopeHtmlFallback = preferScopeHtml(await Promise.all(selected.map(async doc => ({
+          name: `${doc.label}: ${doc.file.name}`,
+          html: await htmlFromScopeImportFile(doc.file),
+        }))));
+      } catch {
+        scopeHtmlFallback = null;
+      }
+      const draft = normalizeAiExtract(extracted, {
+        connectorId,
+        displayReference: selected.map(doc => doc.file.name).join(', '),
+        scopeHtmlFallback,
+      });
       const { products, error: productError } = await fetchAllProductModels();
       const enrichedDraft = await enrichImportReviewDraftWithMemory(draft, products);
       if (productError) {
@@ -213,7 +158,7 @@ export function AIProjectBuilderPage() {
         ];
       }
 
-      setSimproImportSession({ draft: enrichedDraft, rawJob: extracted });
+      setSimproImportSession({ draft: enrichedDraft, rawJob: extracted, sourceFiles: stored });
       navigate('/import-review');
     } catch (err: unknown) {
       setAnalyzeError(err instanceof Error ? err.message : 'Unknown error');
@@ -255,7 +200,7 @@ export function AIProjectBuilderPage() {
             onRemove={removeDoc} onUpdateLabel={updateLabel} onAnalyze={analyze}
             onBack={() => setStep('source')} />
         )}
-        {step === 'analyzing' && <AnalyzingStep />}
+        {step === 'analyzing' && <AnalyzingStep progress={progress} />}
       </div>
     </div>
   );
@@ -347,12 +292,12 @@ function UploadStep({
             onClick={() => fileInputRef.current?.click()}
             className={`relative border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all
               ${isDragOver ? 'border-cyan-500 bg-cyan-50' : 'border-slate-300 bg-white hover:border-cyan-400 hover:bg-slate-50'}`}>
-            <input ref={fileInputRef} type="file" multiple accept=".pdf,.doc,.docx,.txt,.csv,.md,text/*,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={onFileInput} className="hidden" />
+            <input ref={fileInputRef as React.Ref<HTMLInputElement>} type="file" multiple accept=".pdf,.doc,.docx,.txt,.csv,.md,.png,.jpg,.jpeg,.webp,text/*,image/*,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={onFileInput} className="hidden" />
             <div className={`w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center ${isDragOver ? 'bg-cyan-100' : 'bg-slate-100'}`}>
               <Upload className={`w-8 h-8 ${isDragOver ? 'text-cyan-600' : 'text-slate-400'}`} />
             </div>
             <p className="text-lg font-semibold text-slate-700 mb-1">{isDragOver ? 'Drop files here' : 'Drag & drop documents'}</p>
-            <p className="text-sm text-slate-400">or click to browse — PDF, Word, TXT, CSV supported</p>
+            <p className="text-sm text-slate-400">or click to browse — PDF, Word, images, TXT, CSV</p>
           </div>
 
           {docs.length > 0 && (
@@ -411,12 +356,12 @@ function UploadStep({
               onClick={() => drawingInputRef.current?.click()}
               className={`border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all
                 ${isDragOver ? 'border-cyan-500 bg-cyan-50' : 'border-slate-300 bg-white hover:border-cyan-400 hover:bg-slate-50'}`}>
-              <input ref={drawingInputRef} type="file" accept=".pdf,application/pdf" onChange={e => { if (e.target.files?.[0]) onSetDrawingFile(e.target.files[0]); }} className="hidden" />
+              <input ref={drawingInputRef as React.Ref<HTMLInputElement>} type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/png,image/jpeg,image/webp" onChange={e => { if (e.target.files?.[0]) onSetDrawingFile(e.target.files[0]); }} className="hidden" />
               <div className={`w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center ${isDragOver ? 'bg-cyan-100' : 'bg-slate-100'}`}>
                 <ImageIcon className={`w-8 h-8 ${isDragOver ? 'text-cyan-600' : 'text-slate-400'}`} />
               </div>
               <p className="text-lg font-semibold text-slate-700 mb-1">{isDragOver ? 'Drop drawing here' : 'Drag & drop a drawing PDF'}</p>
-              <p className="text-sm text-slate-400">or click to browse — single PDF drawing</p>
+              <p className="text-sm text-slate-400">or click to browse — PDF or image, including a scan</p>
             </div>
           )}
         </>
@@ -443,23 +388,7 @@ function UploadStep({
   );
 }
 
-const EXTRACT_STAGES = [
-  'Reading document content…',
-  'Identifying project and client details…',
-  'Extracting equipment lines and quantities…',
-  'Capturing scope wording and layout…',
-  'Preparing Import Review…',
-];
-
-function AnalyzingStep() {
-  const [stageIdx, setStageIdx] = useState(0);
-
-  useEffect(() => {
-    setStageIdx(0);
-    const id = setInterval(() => setStageIdx(i => Math.min(i + 1, EXTRACT_STAGES.length - 1)), 2000);
-    return () => clearInterval(id);
-  }, []);
-
+function AnalyzingStep({ progress }: { progress: string }) {
   return (
     <div className="flex flex-col items-center justify-center py-20 gap-8">
       <div className="relative">
@@ -468,22 +397,12 @@ function AnalyzingStep() {
         </div>
         <div className="absolute inset-0 rounded-full bg-cyan-400/30 animate-ping" />
       </div>
-      <div className="text-center">
-        <h2 className="text-xl font-bold text-slate-900 mb-1">Analysing your documents</h2>
-        <p className="text-slate-500 text-sm">
-          Claude is capturing project details, equipment and scope — not writing method statements.
-        </p>
+      <div className="text-center max-w-md">
+        <h2 className="text-xl font-bold text-slate-900 mb-1">Reading the upload</h2>
+        <p className="text-slate-500 text-sm">{progress}</p>
+        <p className="text-slate-400 text-xs mt-3">Each page is read. Sparse or scanned pages are sent as images. Nothing is saved until you approve the review.</p>
       </div>
-      <div className="w-full max-w-sm space-y-2">
-        {EXTRACT_STAGES.map((stage, i) => (
-          <div key={stage} className={`flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-500 ${i <= stageIdx ? 'opacity-100' : 'opacity-20'}`}>
-            {i < stageIdx ? <CheckCircle className="w-5 h-5 text-cyan-600 flex-shrink-0" />
-              : i === stageIdx ? <Loader2 className="w-5 h-5 text-cyan-600 animate-spin flex-shrink-0" />
-              : <div className="w-5 h-5 rounded-full border-2 border-slate-200 flex-shrink-0" />}
-            <span className={`text-sm font-medium ${i <= stageIdx ? 'text-slate-700' : 'text-slate-400'}`}>{stage}</span>
-          </div>
-        ))}
-      </div>
+      <Loader2 className="w-6 h-6 text-cyan-600 animate-spin" />
     </div>
   );
 }
