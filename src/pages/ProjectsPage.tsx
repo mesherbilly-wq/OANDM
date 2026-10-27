@@ -45,10 +45,13 @@ export function ProjectsPage() {
 
     const { data, error } = await supabase
       .from('projects')
-      .select('*')
+      .select('id, created_at, project_name, client_name, site_name, site_address, job_number, project_manager, start_date, completion_date, project_status, contractor_profile_id')
       .order('created_at', { ascending: false });
 
-    if (!error && data) {
+    if (error) {
+      window.alert(error.message);
+      setProjects([]);
+    } else if (data) {
       setProjects(data);
     }
     setLoading(false);

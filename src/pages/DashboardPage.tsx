@@ -25,6 +25,32 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; dot: string;
   cancelled: { label: 'Cancelled', color: 'bg-red-50 text-red-600 ring-red-200',             dot: 'bg-red-400',     bar: 'bg-red-400' },
 };
 
+const PROJECT_LIST_COLUMNS = 'id, created_at, project_name, client_name, site_name, site_address, job_number, project_manager, start_date, completion_date, project_status, contractor_profile_id';
+
+async function countRowsByProject(
+  table: 'devices' | 'project_documents' | 'om_pack_uploads' | 'as_fitted_drawings',
+  pendingOnly = false,
+): Promise<Record<number, number>> {
+  const counts: Record<number, number> = {};
+  const pageSize = 1000;
+  let offset = 0;
+
+  while (true) {
+    let query = supabase.from(table).select('project_id').range(offset, offset + pageSize - 1);
+    if (pendingOnly) query = query.eq('status', 'pending_review');
+    const { data, error } = await query;
+    if (error || !data?.length) break;
+    for (const row of data) {
+      const projectId = row.project_id as number | null;
+      if (projectId) counts[projectId] = (counts[projectId] ?? 0) + 1;
+    }
+    if (data.length < pageSize) break;
+    offset += pageSize;
+  }
+
+  return counts;
+}
+
 function computeProgress(p: ProjectWithMeta): number {
   if (p.project_status === 'completed') return 100;
 
@@ -101,47 +127,38 @@ export function DashboardPage() {
   const load = async (quiet = false) => {
     if (!quiet) setLoading(true); else setRefreshing(true);
 
-    const [{ data: projData }, { data: devCounts }, { data: docCounts }, { data: pendingCounts }, { data: omCounts }, { data: afdCounts }] = await Promise.all([
-      supabase.from('projects').select('*').order('created_at', { ascending: false }),
-      supabase.from('devices').select('project_id').not('project_id', 'is', null),
-      supabase.from('project_documents').select('project_id'),
-      supabase.from('devices').select('project_id').eq('status', 'pending_review').not('project_id', 'is', null),
-      supabase.from('om_pack_uploads').select('project_id'),
-      supabase.from('as_fitted_drawings').select('project_id'),
-    ]);
+    const { data: projData, error } = await supabase
+      .from('projects')
+      .select(PROJECT_LIST_COLUMNS)
+      .order('created_at', { ascending: false });
 
-    const devMap: Record<number, number> = {};
-    for (const d of devCounts ?? []) {
-      if (d.project_id) devMap[d.project_id] = (devMap[d.project_id] ?? 0) + 1;
-    }
-    const docMap: Record<number, number> = {};
-    for (const d of docCounts ?? []) {
-      if (d.project_id) docMap[d.project_id] = (docMap[d.project_id] ?? 0) + 1;
-    }
-    const pendMap: Record<number, number> = {};
-    for (const d of pendingCounts ?? []) {
-      if (d.project_id) pendMap[d.project_id] = (pendMap[d.project_id] ?? 0) + 1;
-    }
-    const omMap: Record<number, number> = {};
-    for (const d of omCounts ?? []) {
-      if (d.project_id) omMap[d.project_id] = (omMap[d.project_id] ?? 0) + 1;
-    }
-    const afdMap: Record<number, number> = {};
-    for (const d of afdCounts ?? []) {
-      if (d.project_id) afdMap[d.project_id] = (afdMap[d.project_id] ?? 0) + 1;
-    }
-
-    setProjects((projData ?? []).map(p => ({
-      ...p,
-      device_count: devMap[p.id] ?? 0,
-      doc_count: docMap[p.id] ?? 0,
-      pending_devices: pendMap[p.id] ?? 0,
-      om_upload_count: omMap[p.id] ?? 0,
-      as_fitted_count: afdMap[p.id] ?? 0,
+    const projects = (error ? [] : projData ?? []) as Project[];
+    setProjects(projects.map(project => ({
+      ...project,
+      device_count: 0,
+      doc_count: 0,
+      pending_devices: 0,
+      om_upload_count: 0,
+      as_fitted_count: 0,
     })));
-
     setLoading(false);
     setRefreshing(false);
+
+    const [devices, pending, documents, uploads, drawings] = await Promise.all([
+      countRowsByProject('devices'),
+      countRowsByProject('devices', true),
+      countRowsByProject('project_documents'),
+      countRowsByProject('om_pack_uploads'),
+      countRowsByProject('as_fitted_drawings'),
+    ]);
+    setProjects(current => current.map(project => ({
+      ...project,
+      device_count: devices[project.id] ?? 0,
+      doc_count: documents[project.id] ?? 0,
+      pending_devices: pending[project.id] ?? 0,
+      om_upload_count: uploads[project.id] ?? 0,
+      as_fitted_count: drawings[project.id] ?? 0,
+    })));
   };
 
   useEffect(() => { load(); }, []);

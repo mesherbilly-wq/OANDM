@@ -40,22 +40,32 @@ export function ProjectLayout() {
 
   useEffect(() => {
     if (!id) return;
-    const pid = parseInt(id);
-    Promise.all([
-      supabase.from('projects').select('*').eq('id', pid).single(),
-      fetchAllProductModels(),
-      supabase.from('datasheets').select('*'),
-    ]).then(([{ data: proj, error }, modelsResult, { data: ds }]) => {
+    let cancelled = false;
+    const pid = parseInt(id, 10);
+    setLoading(true);
+    setNotFound(false);
+
+    supabase.from('projects').select('*').eq('id', pid).single().then(({ data: proj, error }) => {
+      if (cancelled) return;
       if (error || !proj) setNotFound(true);
       else setProject(proj);
-      setProductModels(modelsResult.products);
-      setDatasheets(ds ?? []);
       setLoading(false);
     });
+
+    void fetchAllProductModels().then(modelsResult => {
+      if (!cancelled) setProductModels(modelsResult.products);
+    });
+    void supabase.from('datasheets').select('id, created_at, manufacturer, model_number, file_name, datasheet_url, manual_url').then(({ data: ds }) => {
+      if (!cancelled) setDatasheets(ds ?? []);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
   const refreshDatasheets = useCallback(async () => {
-    const { data } = await supabase.from('datasheets').select('*');
+    const { data } = await supabase.from('datasheets').select('id, created_at, manufacturer, model_number, file_name, datasheet_url, manual_url');
     setDatasheets(data ?? []);
   }, []);
 

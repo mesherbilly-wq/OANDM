@@ -93,8 +93,13 @@ export async function buildCompletionPdf(opts: {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8);
       doc.setTextColor(ir, ig, ib);
-      doc.text(`${theme.name}  ·  ${documentTitle}  ·  ${opts.documentRef}  ·  Rev ${opts.revisionNo}  ·  ${opts.status}`, 14, 287);
-      doc.text(`Page ${page} of ${pages}`, pageWidth - 14, 287, { align: 'right' });
+      const pageLabel = `Page ${page} of ${pages}`;
+      const pageLabelWidth = doc.getTextWidth(pageLabel);
+      const leftMax = pageWidth - 28 - pageLabelWidth - 6;
+      const left = `${theme.name}  ·  Rev ${opts.revisionNo}  ·  ${opts.status}`;
+      const leftLine = doc.splitTextToSize(left, Math.max(40, leftMax))[0] ?? '';
+      doc.text(leftLine, 14, 287);
+      doc.text(pageLabel, pageWidth - 14, 287, { align: 'right' });
     }
   };
 
@@ -138,32 +143,42 @@ export async function buildCompletionPdf(opts: {
   };
 
   const heading = (title: string) => {
-    ensure(12);
-    doc.setFillColor(pr, pg, pb);
-    doc.rect(14, y, pageWidth - 28, 7, 'F');
-    doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9);
-    doc.text(title.toUpperCase(), 16, y + 4.8);
+    const lines = doc.splitTextToSize(title.toUpperCase(), pageWidth - 32);
+    const bar = Math.max(7, 3 + lines.length * 4);
+    ensure(bar + 4);
+    doc.setFillColor(pr, pg, pb);
+    doc.rect(14, y, pageWidth - 28, bar, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text(lines, 16, y + 4.6);
     doc.setTextColor(ir, ig, ib);
-    y += 10;
+    y += bar + 3;
   };
 
   const kv = (label: string, value: string) => {
     if (!value) return;
-    const lines = doc.splitTextToSize(value, pageWidth - 34);
-    const height = Math.max(11, 7 + lines.length * 4);
+    const contentWidth = pageWidth - 36;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7);
+    const labelLines = doc.splitTextToSize(label.toUpperCase(), contentWidth);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    const valueLines = doc.splitTextToSize(value, contentWidth);
+    const labelHeight = 2.2 + labelLines.length * 3.4;
+    const height = labelHeight + 2.2 + valueLines.length * 4.2;
     ensure(height + 2);
     doc.setDrawColor(200, 200, 200);
     doc.rect(14, y, pageWidth - 28, height);
     doc.setFillColor(245, 245, 245);
-    doc.rect(14, y, pageWidth - 28, 4.6, 'F');
+    doc.rect(14, y, pageWidth - 28, labelHeight, 'F');
+    doc.setTextColor(ir, ig, ib);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7);
-    doc.text(label.toUpperCase(), 16, y + 3.3);
+    doc.text(labelLines, 16, y + 3.2);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
-    doc.text(lines, 16, y + 8.2);
+    doc.text(valueLines, 16, y + labelHeight + 3.8);
     y += height + 1.5;
   };
 

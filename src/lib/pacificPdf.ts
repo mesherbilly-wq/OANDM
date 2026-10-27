@@ -96,30 +96,46 @@ function addPdfLines(doc: jsPDF, lines: { label: string; value: string; image?: 
       y = 16;
     }
     if (!line.value) {
-      doc.setFillColor(192, 0, 0);
-      doc.rect(14, y, pageWidth - 28, 7, 'F');
-      doc.setTextColor(255, 255, 255);
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(8);
-      doc.text(line.label.toUpperCase(), 16, y + 4.8);
+      const labelLines = doc.splitTextToSize(line.label.toUpperCase(), pageWidth - 32);
+      const bar = Math.max(7, 3 + labelLines.length * 3.6);
+      if (y + bar > 270) {
+        doc.addPage();
+        y = 16;
+      }
+      doc.setFillColor(192, 0, 0);
+      doc.rect(14, y, pageWidth - 28, bar, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.text(labelLines, 16, y + 4.6);
       doc.setTextColor(64, 64, 64);
-      y += 9;
+      y += bar + 2;
       continue;
     }
     doc.setDrawColor(64, 64, 64);
     doc.setLineWidth(0.3);
-    const valueLines = doc.splitTextToSize(line.value || '—', pageWidth - 34);
-    const boxHeight = Math.max(12, 6 + valueLines.length * 4.2);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7);
+    const labelLines = doc.splitTextToSize(line.label.toUpperCase(), pageWidth - 36);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    const valueLines = doc.splitTextToSize(line.value || '—', pageWidth - 36);
+    const labelHeight = 2 + labelLines.length * 3.4;
+    const boxHeight = labelHeight + 2 + valueLines.length * 4.2;
+    if (y + boxHeight > 270) {
+      doc.addPage();
+      y = 16;
+    }
     doc.rect(14, y, pageWidth - 28, boxHeight);
     doc.setFillColor(217, 217, 217);
-    doc.rect(14, y, pageWidth - 28, 5, 'F');
+    doc.rect(14, y, pageWidth - 28, labelHeight, 'F');
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7);
     doc.setTextColor(64, 64, 64);
-    doc.text(line.label.toUpperCase(), 16, y + 3.6);
+    doc.text(labelLines, 16, y + 3.2);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
-    doc.text(valueLines, 16, y + 9);
+    doc.text(valueLines, 16, y + labelHeight + 3.6);
     y += boxHeight + 2;
     if (line.image) {
       if (y > 230) {
