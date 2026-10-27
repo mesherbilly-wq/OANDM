@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { X, Upload, CheckCircle, AlertCircle, FileText, Info, Search, Link, ExternalLink, Loader2, Download, ShieldCheck } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { ownCompanyId } from '../lib/companyScope';
 import type { Datasheet } from '../types';
 import { adiDatasheetSearchUrl, findAndSaveDatasheet, googleDatasheetSearchUrl, saveDatasheetFromUrl, type DatasheetCandidate } from '../lib/datasheetLookup';
 
@@ -89,8 +90,14 @@ export function UploadDatasheetModal({ manufacturer, modelNumber, initialMode = 
     let fileName: string;
 
     if (mode === 'upload') {
+      const companyId = await ownCompanyId();
+      if (!companyId) {
+        setError('Sign in as a company admin or staff member to upload a datasheet.');
+        setSaving(false);
+        return;
+      }
       const safeName = file!.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const path = `${mfr.trim().toLowerCase().replace(/\s+/g, '-')}_${model.trim().replace(/\s+/g, '-')}_${Date.now()}_${safeName}`;
+      const path = `${companyId}/datasheets/${Date.now()}_${safeName}`;
       const { data: storageData, error: storageErr } = await supabase.storage
         .from('user-datasheets')
         .upload(path, file!, { contentType: 'application/pdf', upsert: false });
@@ -110,23 +117,22 @@ export function UploadDatasheetModal({ manufacturer, modelNumber, initialMode = 
 
     let datasheet: Datasheet | null = null;
     if (existing) {
-      const { data } = await supabase.from('datasheets')
+      const { data, error: updateError } = await supabase.from('datasheets')
         .update({ datasheet_url: publicUrl, file_name: fileName })
         .eq('id', existing.id).select().single();
+      if (updateError) { setError(updateError.message); setSaving(false); return; }
       datasheet = data;
     } else {
-      const { data } = await supabase.from('datasheets')
+      const { data, error: insertError } = await supabase.from('datasheets')
         .insert({ manufacturer: mfr.trim(), model_number: model.trim(), file_name: fileName, datasheet_url: publicUrl })
         .select().single();
+      if (insertError) { setError(insertError.message); setSaving(false); return; }
       datasheet = data;
     }
 
     if (!datasheet) { setError('Failed to save datasheet record'); setSaving(false); return; }
 
-    await supabase.from('devices').update({ datasheet_found: true })
-      .filter('manufacturer', 'ilike', mfr.trim())
-      .filter('model_number', 'ilike', model.trim());
-
+    setSaving(false);
     onUploaded(datasheet);
   };
 

@@ -1,7 +1,6 @@
 import type { Datasheet, ProductModel } from '../types';
 import {
-  exactModelMatch,
-  normalizedModelMatch,
+  normalizeModelKey,
   normalizeToken,
   equipmentIdentityKey,
   type EquipmentMatchInput,
@@ -115,30 +114,51 @@ export function findDatasheetForProduct(
   return null;
 }
 
+interface DirectDatasheetIndex {
+  exact: Map<string, DatasheetLike>;
+  normalized: Map<string, DatasheetLike>;
+}
+
+let indexedDatasheets: DatasheetLike[] | null = null;
+let directIndex: DirectDatasheetIndex | null = null;
+
+function directIndexFor(datasheets: DatasheetLike[]): DirectDatasheetIndex {
+  if (directIndex && indexedDatasheets === datasheets) return directIndex;
+  const exact = new Map<string, DatasheetLike>();
+  const normalized = new Map<string, DatasheetLike>();
+  for (const datasheet of datasheets) {
+    if (!hasDatasheetUrl(datasheet)) continue;
+    const manufacturer = normalizeToken(datasheet.manufacturer);
+    const model = normalizeToken(datasheet.model_number);
+    if (manufacturer && model && !exact.has(`${manufacturer}::${model}`)) {
+      exact.set(`${manufacturer}::${model}`, datasheet);
+    }
+    const modelKey = normalizeModelKey(datasheet.model_number);
+    const normalizedKey = `${manufacturer}::${modelKey}`;
+    if (manufacturer && modelKey && !normalized.has(normalizedKey)) {
+      normalized.set(normalizedKey, datasheet);
+    }
+  }
+  directIndex = { exact, normalized };
+  indexedDatasheets = datasheets;
+  return directIndex;
+}
+
 function findDirectDatasheet(
   item: EquipmentMatchInput,
   datasheets: DatasheetLike[],
 ): { datasheet: DatasheetLike; method: DatasheetMatchMethod; confidence: number } | null {
-  const withUrl = datasheets.filter(hasDatasheetUrl);
-  if (withUrl.length === 0) return null;
+  const index = directIndexFor(datasheets);
+  const manufacturer = normalizeToken(item.manufacturer);
+  const model = normalizeToken(item.modelNumber);
+  if (!manufacturer || !model) return null;
 
-  for (const datasheet of withUrl) {
-    if (
-      exactModelMatch(item.modelNumber, datasheet.model_number) &&
-      normalizeToken(item.manufacturer) === normalizeToken(datasheet.manufacturer)
-    ) {
-      return { datasheet, method: 'exact_device', confidence: 1 };
-    }
-  }
+  const exact = index.exact.get(`${manufacturer}::${model}`);
+  if (exact) return { datasheet: exact, method: 'exact_device', confidence: 1 };
 
-  for (const datasheet of withUrl) {
-    if (
-      normalizedModelMatch(item.modelNumber, datasheet.model_number) &&
-      normalizeToken(item.manufacturer) === normalizeToken(datasheet.manufacturer)
-    ) {
-      return { datasheet, method: 'normalized_model', confidence: 0.98 };
-    }
-  }
+  const modelKey = normalizeModelKey(item.modelNumber);
+  const normalized = modelKey ? index.normalized.get(`${manufacturer}::${modelKey}`) : undefined;
+  if (normalized) return { datasheet: normalized, method: 'normalized_model', confidence: 0.98 };
 
   return null;
 }
@@ -176,6 +196,7 @@ export function resolveEquipmentDatasheet(
   products: ProductModelLike[],
   datasheets: DatasheetLike[],
   overrides?: DatasheetMatchOverrideState,
+  options?: { directOnly?: boolean },
 ): EquipmentDatasheetMatch {
   const rowKey = equipmentIdentityKey(item.manufacturer, item.modelNumber);
 
@@ -210,7 +231,7 @@ export function resolveEquipmentDatasheet(
     }
   }
 
-  if (overrides?.dismissed.includes(rowKey)) {
+  if (overrides?.dismissed.includes(rowKey) || options?.directOnly) {
     return {
       rowKey,
       datasheet: null,

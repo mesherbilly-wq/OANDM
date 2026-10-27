@@ -154,7 +154,7 @@ export default function AsBuiltDrawingsPage() {
     setUploadError(null);
     try {
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const path = `as-fitted/${pid}/${Date.now()}_${safeName}`;
+      const path = `${pid}/as-fitted/${Date.now()}_${safeName}`;
       const { error: upErr } = await supabase.storage
         .from('om-uploads')
         .upload(path, file, { contentType: 'application/pdf', upsert: false });

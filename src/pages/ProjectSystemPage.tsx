@@ -113,8 +113,8 @@ export function ProjectSystemPage({ systemType }: Props) {
     setEditDevice(null);
   };
 
-  const handleDatasheetUploaded = async (datasheet: Datasheet) => {
-    await refreshDatasheets();
+  const handleDatasheetUploaded = (datasheet: Datasheet) => {
+    setUploadDatasheetFor(null);
     const mfr = datasheet.manufacturer?.trim().toLowerCase();
     const model = datasheet.model_number?.trim().toLowerCase();
     setDevices((prev) => prev.map((d) =>
@@ -122,7 +122,7 @@ export function ProjectSystemPage({ systemType }: Props) {
         ? { ...d, datasheet_found: true }
         : d
     ));
-    setUploadDatasheetFor(null);
+    void refreshDatasheets();
   };
 
   const handleDelete = async (deviceId: number) => {

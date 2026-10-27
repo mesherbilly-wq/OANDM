@@ -120,6 +120,7 @@ export function ProjectDatasheetsPage() {
         productModels,
         datasheets,
         overrides,
+        { directOnly: true },
       );
       return { manufacturer, model_number, deviceCount: count, match };
     });
@@ -211,12 +212,29 @@ export function ProjectDatasheetsPage() {
     }
   };
 
-  const handleUploaded = async (_datasheet: Datasheet) => {
-    await refreshDatasheets();
-    if (uploadFor && projectId) {
-      await markDevicesDatasheetFound(uploadFor.manufacturer, uploadFor.modelNumber);
-    }
+  const handleUploaded = async (datasheet: Datasheet) => {
+    const target = uploadFor;
     setUploadFor(null);
+    if (target && projectId) {
+      void markDevicesDatasheetFound(target.manufacturer, target.modelNumber);
+    }
+    setRows(current => current.map(row => {
+      const sameManufacturer = row.manufacturer.trim().toLowerCase() === (datasheet.manufacturer ?? target?.manufacturer ?? '').trim().toLowerCase();
+      const sameModel = row.model_number.trim().toLowerCase() === (datasheet.model_number ?? target?.modelNumber ?? '').trim().toLowerCase();
+      if (!sameManufacturer || !sameModel) return row;
+      return {
+        ...row,
+        match: {
+          ...row.match,
+          datasheet,
+          confidence: 1,
+          method: 'exact_device',
+          suggestions: [],
+          status: 'matched',
+        },
+      };
+    }));
+    await refreshDatasheets();
   };
 
   const runAiLookup = async (row: DatasheetRow) => {
